@@ -353,44 +353,6 @@ func (s *Server) handleReportRequest(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(html))
 }
 
-// handleAdminRequest handles administrative actions
-func (s *Server) handleAdminRequest(w http.ResponseWriter, r *http.Request) {
-	// Check for basic authentication
-	username, password, ok := r.BasicAuth()
-
-	if !ok || !s.validateAdminAuth(username, password) {
-		w.Header().Set("WWW-Authenticate", `Basic realm="apt-cacher-go Admin"`)
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	// Handle various admin functions, such as:
-	// - Cache cleanup
-	// - Cache stats
-	// - Configuration updates
-
-	html := `
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>apt-cacher-go Admin</title>
-    </head>
-    <body>
-        <h1>apt-cacher-go Administration</h1>
-        <form method="post" action="/admin/clearcache">
-            <button type="submit">Clear Cache</button>
-        </form>
-        <form method="post" action="/admin/flushexpired">
-            <button type="submit">Flush Expired Items</button>
-        </form>
-    </body>
-    </html>
-    `
-
-	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(html))
-}
-
 // handleAdminAuth wraps a handler function with admin authentication
 func (s *Server) handleAdminAuth(handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
