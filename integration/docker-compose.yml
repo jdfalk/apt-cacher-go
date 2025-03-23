@@ -1,0 +1,103 @@
+version: '3.8'
+
+services:
+  apt-cacher-go:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: apt-cacher-go-test
+    ports:
+      - "3142:3142"
+    volumes:
+      - ./test-config.yaml:/etc/apt-cacher-go/config.yaml:ro
+      - apt-cache-data:/var/cache/apt-cacher-go
+    networks:
+      - apt-cache-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3142/"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  # Ubuntu clients
+  ubuntu-focal:
+    image: ubuntu:20.04
+    container_name: ubuntu-focal-client
+    depends_on:
+      apt-cacher-go:
+        condition: service_healthy
+    volumes:
+      - ./apt-proxy.conf:/etc/apt/apt.conf.d/00proxy:ro
+      - ./test-packages.txt:/tmp/test-packages.txt:ro
+      - ./test-client.sh:/tmp/test-client.sh:ro
+    command: sh -c "sleep 5 && /tmp/test-client.sh ubuntu-focal"
+    networks:
+      - apt-cache-network
+
+  ubuntu-jammy:
+    image: ubuntu:22.04
+    container_name: ubuntu-jammy-client
+    depends_on:
+      apt-cacher-go:
+        condition: service_healthy
+    volumes:
+      - ./apt-proxy.conf:/etc/apt/apt.conf.d/00proxy:ro
+      - ./test-packages.txt:/tmp/test-packages.txt:ro
+      - ./test-client.sh:/tmp/test-client.sh:ro
+    command: sh -c "sleep 5 && /tmp/test-client.sh ubuntu-jammy"
+    networks:
+      - apt-cache-network
+
+  # Debian client
+  debian-bookworm:
+    image: debian:12
+    container_name: debian-bookworm-client
+    depends_on:
+      apt-cacher-go:
+        condition: service_healthy
+    volumes:
+      - ./apt-proxy.conf:/etc/apt/apt.conf.d/00proxy:ro
+      - ./test-packages.txt:/tmp/test-packages.txt:ro
+      - ./test-client.sh:/tmp/test-client.sh:ro
+    command: sh -c "sleep 5 && /tmp/test-client.sh debian-bookworm"
+    networks:
+      - apt-cache-network
+
+  # Kali Linux client
+  kali:
+    image: kalilinux/kali-rolling:latest
+    container_name: kali-client
+    depends_on:
+      apt-cacher-go:
+        condition: service_healthy
+    volumes:
+      - ./apt-proxy.conf:/etc/apt/apt.conf.d/00proxy:ro
+      - ./test-packages.txt:/tmp/test-packages.txt:ro
+      - ./test-client.sh:/tmp/test-client.sh:ro
+    command: sh -c "sleep 5 && /tmp/test-client.sh kali"
+    networks:
+      - apt-cache-network
+
+  # Load test client
+  load-test:
+    build:
+      context: .
+      dockerfile: Dockerfile.loadtest
+    container_name: load-test-client
+    depends_on:
+      - apt-cacher-go
+      - ubuntu-focal
+      - debian-bookworm
+    volumes:
+      - ./load-test.sh:/load-test.sh:ro
+    command: sh -c "sleep 30 && /load-test.sh"
+    networks:
+      - apt-cache-network
+
+networks:
+  apt-cache-network:
+    driver: bridge
+
+volumes:
+  apt-cache-data:

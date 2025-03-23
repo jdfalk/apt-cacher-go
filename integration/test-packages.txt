@@ -1,0 +1,10 @@
+# Common packages to test with
+build-essential
+curl
+wget
+nginx
+python3
+git
+net-tools
+vim
+sudo
