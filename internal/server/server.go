@@ -340,7 +340,7 @@ func (s *Server) handleReportRequest(w http.ResponseWriter, r *http.Request) {
 
 	for _, req := range stats.RecentRequests {
 		html += fmt.Sprintf("<tr><td>%s</td><td>%.2f ms</td><td>%s</td></tr>",
-			req.Path, req.Duration.Milliseconds(), req.Result)
+			req.Path, float64(req.Duration.Milliseconds()), req.Result)
 	}
 
 	html += `
