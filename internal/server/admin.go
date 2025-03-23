@@ -49,20 +49,43 @@ func (s *Server) adminDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	adminStats := AdminStats{
-		CacheSize:       cacheStats.CurrentSize,
-		CacheMaxSize:    cacheStats.MaxSize,
-		CachePercentage: float64(cacheStats.CurrentSize) / float64(cacheStats.MaxSize) * 100,
-		CacheItems:      cacheStats.Items,
-		BytesServed:     stats.BytesServed,
-		RequestsTotal:   stats.TotalRequests,
-		RequestsHit:     stats.CacheHits,
-		RequestsMiss:    stats.CacheMisses,
-		HitRate:         stats.HitRate * 100, // Convert to percentage
-		UpSince:         s.startTime,
-		PackagesTop:     s.metrics.GetTopPackages(10),
-		ClientsTop:      s.metrics.GetTopClients(10),
-	}
+    // Convert metrics.TopPackage to server.TopPackage
+    metricPackages := s.metrics.GetTopPackages(10)
+    topPackages := make([]TopPackage, len(metricPackages))
+    for i, pkg := range metricPackages {
+        topPackages[i] = TopPackage{
+            URL:        pkg.URL,
+            Count:      pkg.Count,
+            LastAccess: pkg.LastAccess,
+            Size:       pkg.Size,
+        }
+    }
+
+    // Convert metrics.TopClient to server.TopClient
+    metricClients := s.metrics.GetTopClients(10)
+    topClients := make([]TopClient, len(metricClients))
+    for i, client := range metricClients {
+        topClients[i] = TopClient{
+            IP:        client.IP,
+            Requests:  client.Requests,
+            BytesSent: client.BytesSent,
+        }
+    }
+
+    adminStats := AdminStats{
+        CacheSize:       cacheStats.CurrentSize,
+        CacheMaxSize:    cacheStats.MaxSize,
+        CachePercentage: float64(cacheStats.CurrentSize) / float64(cacheStats.MaxSize) * 100,
+        CacheItems:      cacheStats.Items,
+        BytesServed:     stats.BytesServed,
+        RequestsTotal:   stats.TotalRequests,
+        RequestsHit:     stats.CacheHits,
+        RequestsMiss:    stats.CacheMisses,
+        HitRate:         stats.HitRate * 100, // Convert to percentage
+        UpSince:         s.startTime,
+        PackagesTop:     topPackages,
+        ClientsTop:      topClients,
+    }
 
 	// Serve the dashboard template
 	tmpl, err := template.ParseFiles("templates/admin/dashboard.html")
