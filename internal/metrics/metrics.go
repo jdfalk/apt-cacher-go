@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"sort"
 	"sync"
 	"time"
 )
@@ -26,6 +27,36 @@ type Statistics struct {
 	RecentRequests  []RequestInfo
 }
 
+// PackageStats tracks statistics about a package
+type PackageStats struct {
+	URL        string
+	Count      int
+	LastAccess time.Time
+	Size       int64
+}
+
+// ClientStats tracks statistics about a client
+type ClientStats struct {
+	IP        string
+	Requests  int
+	BytesSent int64
+}
+
+// TopPackage represents package statistics for display or sorting
+type TopPackage struct {
+	URL        string
+	Count      int
+	LastAccess time.Time
+	Size       int64
+}
+
+// TopClient represents client statistics for display or sorting
+type TopClient struct {
+	IP        string
+	Requests  int
+	BytesSent int64
+}
+
 // Collector tracks and aggregates metrics
 type Collector struct {
 	mutex          sync.RWMutex
@@ -37,6 +68,8 @@ type Collector struct {
 	bytesServed    int64
 	totalTime      time.Duration
 	maxRecentItems int
+	packages       map[string]PackageStats
+	clients        map[string]ClientStats
 }
 
 // New creates a new metrics collector
@@ -44,6 +77,8 @@ func New() *Collector {
 	return &Collector{
 		requests:       make([]RequestInfo, 0),
 		maxRecentItems: 100, // Keep last 100 requests
+		packages:       make(map[string]PackageStats),
+		clients:        make(map[string]ClientStats),
 	}
 }
 
@@ -143,4 +178,55 @@ func (c *Collector) GetStatistics() Statistics {
 	copy(stats.RecentRequests, c.requests)
 
 	return stats
+}
+
+// GetTopPackages returns the most frequently accessed packages
+func (c *Collector) GetTopPackages(limit int) []TopPackage {
+	packages := make([]TopPackage, 0, len(c.packages))
+
+	for url, stats := range c.packages {
+		packages = append(packages, TopPackage{
+			URL:        url,
+			Count:      stats.Count,
+			LastAccess: stats.LastAccess,
+			Size:       stats.Size,
+		})
+	}
+
+	// Sort by count in descending order
+	sort.Slice(packages, func(i, j int) bool {
+		return packages[i].Count > packages[j].Count
+	})
+
+	// Limit the result
+	if limit > 0 && len(packages) > limit {
+		packages = packages[:limit]
+	}
+
+	return packages
+}
+
+// GetTopClients returns the clients with the most requests
+func (c *Collector) GetTopClients(limit int) []TopClient {
+	clients := make([]TopClient, 0, len(c.clients))
+
+	for ip, stats := range c.clients {
+		clients = append(clients, TopClient{
+			IP:        ip,
+			Requests:  stats.Requests,
+			BytesSent: stats.BytesSent,
+		})
+	}
+
+	// Sort by requests in descending order
+	sort.Slice(clients, func(i, j int) bool {
+		return clients[i].Requests > clients[j].Requests
+	})
+
+	// Limit the result
+	if limit > 0 && len(clients) > limit {
+		clients = clients[:limit]
+	}
+
+	return clients
 }
