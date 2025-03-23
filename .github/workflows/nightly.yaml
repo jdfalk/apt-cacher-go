@@ -1,0 +1,231 @@
+name: Nightly Build and Publish
+
+on:
+  schedule:
+    - cron: "0 0 * * *"  # Runs every night at midnight UTC
+  workflow_dispatch:  # Allows manual triggering
+
+permissions:
+  actions: write
+  attestations: write # Required for Sigstore Cosign
+  contents: write
+  packages: write
+  id-token: write  # Required for Sigstore Cosign
+
+jobs:
+  build:
+    name: Build and Test Nightly
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, darwin]
+        arch: [amd64, arm64]
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5.3.0
+        with:
+          go-version: '>=1.21'
+          cache: true
+          cache-dependency-path: |
+                "**/*.sum"
+
+      - name: Install Dependencies
+        run: go mod tidy
+
+      - name: Run Unit Tests
+        run: go test -v ./...
+
+      - name: Generate Code Coverage
+        run: |
+            go test ./... -coverprofile=./cover.out -covermode=atomic -coverpkg=./...
+            go tool cover -html=./cover.out -o coverage.html
+
+      - name: Run Integration Tests
+        run: |
+          cd integration
+          bash run-integration-tests.sh
+
+      - name: Build Nightly Binaries
+        run: |
+          mkdir -p dist
+          DATE_TAG=$(date +'%Y%m%d-%H%M%S')
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.arch }} go build -o dist/apt-cacher-go-nightly-${{ matrix.goos }}-${{ matrix.arch }}-$DATE_TAG ./cmd/apt-cacher-go
+
+      - name: Upload Binaries as Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-binaries-${{ matrix.goos }}-${{ matrix.arch }}-${{ github.run_id }}
+          path: dist/
+          if-no-files-found: ignore
+
+  release:
+    name: Publish Nightly Binaries
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download Built Binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: nightly-binaries-*
+          merge-multiple: true
+          path: dist/
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: "v2.4.3"
+
+      - name: Install Syft (for SBOM)
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Generate SBOM for Binaries
+        run: |
+          mkdir -p sbom
+          for file in dist/*; do
+            syft $file -o spdx-json > sbom/$(basename $file).spdx.json
+          done
+
+      - name: Create Git Tag
+        id: create_tag
+        run: |
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          TAG_NAME="nightly-$(date +'%Y%m%d-%H%M%S')"
+          git tag $TAG_NAME
+          git push origin $TAG_NAME
+          echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
+
+      - name: Publish Release Binaries
+        uses: softprops/action-gh-release@v2.2.1
+        with:
+          files: dist/*
+          tag_name: ${{ steps.create_tag.outputs.tag_name }}
+
+      - name: Sign Binaries with Cosign
+        run: |
+          for file in dist/*; do
+            cosign sign-blob --yes --key env://COSIGN_PRIVATE_KEY $file
+          done
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+
+      - name: Attest Binaries with SBOM
+        run: |
+          for sbom in sbom/*; do
+            binary_name=$(basename $sbom .spdx.json)
+            cosign attest-blob --predicate $sbom --type spdx --yes --key env://COSIGN_PRIVATE_KEY dist/$binary_name
+          done
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+
+      - name: Attest Build Provenance
+        uses: actions/attest-build-provenance@v2.2.0
+        with:
+          subject-path: 'dist/*'
+
+  docker:
+    name: Build and Push Multi-Arch Nightly Docker Image
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.kaniko_build.outputs.digest }}
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - uses: docker/metadata-action@v5.6.1
+        id: metadata
+        with:
+          images: ghcr.io/${{ github.repository }}
+
+      - uses: docker/login-action@v3.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download Built Binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: nightly-binaries-linux-${{ matrix.arch }}*
+          merge-multiple: true
+          path: dist/
+
+      - run: chmod +x dist/apt-cacher-go-nightly-linux-${{ matrix.arch }}*
+
+      - name: Kaniko Build
+        id: kaniko_build
+        uses: int128/kaniko-action@v1.49.0
+        with:
+          executor: 'gcr.io/kaniko-project/executor:debug'
+          push: true
+          tags: |
+              ghcr.io/${{ github.repository_owner }}/apt-cacher-go:${{ github.sha }}-${{ matrix.arch }}
+              ghcr.io/${{ github.repository_owner }}/apt-cacher-go:nightly-${{ github.sha }}-${{ matrix.arch }}
+              ghcr.io/${{ github.repository_owner }}/apt-cacher-go:nightly-${{ github.ref_name }}-${{ matrix.arch }}
+              ghcr.io/${{ github.repository_owner }}/apt-cacher-go:nightly-${{ matrix.arch }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache: true
+          cache-repository: ghcr.io/${{ github.repository }}/cache
+          build-args: |
+            TARGETARCH=${{ matrix.arch }}
+          kaniko-args: |
+              --custom-platform=linux/${{ matrix.arch }}
+
+  manifest:
+    name: Create and Push Nightly Docker Manifest
+    needs: docker
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Log in to GitHub Container Registry (GHCR)
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u $GITHUB_ACTOR --password-stdin
+
+      - name: Create and Push Multi-Arch Manifest for Nightly
+        run: |
+          export IMAGE_NAME="ghcr.io/${{ github.repository_owner }}/apt-cacher-go"
+          export TAG="nightly"
+
+          docker manifest create $IMAGE_NAME:$TAG \
+            --amend $IMAGE_NAME:$TAG-${{ github.sha }}-amd64 \
+            --amend $IMAGE_NAME:$TAG-${{ github.sha }}-arm64
+
+          docker manifest push $IMAGE_NAME:$TAG
+
+          docker manifest create $IMAGE_NAME:$TAG-${{ github.sha }} \
+            --amend $IMAGE_NAME:$TAG-${{ github.sha }}-amd64 \
+            --amend $IMAGE_NAME:$TAG-${{ github.sha }}-arm64
+
+          docker manifest push $IMAGE_NAME:$TAG-${{ github.sha }}
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Attest Container Build Provenance
+        uses: actions/attest-build-provenance@v2.2.0
+        with:
+          subject-name: "ghcr.io/${{ github.repository_owner }}/apt-cacher-go"
+          subject-digest: ${{ needs.docker.outputs.digest }}
+          push-to-registry: true
