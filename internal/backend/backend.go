@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -20,13 +21,14 @@ import (
 
 // Manager handles connections to upstream repositories
 type Manager struct {
-	backends    []*Backend
-	cache       *cache.Cache
-	client      *http.Client
-	mapper      *mapper.AdvancedMapper // Changed from PathMapper to AdvancedMapper
-	downloadCtx context.Context
-	downloadQ   *queue.Queue
-	prefetcher  *Prefetcher
+	backends       []*Backend
+	cache          *cache.Cache
+	client         *http.Client
+	mapper         *mapper.AdvancedMapper // Changed from PathMapper to AdvancedMapper
+	downloadCtx    context.Context
+	downloadCancel context.CancelFunc // Added field to store the cancel function
+	downloadQ      *queue.Queue
+	prefetcher     *Prefetcher
 }
 
 // Backend represents a single upstream repository
@@ -34,10 +36,16 @@ type Backend struct {
 	Name     string
 	BaseURL  string
 	Priority int
+	client   *http.Client // Added client field
 }
 
 // New creates a new backend manager
 func New(cfg *config.Config, cache *cache.Cache, mapper *mapper.AdvancedMapper) *Manager {
+	// Create HTTP client for backends
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+
 	backends := make([]*Backend, 0, len(cfg.Backends))
 
 	for _, b := range cfg.Backends {
@@ -45,22 +53,20 @@ func New(cfg *config.Config, cache *cache.Cache, mapper *mapper.AdvancedMapper) 
 			Name:     b.Name,
 			BaseURL:  b.URL,
 			Priority: b.Priority,
+			client:   client, // Initialize client for each backend
 		})
 	}
 
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
-
 	// Create download queue with desired concurrency
-	downloadCtx, _ := context.WithCancel(context.Background())
+	downloadCtx, downloadCancel := context.WithCancel(context.Background())
 
 	m := &Manager{
-		backends:    backends,
-		cache:       cache,
-		client:      client,
-		mapper:      mapper, // Use the provided mapper instead of creating a new one
-		downloadCtx: downloadCtx,
+		backends:       backends,
+		cache:          cache,
+		client:         client,
+		mapper:         mapper, // Use the provided mapper instead of creating a new one
+		downloadCtx:    downloadCtx,
+		downloadCancel: downloadCancel, // Store the cancel function
 	}
 
 	// Create the download queue with a downloader function
@@ -79,6 +85,11 @@ func New(cfg *config.Config, cache *cache.Cache, mapper *mapper.AdvancedMapper) 
 
 // Shutdown cleans up resources
 func (m *Manager) Shutdown() {
+	// Cancel the context to release resources
+	if m.downloadCancel != nil {
+		m.downloadCancel()
+	}
+
 	// Stop the download queue
 	m.downloadQ.Stop()
 }
@@ -230,4 +241,98 @@ func ParseRepositoryPath(requestPath string) (string, error) {
 	}
 
 	return path, nil
+}
+
+// DownloadResult represents the result of a download operation
+type DownloadResult struct {
+	Success      bool
+	BytesWritten int64
+	Error        error
+	Source       string
+	StatusCode   int
+}
+
+// DownloadPackage downloads a package from the backend repository
+func (b *Backend) DownloadPackage(ctx context.Context, path string, w io.Writer) DownloadResult {
+	// Construct the full URL
+	u, err := url.Parse(b.BaseURL)
+	if err != nil {
+		return DownloadResult{
+			Success: false,
+			Error:   fmt.Errorf("invalid backend URL: %w", err),
+			Source:  b.Name,
+		}
+	}
+	u.Path = filepath.Join(u.Path, path)
+	fullURL := u.String()
+
+	// Create the request
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
+	if err != nil {
+		return DownloadResult{
+			Success: false,
+			Error:   fmt.Errorf("failed to create request: %w", err),
+			Source:  b.Name,
+		}
+	}
+
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return DownloadResult{
+			Success: false,
+			Error:   fmt.Errorf("failed to download from %s: %w", b.BaseURL, err),
+			Source:  b.Name,
+		}
+	}
+	defer resp.Body.Close()
+
+	// Check response status code
+	if resp.StatusCode != http.StatusOK {
+		return DownloadResult{
+			Success:    false,
+			Error:      fmt.Errorf("received non-OK status: %d", resp.StatusCode),
+			Source:     b.Name,
+			StatusCode: resp.StatusCode,
+		}
+	}
+
+	// Copy response body to writer
+	written, err := io.Copy(w, resp.Body)
+	if err != nil {
+		return DownloadResult{
+			Success:      false,
+			BytesWritten: written,
+			Error:        fmt.Errorf("error copying response body: %w", err),
+			Source:       b.Name,
+			StatusCode:   resp.StatusCode,
+		}
+	}
+
+	// Return success result
+	return DownloadResult{
+		Success:      true,
+		BytesWritten: written,
+		Source:       b.Name,
+		StatusCode:   resp.StatusCode,
+	}
+}
+
+func (m *Manager) Download(ctx context.Context, path string, backend *Backend) (*DownloadResult, error) {
+	// Create a new context with cancellation
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Create temporary buffer
+	var buf bytes.Buffer
+
+	// Download to buffer
+	result := backend.DownloadPackage(ctx, path, &buf)
+
+	// Handle download failure
+	if !result.Success {
+		return nil, result.Error
+	}
+
+	// Return the result
+	return &result, nil
 }
