@@ -1,0 +1,82 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  integration-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y curl jq bc
+
+    - name: Verify dependencies
+      run: go mod verify
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+
+    - name: Build apt-cacher-go
+      run: go build -v ./cmd/apt-cacher-go
+
+    - name: Prepare integration test environment
+      run: |
+        sudo mkdir -p /var/cache/apt-cacher-go
+        sudo chmod 777 /var/cache/apt-cacher-go
+
+    - name: Run Go integration tests
+      run: |
+        cd integration
+        go test -v ./...
+
+    - name: Build and run Docker-based integration tests
+      working-directory: ./integration
+      run: |
+        docker-compose build
+        docker-compose up --abort-on-container-exit
+
+    - name: Check test results
+      working-directory: ./integration
+      run: |
+        FAILED=0
+
+        # Check client containers
+        for CLIENT in ubuntu-focal ubuntu-jammy debian-bookworm kali; do
+          if docker-compose logs "$CLIENT" | grep -q "Test for $CLIENT completed successfully"; then
+            echo "✓ $CLIENT tests passed"
+          else
+            echo "✗ $CLIENT tests failed"
+            FAILED=1
+          fi
+        done
+
+        # Check load test
+        if docker-compose logs load-test | grep -q "Load test completed"; then
+          echo "✓ Load tests completed"
+        else
+          echo "✗ Load tests failed"
+          FAILED=1
+        fi
+
+        # Output cache stats if available
+        curl -s http://localhost:3142/admin/stats | jq . || true
+
+        # Clean up
+        docker-compose down -v
+
+        # Exit with appropriate status
+        exit $FAILED
