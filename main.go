@@ -1,3 +1,9 @@
+// file: main.go
+// Package main implements the command-line interface for apt-cacher-go, a caching proxy server for Debian/Ubuntu package repositories.
+// It provides commands to start the server and run benchmarks.
+// It also handles configuration loading from various sources, including command-line flags and configuration files.
+// It uses the Cobra library for command-line parsing and Viper for configuration management.
+// SPDX-License-Identifier: GPL-3.0-or-later
 package main
 
 import (
