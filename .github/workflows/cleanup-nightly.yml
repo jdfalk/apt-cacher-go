@@ -1,0 +1,34 @@
+name: Cleanup Old Nightly Docker Images
+
+on:
+  schedule:
+    - cron: "0 0 * * 0"  # Runs every Sunday at midnight UTC
+  workflow_dispatch:  # Allows manual triggering
+
+permissions:
+  packages: write
+
+jobs:
+  cleanup:
+    name: Delete Old Nightly Docker Images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install GH CLI
+        run: |
+          sudo apt update && sudo apt install -y gh
+
+      - name: Authenticate GH CLI
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
+
+      - name: Delete Nightly Docker Images Older Than 30 Days
+        run: |
+          IMAGE_NAME="ghcr.io/${{ github.repository_owner }}/apt-cacher-go"
+          IMAGE_TAG="nightly"
+
+          # Fetch the list of image versions that are tagged as "nightly" and older than 30 days.
+          gh api --paginate "/user/packages/container/${IMAGE_NAME}/versions" \
+            --jq ".[] | select(.metadata.container.tags[]? == \"${IMAGE_TAG}\") | select(.updated_at < \"$(date -d '30 days ago' --iso-8601=seconds)\") | .id" |
+            while read -r image_id; do
+              echo "Deleting image ID: $image_id"
+              gh api -X DELETE "/user/packages/container/${IMAGE_NAME}/versions/$image_id"
+            done
