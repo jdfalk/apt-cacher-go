@@ -1,0 +1,43 @@
+# apt-cacher-go advanced configuration
+
+# Server configuration
+listen_address: "0.0.0.0"
+port: 3142
+
+# TLS configuration
+tls_enabled: false
+tls_port: 3143
+tls_cert_file: "/etc/apt-cacher-go/cert.pem"
+tls_key_file: "/etc/apt-cacher-go/key.pem"
+
+# Cache configuration
+cache_dir: "/var/cache/apt-cacher-go"
+max_cache_size: 40960 # 40GB
+cleanup_interval: 1 # Run cleanup every hour
+
+# Security
+allowed_ips:
+  - "0.0.0.0/0" # Allow all by default
+admin_auth: "admin:password" # Change this in production!
+
+# Download queue
+max_concurrent_downloads: 10
+
+# Prefetching
+prefetch_enabled: true
+max_prefetches:
+
+# Repository backends
+backends:
+  - name: "ubuntu-archive"
+    url: "http://archive.ubuntu.com/ubuntu"
+    priority: 100
+  - name: "ubuntu-security"
+    url: "http://security.ubuntu.com/ubuntu"
+    priority: 90
+  - name: "debian"
+    url: "http://deb.debian.org/debian"
+    priority: 80
+  - name: "debian-security"
+    url: "http://security.debian.org/debian-security"
+    priority: 70

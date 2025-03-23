@@ -1,0 +1,19 @@
+[Unit]
+Description=Apt-Cacher-Go - Caching proxy for Debian/Ubuntu package repositories
+After=network.target
+
+[Service]
+Type=simple
+User=apt-cacher
+Group=apt-cacher
+ExecStart=/usr/local/bin/apt-cacher-go --config /etc/apt-cacher-go/config.yaml
+Restart=on-failure
+
+# Security hardening
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/cache/apt-cacher-go
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
