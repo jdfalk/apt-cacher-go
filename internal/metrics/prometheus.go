@@ -110,10 +110,10 @@ func NewPrometheusCollector() *PrometheusCollector {
 		cacheMisses:           &cacheMisses,
 		bytesServed:           &bytesServed,
 		responseTimes:         responseTimes,
-		cacheSize:             cacheSize,
-		currentConnections:    currentConnections,
-		requestsInProgress:    requestsInProgress,
-		lastGarbageCollection: lastGarbageCollection,
+		cacheSize:             &cacheSize,
+		currentConnections:    &currentConnections,
+		requestsInProgress:    &requestsInProgress,
+		lastGarbageCollection: &lastGarbageCollection,
 	}
 }
 
@@ -125,13 +125,13 @@ func (p *PrometheusCollector) RecordRequest(status string) {
 // RecordCacheHit records a cache hit
 func (p *PrometheusCollector) RecordCacheHit(bytes int64) {
 	(*p.cacheHits).Inc()
-	p.bytesServed.Add(float64(bytes))
+	(*p.bytesServed).Add(float64(bytes))
 }
 
 // RecordCacheMiss records a cache miss
 func (p *PrometheusCollector) RecordCacheMiss(bytes int64) {
 	(*p.cacheMisses).Inc()
-	p.bytesServed.Add(float64(bytes))
+	(*p.bytesServed).Add(float64(bytes))
 }
 
 // RecordResponseTime records a response time
@@ -141,32 +141,32 @@ func (p *PrometheusCollector) RecordResponseTime(pathType string, duration time.
 
 // SetCacheSize sets the current cache size
 func (p *PrometheusCollector) SetCacheSize(bytes int64) {
-	p.cacheSize.Set(float64(bytes))
+	(*p.cacheSize).Set(float64(bytes))
 }
 
 // IncConnections increments the active connections counter
 func (p *PrometheusCollector) IncConnections() {
-	p.currentConnections.Inc()
+	(*p.currentConnections).Inc()
 }
 
 // DecConnections decrements the active connections counter
 func (p *PrometheusCollector) DecConnections() {
-	p.currentConnections.Dec()
+	(*p.currentConnections).Dec()
 }
 
 // IncRequestsInProgress increments the in-progress requests counter
 func (p *PrometheusCollector) IncRequestsInProgress() {
-	p.requestsInProgress.Inc()
+	(*p.requestsInProgress).Inc()
 }
 
 // DecRequestsInProgress decrements the in-progress requests counter
 func (p *PrometheusCollector) DecRequestsInProgress() {
-	p.requestsInProgress.Dec()
+	(*p.requestsInProgress).Dec()
 }
 
 // RecordGarbageCollection records a garbage collection run
 func (p *PrometheusCollector) RecordGarbageCollection() {
-	p.lastGarbageCollection.SetToCurrentTime()
+	(*p.lastGarbageCollection).SetToCurrentTime()
 }
 
 // Handler returns an HTTP handler for Prometheus metrics
