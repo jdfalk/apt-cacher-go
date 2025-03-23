@@ -419,3 +419,16 @@ func (s *Server) validateAdminAuth(username, password string) bool {
 
 	return username == parts[0] && password == parts[1]
 }
+
+// Port returns the HTTP port the server is listening on
+func (s *Server) Port() int {
+	return s.cfg.Port
+}
+
+// TLSPort returns the HTTPS port if TLS is enabled
+func (s *Server) TLSPort() int {
+	if s.httpsServer != nil {
+		return s.cfg.TLSPort
+	}
+	return 0
+}
