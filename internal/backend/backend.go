@@ -23,7 +23,7 @@ type Manager struct {
 	backends    []*Backend
 	cache       *cache.Cache
 	client      *http.Client
-	mapper      *mapper.PathMapper
+	mapper      *mapper.AdvancedMapper // Changed from PathMapper to AdvancedMapper
 	downloadCtx context.Context
 	downloadQ   *queue.Queue
 	prefetcher  *Prefetcher
@@ -37,7 +37,7 @@ type Backend struct {
 }
 
 // New creates a new backend manager
-func New(cfg *config.Config, cache *cache.Cache) *Manager {
+func New(cfg *config.Config, cache *cache.Cache, mapper *mapper.AdvancedMapper) *Manager {
 	backends := make([]*Backend, 0, len(cfg.Backends))
 
 	for _, b := range cfg.Backends {
@@ -59,7 +59,7 @@ func New(cfg *config.Config, cache *cache.Cache) *Manager {
 		backends:    backends,
 		cache:       cache,
 		client:      client,
-		mapper:      mapper.New(),
+		mapper:      mapper, // Use the provided mapper instead of creating a new one
 		downloadCtx: downloadCtx,
 	}
 
