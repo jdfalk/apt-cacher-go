@@ -46,8 +46,8 @@ jobs:
     - name: Build and run Docker-based integration tests
       working-directory: ./integration
       run: |
-        docker-compose build
-        docker-compose up --abort-on-container-exit
+        docker compose build
+        docker compose up --abort-on-container-exit
 
     - name: Check test results
       working-directory: ./integration
