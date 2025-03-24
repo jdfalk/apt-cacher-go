@@ -25,7 +25,7 @@ type Manager struct {
 	backends       []*Backend
 	cache          *cache.Cache
 	client         *http.Client
-	mapper         *mapper.AdvancedMapper // Changed from PathMapper to AdvancedMapper
+	mapper         *mapper.PathMapper
 	downloadCtx    context.Context
 	downloadCancel context.CancelFunc // Added field to store the cancel function
 	downloadQ      *queue.Queue
@@ -41,7 +41,7 @@ type Backend struct {
 }
 
 // New creates a new backend manager
-func New(cfg *config.Config, cache *cache.Cache, mapper *mapper.AdvancedMapper) *Manager {
+func New(cfg *config.Config, cache *cache.Cache, mapper *mapper.PathMapper) *Manager {
 	// Create HTTP client for backends
 	client := &http.Client{
 		Timeout: 30 * time.Second,
@@ -97,16 +97,17 @@ func (m *Manager) Shutdown() {
 
 // Fetch retrieves a package from the appropriate backend
 func (m *Manager) Fetch(requestPath string) ([]byte, error) {
-	// Map the path to determine which backend to use
+	// Map the request path to a repository and cache path
 	mappingResult, err := m.mapper.MapPath(requestPath)
 	if err != nil {
-		return nil, fmt.Errorf("path mapping error: %w", err)
+		return nil, fmt.Errorf("error mapping path: %w", err)
 	}
 
-	cachePath := mappingResult.CachePath
+	// Check if the file exists in cache first
+	cacheKey := mappingResult.CachePath // Use the new cache path format
 
 	// Try to get from cache first
-	data, found, err := m.cache.Get(cachePath)
+	data, found, err := m.cache.Get(cacheKey)
 	if err != nil {
 		return nil, fmt.Errorf("cache error: %w", err)
 	}
@@ -116,7 +117,7 @@ func (m *Manager) Fetch(requestPath string) ([]byte, error) {
 		return data, nil
 	} else if found && mappingResult.IsIndex {
 		// For index files, check if they are fresh enough
-		if m.cache.IsFresh(cachePath) {
+		if m.cache.IsFresh(cacheKey) {
 			return data, nil
 		}
 		// Otherwise fall through to backend fetch
@@ -160,7 +161,7 @@ func (m *Manager) Fetch(requestPath string) ([]byte, error) {
 	}
 
 	// Store in cache with the appropriate expiration
-	if err := m.cache.PutWithExpiration(cachePath, data, expiration); err != nil {
+	if err := m.cache.PutWithExpiration(cacheKey, data, expiration); err != nil {
 		return nil, fmt.Errorf("failed to cache data: %w", err)
 	}
 
