@@ -7,8 +7,7 @@ import (
 )
 
 func TestPathMapping(t *testing.T) {
-	// Fix: Replace NewSimpleMapper with New
-	m := New() // Changed from NewSimpleMapper to match actual implementation
+	m := New()
 
 	testCases := []struct {
 		name           string
@@ -17,11 +16,12 @@ func TestPathMapping(t *testing.T) {
 		wantRemotePath string
 		wantCachePath  string
 	}{
+		// Update tests to ensure cache paths don't duplicate repository names
 		{
 			name:           "Debian release file",
 			path:           "/debian/dists/bullseye/Release",
 			wantRepository: "debian",
-			wantRemotePath: "debian/dists/bullseye/Release", // Updated to match actual implementation
+			wantRemotePath: "dists/bullseye/Release", // Modified
 			wantCachePath:  "debian/dists/bullseye/Release",
 		},
 		{
@@ -49,12 +49,15 @@ func TestPathMapping(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Fix: Change m.Map to m.MapPath and handle the error
 			result, err := m.MapPath(tc.path)
 			assert.NoError(t, err)
 			assert.Equal(t, tc.wantRepository, result.Repository, "Repository")
 			assert.Equal(t, tc.wantRemotePath, result.RemotePath, "RemotePath")
 			assert.Equal(t, tc.wantCachePath, result.CachePath, "CachePath")
+			// Add test for the new Rule field
+			if tc.path != "/nonexistent/path" {
+				assert.NotNil(t, result.Rule, "Rule should not be nil for valid paths")
+			}
 		})
 	}
 }
