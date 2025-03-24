@@ -5,79 +5,230 @@ import (
 	"log"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
+	"sync"
 )
 
-// PathRule defines a pattern and its associated repository
-type PathRule struct {
-	Pattern    *regexp.Regexp
-	Repository string
+// RuleType defines the type of mapping rule
+type RuleType int
+
+const (
+	// RegexRule uses regular expressions for matching
+	RegexRule RuleType = iota
+	// PrefixRule matches based on path prefix
+	PrefixRule
+	// ExactRule requires an exact match
+	ExactRule
+)
+
+// MappingRule defines how to map a request path to a backend
+type MappingRule struct {
+	Type        RuleType
+	Pattern     string
+	Repository  string
+	RegexObj    *regexp.Regexp
+	Rewrite     bool
+	RewriteRule string
+	Priority    int
 }
 
-// PathMapper handles mapping request paths to backend repositories
+// PathMapper provides flexible path mapping with multiple rule types
 type PathMapper struct {
-	rules []PathRule
+	rules []MappingRule
+	mutex sync.RWMutex
 }
 
-// New creates a new path mapper with predefined rules
+// New creates a new path mapper with predefined rules (using advanced implementation)
 func New() *PathMapper {
-	m := &PathMapper{}
+	m := &PathMapper{
+		rules: make([]MappingRule, 0),
+	}
 
 	// Initialize with default rules
-	if err := m.AddRule(`^(debian|ubuntu)/dists/(.*)$`, "%s"); err != nil {
+	if err := m.AddRegexRule(`^(debian|ubuntu)/dists/(.*)$`, "%s", 100); err != nil {
+		log.Printf("Warning: Failed to add regex rule: %v", err)
+	}
+	if err := m.AddRegexRule(`^security\.debian\.org/(.*)$`, "security.debian.org", 90); err != nil {
+		log.Printf("Warning: Failed to add regex rule: %v", err)
+	}
+	if err := m.AddRegexRule(`^(archive|security)\.ubuntu\.com/ubuntu/(.*)$`, "archive.ubuntu.com/ubuntu", 90); err != nil {
+		log.Printf("Warning: Failed to add regex rule: %v", err)
+	}
+	if err := m.AddRegexRule(`^ftp\.(.*?)\.debian\.org/(.*)$`, "deb.debian.org", 85); err != nil {
 		log.Printf("Warning: Failed to add mapping rule: %v", err)
 	}
-	if err := m.AddRule(`^security\.debian\.org/(.*)$`, "security.debian.org"); err != nil {
-		log.Printf("Warning: Failed to add mapping rule: %v", err)
-	}
-	if err := m.AddRule(`^(archive|security)\.ubuntu\.com/ubuntu/(.*)$`, "archive.ubuntu.com/ubuntu"); err != nil {
-		log.Printf("Warning: Failed to add mapping rule: %v", err)
-	}
-	if err := m.AddRule(`^ftp\.(.*?)\.debian\.org/(.*)$`, "deb.debian.org"); err != nil {
-		log.Printf("Warning: Failed to add mapping rule: %v", err)
+	m.AddPrefixRule("debian-security", "security.debian.org", 80)
+	m.AddPrefixRule("ubuntu-security", "security.ubuntu.com/ubuntu", 80)
+
+	// Advanced rules with rewriting
+	if err := m.AddRewriteRule(`^ppa/(.+?)/(.+?)/ubuntu/(.*)$`, "ppa.launchpad.net/$1/$2/ubuntu", "$3", 70); err != nil {
+		log.Printf("Warning: Failed to add rewrite rule: %v", err)
 	}
 
 	return m
 }
 
-// AddRule adds a new mapping rule
-func (m *PathMapper) AddRule(pattern string, repo string) error {
+// AddRegexRule adds a regex-based mapping rule
+func (m *PathMapper) AddRegexRule(pattern, repo string, priority int) error {
 	re, err := regexp.Compile(pattern)
 	if err != nil {
 		return fmt.Errorf("invalid pattern %q: %w", pattern, err)
 	}
 
-	m.rules = append(m.rules, PathRule{
-		Pattern:    re,
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	m.rules = append(m.rules, MappingRule{
+		Type:       RegexRule,
+		Pattern:    pattern,
 		Repository: repo,
+		RegexObj:   re,
+		Priority:   priority,
 	})
+
+	// Sort rules by priority (highest first)
+	m.sortRules()
 
 	return nil
 }
 
-// MapPath determines which backend to use for a given request path
+// AddPrefixRule adds a prefix-based mapping rule
+func (m *PathMapper) AddPrefixRule(prefix, repo string, priority int) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	m.rules = append(m.rules, MappingRule{
+		Type:       PrefixRule,
+		Pattern:    prefix,
+		Repository: repo,
+		Priority:   priority,
+	})
+
+	// Sort rules by priority
+	m.sortRules()
+}
+
+// AddExactRule adds an exact match mapping rule
+func (m *PathMapper) AddExactRule(exact, repo string, priority int) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	m.rules = append(m.rules, MappingRule{
+		Type:       ExactRule,
+		Pattern:    exact,
+		Repository: repo,
+		Priority:   priority,
+	})
+
+	// Sort rules by priority
+	m.sortRules()
+}
+
+// AddRewriteRule adds a rule that rewrites the path
+func (m *PathMapper) AddRewriteRule(pattern, repo, rewriteRule string, priority int) error {
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return fmt.Errorf("invalid pattern %q: %w", pattern, err)
+	}
+
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	m.rules = append(m.rules, MappingRule{
+		Type:        RegexRule,
+		Pattern:     pattern,
+		Repository:  repo,
+		RegexObj:    re,
+		Rewrite:     true,
+		RewriteRule: rewriteRule,
+		Priority:    priority,
+	})
+
+	// Sort rules by priority
+	m.sortRules()
+
+	return nil
+}
+
+// sortRules sorts rules by priority (highest first)
+func (m *PathMapper) sortRules() {
+	sort.Slice(m.rules, func(i, j int) bool {
+		return m.rules[i].Priority > m.rules[j].Priority
+	})
+}
+
+// MapPath maps a request path to a repository and cache path
+// FIX: Ensure we don't duplicate repository name in cache path
 func (m *PathMapper) MapPath(requestPath string) (*MappingResult, error) {
 	// Normalize the path
 	path := strings.TrimPrefix(requestPath, "/")
 
-	// Check against rules
-	for _, rule := range m.rules {
-		if match := rule.Pattern.FindStringSubmatch(path); match != nil {
-			repo := rule.Repository
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
 
-			// If the repo has a %s, replace it with the first capture group
-			if strings.Contains(repo, "%s") && len(match) > 1 {
-				repo = fmt.Sprintf(repo, match[1])
+	// Try each rule in order of priority
+	for _, rule := range m.rules {
+		var matched bool
+		var repo, remotePath string
+
+		switch rule.Type {
+		case RegexRule:
+			if match := rule.RegexObj.FindStringSubmatch(path); match != nil {
+				matched = true
+				repo = rule.Repository
+
+				// If the repo has a %s, replace it with the first capture group
+				if strings.Contains(repo, "%s") && len(match) > 1 {
+					repo = fmt.Sprintf(repo, match[1])
+				}
+
+				if rule.Rewrite {
+					// Apply rewrite rule to get remote path
+					remotePath = rule.RegexObj.ReplaceAllString(path, rule.RewriteRule)
+				} else {
+					remotePath = path
+				}
 			}
 
-			// Determine if this is an index file
-			isIndex := isRepositoryIndexFile(path)
+		case PrefixRule:
+			if strings.HasPrefix(path, rule.Pattern) {
+				matched = true
+				repo = rule.Repository
+				remotePath = strings.TrimPrefix(path, rule.Pattern)
+				// Replace this conditional with unconditional TrimPrefix
+				remotePath = strings.TrimPrefix(remotePath, "/")
+			}
+
+		case ExactRule:
+			if path == rule.Pattern {
+				matched = true
+				repo = rule.Repository
+				remotePath = ""
+			}
+		}
+
+		if matched {
+			isIndex := isRepositoryIndexFile(remotePath)
+
+			// FIX: Handle cache path construction to avoid repository duplication
+			var cachePath string
+
+			// Does the remote path already start with the repository name?
+			if strings.HasPrefix(remotePath, repo+"/") {
+				// If so, just use the remote path as cache path
+				cachePath = remotePath
+			} else {
+				// Otherwise, join them safely
+				cachePath = filepath.Join(repo, remotePath)
+			}
 
 			return &MappingResult{
 				Repository: repo,
-				RemotePath: path,
-				CachePath:  filepath.Join(repo, path),
+				RemotePath: remotePath,
+				CachePath:  cachePath,
 				IsIndex:    isIndex,
+				Rule:       &rule, // Include the rule that matched
 			}, nil
 		}
 	}
@@ -117,4 +268,13 @@ func isRepositoryIndexFile(path string) bool {
 	}
 
 	return false
+}
+
+// MappingResult represents the result of mapping a path
+type MappingResult struct {
+	Repository string       // Which repository to use
+	RemotePath string       // Path to request from the repository
+	CachePath  string       // Path to store in the cache
+	IsIndex    bool         // Whether this is a repository index file
+	Rule       *MappingRule // The rule that matched (may be nil for default case)
 }
