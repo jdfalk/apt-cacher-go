@@ -54,8 +54,11 @@ func setupTestServer(t *testing.T) (*TestServer, func()) {
 			{Name: "debian", URL: "http://localhost:8080", Priority: 100},
 			{Name: "ubuntu", URL: "http://localhost:8080", Priority: 90},
 		},
-		IndexCacheDuration:   "1h",  // Cache index files for 1 hour
-		PackageCacheDuration: "30d", // Cache package files for 30 days
+		// Fixed: Use CacheTTLs map instead of non-existent fields
+		CacheTTLs: map[string]string{
+			"index":   "1h",  // Cache index files for 1 hour
+			"package": "30d", // Cache package files for 30 days
+		},
 	}
 
 	// Create and start server
@@ -315,8 +318,11 @@ func TestCacheExpiration(t *testing.T) {
 			{Name: "debian", URL: mockUpstream.URL, Priority: 100},
 			{Name: "ubuntu", URL: mockUpstream.URL, Priority: 90},
 		},
-		IndexCacheDuration:   "1s", // Very short for testing
-		PackageCacheDuration: "2s", // Very short for testing
+		// Fixed: Use CacheTTLs map instead of non-existent fields
+		CacheTTLs: map[string]string{
+			"index":   "1s", // Very short for testing
+			"package": "2s", // Very short for testing
+		},
 	}
 
 	srv, err := server.New(cfg)
