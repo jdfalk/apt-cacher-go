@@ -183,9 +183,8 @@ func (m *AdvancedMapper) MapPath(requestPath string) (*MappingResult, error) {
 				matched = true
 				repo = rule.Repository
 				remotePath = strings.TrimPrefix(path, rule.Pattern)
-				if strings.HasPrefix(remotePath, "/") {
-					remotePath = remotePath[1:]
-				}
+				// Replace this conditional with unconditional TrimPrefix
+				remotePath = strings.TrimPrefix(remotePath, "/")
 			}
 
 		case ExactRule:
