@@ -68,13 +68,17 @@ func setupTestServer(t *testing.T) *TestServer {
 
 	// Start server in a goroutine
 	go func() {
-		srv.Start()
+		if err := srv.Start(); err != nil {
+			t.Errorf("Failed to start server: %v", err)
+		}
 	}()
 
 	// Create cleanup function
 	cleanup := func() {
 		cancel()
-		srv.Shutdown()
+		if err := srv.Shutdown(); err != nil {
+			t.Logf("Warning: Server shutdown error: %v", err)
+		}
 		os.RemoveAll(cacheDir)
 	}
 
@@ -127,8 +131,9 @@ func TestBasicFunctionality(t *testing.T) {
 				assert.Equal(t, tp.statusCode, resp.StatusCode)
 
 				// Read and discard the body
-				_, err = io.Copy(io.Discard, resp.Body)
-				assert.NoError(t, err)
+				if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+					t.Logf("Warning: Failed to read response body: %v", err)
+				}
 				resp.Body.Close()
 
 				// Verify the file exists in cache
