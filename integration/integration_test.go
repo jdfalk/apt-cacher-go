@@ -9,13 +9,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/jdfalk/apt-cacher-go/internal/backend"
 	"github.com/jdfalk/apt-cacher-go/internal/config"
 	"github.com/jdfalk/apt-cacher-go/internal/server"
 	"github.com/stretchr/testify/assert"
@@ -95,7 +93,10 @@ func TestBasicFunctionality(t *testing.T) {
 	// Setup a mock upstream server first
 	mockUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
-		w.Write([]byte("Mock repository data for " + r.URL.Path))
+		_, err := w.Write([]byte("Mock repository data for " + r.URL.Path))
+		if err != nil {
+			t.Logf("Error writing response: %v", err)
+		}
 	}))
 	defer mockUpstream.Close()
 
@@ -103,22 +104,10 @@ func TestBasicFunctionality(t *testing.T) {
 	ts, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	// Override backend URLs to point to our mock server
-	// Using reflection to access the unexported field if necessary
-	backendField := reflect.ValueOf(ts.Server).Elem().FieldByName("backend")
-	if backendField.IsValid() {
-		backend := backendField.Interface().(*backend.Manager)
-
-		// Instead of using SetBaseURL, we need to use whatever method is available
-		// For now, let's assume we can directly modify the backends via reflection
-		backendsMap := reflect.ValueOf(backend).Elem().FieldByName("backends")
-		if backendsMap.IsValid() {
-			// Use reflection to modify the backends map with the mock URL
-			// This is a temporary solution - ideally the backend.Manager should expose a proper API
-			t.Logf("Using reflection to modify backend URLs")
-		} else {
-			t.Logf("Warning: Could not access backends map through reflection")
-		}
+	// Update the Config with the mock server URL instead of trying to use reflection
+	// This will be used when creating new servers
+	for i := range ts.Config.Backends {
+		ts.Config.Backends[i].URL = mockUpstream.URL
 	}
 
 	// Start the server
@@ -174,7 +163,10 @@ func TestConcurrentRequests(t *testing.T) {
 		if strings.Contains(r.URL.Path, "bash") {
 			size = 5000
 		}
-		w.Write(make([]byte, size))
+		_, err := w.Write(make([]byte, size))
+		if err != nil {
+			t.Logf("Error writing response: %v", err)
+		}
 	}))
 	defer mockUpstream.Close()
 
@@ -182,12 +174,9 @@ func TestConcurrentRequests(t *testing.T) {
 	ts, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	// Override backend URLs
-	backendField := reflect.ValueOf(ts.Server).Elem().FieldByName("backend")
-	if backendField.IsValid() {
-		// Similar approach as in TestBasicFunctionality
-		// We need a proper way to modify backend URLs in tests
-		t.Logf("Backend field is valid but SetBaseURL method is not available")
+	// Update the Config with the mock server URL
+	for i := range ts.Config.Backends {
+		ts.Config.Backends[i].URL = mockUpstream.URL
 	}
 
 	// Start the server
@@ -294,7 +283,10 @@ func TestCacheExpiration(t *testing.T) {
 	mockUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.Header().Set("Last-Modified", time.Now().Format(http.TimeFormat))
-		w.Write([]byte("Mock data for " + r.URL.Path))
+		_, err := w.Write([]byte("Mock data for " + r.URL.Path))
+		if err != nil {
+			t.Logf("Error writing response: %v", err)
+		}
 	}))
 	defer mockUpstream.Close()
 
@@ -399,9 +391,14 @@ func TestErrorHandling(t *testing.T) {
 
 	// Should either get an error or a 404/502
 	if err == nil {
+		defer resp.Body.Close()
 		assert.True(t, resp.StatusCode == http.StatusNotFound ||
 			resp.StatusCode == http.StatusBadGateway,
 			"Expected 404 or 502 status code for nonexistent backend")
-		resp.Body.Close()
+
+		// Fixed the bare io.Copy call by properly handling errors
+		if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+			t.Logf("Warning: Failed to read response body: %v", err)
+		}
 	}
 }
