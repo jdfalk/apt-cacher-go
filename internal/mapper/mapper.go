@@ -159,7 +159,6 @@ func (m *PathMapper) sortRules() {
 }
 
 // MapPath maps a request path to a repository and cache path
-// FIX: Ensure we don't duplicate repository name in cache path
 func (m *PathMapper) MapPath(requestPath string) (*MappingResult, error) {
 	// Normalize the path
 	path := strings.TrimPrefix(requestPath, "/")
@@ -187,7 +186,12 @@ func (m *PathMapper) MapPath(requestPath string) (*MappingResult, error) {
 					// Apply rewrite rule to get remote path
 					remotePath = rule.RegexObj.ReplaceAllString(path, rule.RewriteRule)
 				} else {
-					remotePath = path
+					// Strip repository prefix from remotePath to make tests pass
+					if strings.HasPrefix(path, repo+"/") {
+						remotePath = strings.TrimPrefix(path, repo+"/")
+					} else {
+						remotePath = path
+					}
 				}
 			}
 
@@ -196,7 +200,6 @@ func (m *PathMapper) MapPath(requestPath string) (*MappingResult, error) {
 				matched = true
 				repo = rule.Repository
 				remotePath = strings.TrimPrefix(path, rule.Pattern)
-				// Replace this conditional with unconditional TrimPrefix
 				remotePath = strings.TrimPrefix(remotePath, "/")
 			}
 
@@ -215,9 +218,9 @@ func (m *PathMapper) MapPath(requestPath string) (*MappingResult, error) {
 			var cachePath string
 
 			// Does the remote path already start with the repository name?
-			if strings.HasPrefix(remotePath, repo+"/") {
-				// If so, just use the remote path as cache path
-				cachePath = remotePath
+			if strings.HasPrefix(path, repo+"/") {
+				// If so, just use the path as cache path
+				cachePath = path
 			} else {
 				// Otherwise, join them safely
 				cachePath = filepath.Join(repo, remotePath)
@@ -244,11 +247,20 @@ func (m *PathMapper) MapPath(requestPath string) (*MappingResult, error) {
 	remotePath := parts[1]
 	isIndex := isRepositoryIndexFile(remotePath)
 
+	// Create a default rule to return for the default case
+	defaultRule := MappingRule{
+		Type:       PrefixRule,
+		Pattern:    repo,
+		Repository: repo,
+		Priority:   0,
+	}
+
 	return &MappingResult{
 		Repository: repo,
 		RemotePath: remotePath,
 		CachePath:  path,
 		IsIndex:    isIndex,
+		Rule:       &defaultRule, // Add a default rule for the default case
 	}, nil
 }
 
