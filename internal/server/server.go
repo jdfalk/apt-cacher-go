@@ -252,8 +252,23 @@ func (s *Server) handlePackageRequest(w http.ResponseWriter, r *http.Request) {
 
 	// Check for special APT-specific request headers
 	if r.Header.Get("If-Modified-Since") != "" {
-		// Handle conditional GET requests
-		// For simplicity, we're not fully implementing this now
+		// We need to use the appropriate methods to handle conditional requests
+
+		// First check if the file is in cache - use the actual API of cache.Get
+		filePath, found, err := s.cache.Get(requestPath)
+		if err == nil && found {
+			// Parse the If-Modified-Since header
+			modTime, err := time.Parse(http.TimeFormat, r.Header.Get("If-Modified-Since"))
+			if err == nil {
+				// Compare with cached file's last modified time
+				fileInfo, err := os.Stat(string(filePath))
+				if err == nil && !fileInfo.ModTime().After(modTime) {
+					w.WriteHeader(http.StatusNotModified)
+					return
+				}
+			}
+		}
+		// If we don't have the file or it's modified, continue with normal flow
 	}
 
 	// Fetch the package
