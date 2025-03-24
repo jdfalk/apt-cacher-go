@@ -363,12 +363,12 @@ func TestRepositoryMapping(t *testing.T) {
 // Update the TestRepositoryMapping test with this function:
 // Accept any valid cache structure by actually checking if files exist instead of assuming paths
 func getCacheFile(cacheDir, repository, path string) (string, bool) {
-	// Try various possible path structures
+	// Try various possible path structures, with the new format first
 	possiblePaths := []string{
-		filepath.Join(cacheDir, repository, path),                                     // Simple
-		filepath.Join(cacheDir, repository, repository, path),                         // Double repo
-		filepath.Join(cacheDir, repository, repository, repository, path),             // Triple repo
-		filepath.Join(cacheDir, repository, strings.TrimPrefix(path, "/"+repository)), // No leading repo
+		filepath.Join(cacheDir, repository, strings.TrimPrefix(path, "/"+repository+"/")), // New format
+		filepath.Join(cacheDir, repository, path),                                         // Simple
+		filepath.Join(cacheDir, repository, repository, path),                             // Double repo
+		filepath.Join(cacheDir, repository, strings.TrimPrefix(path, "/"+repository)),     // No leading repo
 	}
 
 	for _, p := range possiblePaths {
