@@ -1,175 +1,174 @@
 package metrics
 
 import (
-	"net/http"
+	"fmt"
 	"sync"
 	"time"
-
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// PrometheusCollector provides Prometheus metrics
+// PrometheusCollector collects metrics in Prometheus format
 type PrometheusCollector struct {
-	registry              *prometheus.Registry
-	requestsTotal         *prometheus.CounterVec
-	cacheHits             *prometheus.Counter
-	cacheMisses           *prometheus.Counter
-	bytesServed           *prometheus.Counter
-	responseTimes         *prometheus.HistogramVec
-	cacheSize             *prometheus.Gauge
-	currentConnections    *prometheus.Gauge
-	requestsInProgress    *prometheus.Gauge
-	lastGarbageCollection *prometheus.Gauge
-	mutex                 sync.Mutex
+	// Metrics
+	totalRequests      int64
+	cacheHits          int64
+	cacheMisses        int64
+	requestsInProgress int64
+	connections        int64
+	bytesServed        int64
+
+	// Response time tracking
+	responseTimePackage float64
+	responseTimeIndex   float64
+	responseTimeAdmin   float64
+	responseTimeCount   map[string]int64
+
+	// Synchronization for thread-safe operations
+	mutex sync.Mutex
 }
 
-// NewPrometheusCollector creates a new Prometheus metrics collector
+// NewPrometheusCollector creates a new prometheus metrics collector
 func NewPrometheusCollector() *PrometheusCollector {
-	registry := prometheus.NewRegistry()
-
-	requestsTotal := prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "apt_cacher_requests_total",
-			Help: "Total number of requests by status",
-		},
-		[]string{"status"},
-	)
-	registry.MustRegister(requestsTotal)
-
-	cacheHits := prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Name: "apt_cacher_cache_hits",
-			Help: "Total number of cache hits",
-		},
-	)
-	registry.MustRegister(cacheHits)
-
-	cacheMisses := prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Name: "apt_cacher_cache_misses",
-			Help: "Total number of cache misses",
-		},
-	)
-	registry.MustRegister(cacheMisses)
-
-	bytesServed := prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Name: "apt_cacher_bytes_served",
-			Help: "Total bytes served",
-		},
-	)
-	registry.MustRegister(bytesServed)
-
-	responseTimes := prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Name:    "apt_cacher_response_time_seconds",
-			Help:    "Response time in seconds",
-			Buckets: prometheus.DefBuckets,
-		},
-		[]string{"path_type"},
-	)
-	registry.MustRegister(responseTimes)
-
-	cacheSize := prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "apt_cacher_cache_size_bytes",
-			Help: "Current cache size in bytes",
-		},
-	)
-	registry.MustRegister(cacheSize)
-
-	currentConnections := prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "apt_cacher_current_connections",
-			Help: "Current number of active connections",
-		},
-	)
-	registry.MustRegister(currentConnections)
-
-	requestsInProgress := prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "apt_cacher_requests_in_progress",
-			Help: "Current number of requests being processed",
-		},
-	)
-	registry.MustRegister(requestsInProgress)
-
-	lastGarbageCollection := prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "apt_cacher_last_garbage_collection",
-			Help: "Timestamp of the last garbage collection run",
-		},
-	)
-	registry.MustRegister(lastGarbageCollection)
-
 	return &PrometheusCollector{
-		registry:              registry,
-		requestsTotal:         requestsTotal,
-		cacheHits:             &cacheHits,
-		cacheMisses:           &cacheMisses,
-		bytesServed:           &bytesServed,
-		responseTimes:         responseTimes,
-		cacheSize:             &cacheSize,
-		currentConnections:    &currentConnections,
-		requestsInProgress:    &requestsInProgress,
-		lastGarbageCollection: &lastGarbageCollection,
+		responseTimeCount: make(map[string]int64),
 	}
 }
 
-// RecordRequest records a request in Prometheus metrics
+// RecordRequest records a request with its result
 func (p *PrometheusCollector) RecordRequest(status string) {
-	p.requestsTotal.WithLabelValues(status).Inc()
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	p.totalRequests++
+
+	if status == "200" {
+		p.cacheHits++
+	} else if status == "404" {
+		p.cacheMisses++
+	}
 }
 
-// RecordCacheHit records a cache hit
-func (p *PrometheusCollector) RecordCacheHit(bytes int64) {
-	(*p.cacheHits).Inc()
-	(*p.bytesServed).Add(float64(bytes))
-}
-
-// RecordCacheMiss records a cache miss
-func (p *PrometheusCollector) RecordCacheMiss(bytes int64) {
-	(*p.cacheMisses).Inc()
-	(*p.bytesServed).Add(float64(bytes))
-}
-
-// RecordResponseTime records a response time
+// RecordResponseTime records response time for a specific path type
 func (p *PrometheusCollector) RecordResponseTime(pathType string, duration time.Duration) {
-	p.responseTimes.WithLabelValues(pathType).Observe(duration.Seconds())
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	ms := float64(duration.Milliseconds())
+
+	switch pathType {
+	case "package":
+		p.responseTimePackage += ms
+		p.responseTimeCount["package"]++
+	case "index":
+		p.responseTimeIndex += ms
+		p.responseTimeCount["index"]++
+	case "admin":
+		p.responseTimeAdmin += ms
+		p.responseTimeCount["admin"]++
+	}
 }
 
-// SetCacheSize sets the current cache size
-func (p *PrometheusCollector) SetCacheSize(bytes int64) {
-	(*p.cacheSize).Set(float64(bytes))
+// RecordBytesServed records bytes sent to clients
+func (p *PrometheusCollector) RecordBytesServed(bytes int64) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	p.bytesServed += bytes
+}
+
+// IncRequestsInProgress increments the in-progress request counter
+func (p *PrometheusCollector) IncRequestsInProgress() {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	p.requestsInProgress++
+}
+
+// DecRequestsInProgress decrements the in-progress request counter
+func (p *PrometheusCollector) DecRequestsInProgress() {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	p.requestsInProgress--
 }
 
 // IncConnections increments the active connections counter
 func (p *PrometheusCollector) IncConnections() {
-	(*p.currentConnections).Inc()
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	p.connections++
 }
 
 // DecConnections decrements the active connections counter
 func (p *PrometheusCollector) DecConnections() {
-	(*p.currentConnections).Dec()
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	p.connections--
 }
 
-// IncRequestsInProgress increments the in-progress requests counter
-func (p *PrometheusCollector) IncRequestsInProgress() {
-	(*p.requestsInProgress).Inc()
-}
+// GetMetrics returns all metrics in Prometheus format
+func (p *PrometheusCollector) GetMetrics() string {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
 
-// DecRequestsInProgress decrements the in-progress requests counter
-func (p *PrometheusCollector) DecRequestsInProgress() {
-	(*p.requestsInProgress).Dec()
-}
+	var avgPackage, avgIndex, avgAdmin float64
 
-// RecordGarbageCollection records a garbage collection run
-func (p *PrometheusCollector) RecordGarbageCollection() {
-	(*p.lastGarbageCollection).SetToCurrentTime()
-}
+	if p.responseTimeCount["package"] > 0 {
+		avgPackage = p.responseTimePackage / float64(p.responseTimeCount["package"])
+	}
 
-// Handler returns an HTTP handler for Prometheus metrics
-func (p *PrometheusCollector) Handler() http.Handler {
-	return promhttp.HandlerFor(p.registry, promhttp.HandlerOpts{})
+	if p.responseTimeCount["index"] > 0 {
+		avgIndex = p.responseTimeIndex / float64(p.responseTimeCount["index"])
+	}
+
+	if p.responseTimeCount["admin"] > 0 {
+		avgAdmin = p.responseTimeAdmin / float64(p.responseTimeCount["admin"])
+	}
+
+	return fmt.Sprintf(`# HELP apt_cacher_requests_total Total number of HTTP requests
+# TYPE apt_cacher_requests_total counter
+apt_cacher_requests_total %d
+
+# HELP apt_cacher_cache_hits_total Total number of cache hits
+# TYPE apt_cacher_cache_hits_total counter
+apt_cacher_cache_hits_total %d
+
+# HELP apt_cacher_cache_misses_total Total number of cache misses
+# TYPE apt_cacher_cache_misses_total counter
+apt_cacher_cache_misses_total %d
+
+# HELP apt_cacher_requests_in_progress Current number of requests being processed
+# TYPE apt_cacher_requests_in_progress gauge
+apt_cacher_requests_in_progress %d
+
+# HELP apt_cacher_active_connections Current number of active connections
+# TYPE apt_cacher_active_connections gauge
+apt_cacher_active_connections %d
+
+# HELP apt_cacher_bytes_served_total Total number of bytes served
+# TYPE apt_cacher_bytes_served_total counter
+apt_cacher_bytes_served_total %d
+
+# HELP apt_cacher_response_time_package_ms Average response time for package requests in ms
+# TYPE apt_cacher_response_time_package_ms gauge
+apt_cacher_response_time_package_ms %.2f
+
+# HELP apt_cacher_response_time_index_ms Average response time for index requests in ms
+# TYPE apt_cacher_response_time_index_ms gauge
+apt_cacher_response_time_index_ms %.2f
+
+# HELP apt_cacher_response_time_admin_ms Average response time for admin requests in ms
+# TYPE apt_cacher_response_time_admin_ms gauge
+apt_cacher_response_time_admin_ms %.2f
+`,
+		p.totalRequests,
+		p.cacheHits,
+		p.cacheMisses,
+		p.requestsInProgress,
+		p.connections,
+		p.bytesServed,
+		avgPackage,
+		avgIndex,
+		avgAdmin)
 }
