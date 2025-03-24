@@ -36,7 +36,11 @@ type Server struct {
 
 // New creates a new Server instance
 func New(cfg *config.Config) (*Server, error) {
-	c, err := cache.New(cfg.CacheDir, cfg.MaxCacheSize)
+	maxCacheSize, err := cfg.ParseCacheSize()
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse cache size: %v", err)
+	}
+	cacheInstance, err := cache.New(cfg.CacheDir, maxCacheSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize cache: %w", err)
 	}
@@ -62,7 +66,7 @@ func New(cfg *config.Config) (*Server, error) {
 		}
 	}
 
-	b := backend.New(cfg, c, m)
+	b := backend.New(cfg, cacheInstance, m)
 	metricsCollector := metrics.New()
 	prometheusCollector := metrics.NewPrometheusCollector()
 
@@ -77,7 +81,7 @@ func New(cfg *config.Config) (*Server, error) {
 
 	s := &Server{
 		cfg:        cfg,
-		cache:      c,
+		cache:      cacheInstance,
 		backend:    b,
 		metrics:    metricsCollector,
 		prometheus: prometheusCollector,
@@ -110,7 +114,7 @@ func New(cfg *config.Config) (*Server, error) {
 	mux.HandleFunc("/ready", s.handleReady)
 
 	// If TLS is configured, set up HTTPS server
-	if cfg.TLSEnabled && cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+	if cfg.TLSEnabled && cfg.TLSCert != "" && cfg.TLSKey != "" {
 		tlsConfig := &tls.Config{
 			MinVersion: tls.VersionTLS12,
 			CipherSuites: []uint16{
@@ -140,7 +144,7 @@ func (s *Server) Start() error {
 		go func() {
 			log.Printf("Starting HTTPS server on %s", s.httpsServer.Addr)
 			if err := s.httpsServer.ListenAndServeTLS(
-				s.cfg.TLSCertFile, s.cfg.TLSKeyFile,
+				s.cfg.TLSCert, s.cfg.TLSKey,
 			); err != http.ErrServerClosed {
 				log.Fatalf("HTTPS server error: %v", err)
 			}
@@ -394,16 +398,11 @@ func (s *Server) handleAdminAuth(handler http.HandlerFunc) http.HandlerFunc {
 
 // validateAdminAuth checks if the provided credentials match the configured admin auth
 func (s *Server) validateAdminAuth(username, password string) bool {
-	if s.cfg.AdminAuth == "" {
+	if !s.cfg.AdminAuth || s.cfg.AdminUser == "" || s.cfg.AdminPassword == "" {
 		return false
 	}
 
-	parts := strings.SplitN(s.cfg.AdminAuth, ":", 2)
-	if len(parts) != 2 {
-		return false
-	}
-
-	return username == parts[0] && password == parts[1]
+	return username == s.cfg.AdminUser && password == s.cfg.AdminPassword
 }
 
 // Port returns the HTTP port the server is listening on
