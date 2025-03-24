@@ -2,6 +2,7 @@ package cache
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -327,11 +328,15 @@ func (c *Cache) backgroundCleanup() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		c.FlushExpired()
+		if _, err := c.FlushExpired(); err != nil {
+			log.Printf("Error flushing expired cache entries: %v", err)
+		}
 
 		c.mutex.Lock()
 		if c.currentSize > c.maxSize {
-			c.cleanup()
+			if err := c.cleanup(); err != nil {
+				log.Printf("Error cleaning up cache: %v", err)
+			}
 		}
 		c.mutex.Unlock()
 	}
