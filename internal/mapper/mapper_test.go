@@ -7,7 +7,8 @@ import (
 )
 
 func TestPathMapping(t *testing.T) {
-	m := NewSimpleMapper()
+	// Fix: Replace NewSimpleMapper with New
+	m := New() // Changed from NewSimpleMapper to match actual implementation
 
 	testCases := []struct {
 		name           string
@@ -48,7 +49,9 @@ func TestPathMapping(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			result := m.Map(tc.path)
+			// Fix: Change m.Map to m.MapPath and handle the error
+			result, err := m.MapPath(tc.path)
+			assert.NoError(t, err)
 			assert.Equal(t, tc.wantRepository, result.Repository, "Repository")
 			assert.Equal(t, tc.wantRemotePath, result.RemotePath, "RemotePath")
 			assert.Equal(t, tc.wantCachePath, result.CachePath, "CachePath")
