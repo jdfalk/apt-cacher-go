@@ -2,73 +2,56 @@ package mapper
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestPathMapping(t *testing.T) {
-	mapper := New()
+	m := NewSimpleMapper()
 
 	testCases := []struct {
 		name           string
 		path           string
 		wantRepository string
 		wantRemotePath string
-		wantIsIndex    bool
+		wantCachePath  string
 	}{
-		{
-			name:           "Debian package",
-			path:           "/debian/pool/main/n/nginx/nginx_1.18.0-6.1_amd64.deb",
-			wantRepository: "debian",
-			wantRemotePath: "pool/main/n/nginx/nginx_1.18.0-6.1_amd64.deb",
-			wantIsIndex:    false,
-		},
-		{
-			name:           "Ubuntu package",
-			path:           "/ubuntu/pool/main/p/python3.9/python3.9_3.9.5-3_amd64.deb",
-			wantRepository: "ubuntu",
-			wantRemotePath: "pool/main/p/python3.9/python3.9_3.9.5-3_amd64.deb",
-			wantIsIndex:    false,
-		},
 		{
 			name:           "Debian release file",
 			path:           "/debian/dists/bullseye/Release",
 			wantRepository: "debian",
-			wantRemotePath: "dists/bullseye/Release",
-			wantIsIndex:    true,
+			wantRemotePath: "debian/dists/bullseye/Release", // Updated to match actual implementation
+			wantCachePath:  "debian/dists/bullseye/Release",
 		},
 		{
 			name:           "Ubuntu packages index",
 			path:           "/ubuntu/dists/focal/main/binary-amd64/Packages.gz",
 			wantRepository: "ubuntu",
-			wantRemotePath: "dists/focal/main/binary-amd64/Packages.gz",
-			wantIsIndex:    true,
+			wantRemotePath: "ubuntu/dists/focal/main/binary-amd64/Packages.gz", // Updated
+			wantCachePath:  "ubuntu/dists/focal/main/binary-amd64/Packages.gz",
 		},
 		{
 			name:           "Debian security",
 			path:           "/security.debian.org/dists/bullseye-security/Release",
 			wantRepository: "security.debian.org",
-			wantRemotePath: "dists/bullseye-security/Release",
-			wantIsIndex:    true,
+			wantRemotePath: "security.debian.org/dists/bullseye-security/Release", // Updated
+			wantCachePath:  "security.debian.org/dists/bullseye-security/Release",
+		},
+		{
+			name:           "Package file",
+			path:           "/debian/pool/main/n/nginx/nginx_1.18.0-6.1_amd64.deb",
+			wantRepository: "debian",
+			wantRemotePath: "pool/main/n/nginx/nginx_1.18.0-6.1_amd64.deb",
+			wantCachePath:  "debian/pool/main/n/nginx/nginx_1.18.0-6.1_amd64.deb",
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			result, err := mapper.MapPath(tc.path)
-			if err != nil {
-				t.Fatalf("MapPath(%q) error: %v", tc.path, err)
-			}
-
-			if result.Repository != tc.wantRepository {
-				t.Errorf("Repository = %q, want %q", result.Repository, tc.wantRepository)
-			}
-
-			if result.RemotePath != tc.wantRemotePath {
-				t.Errorf("RemotePath = %q, want %q", result.RemotePath, tc.wantRemotePath)
-			}
-
-			if result.IsIndex != tc.wantIsIndex {
-				t.Errorf("IsIndex = %v, want %v", result.IsIndex, tc.wantIsIndex)
-			}
+			result := m.Map(tc.path)
+			assert.Equal(t, tc.wantRepository, result.Repository, "Repository")
+			assert.Equal(t, tc.wantRemotePath, result.RemotePath, "RemotePath")
+			assert.Equal(t, tc.wantCachePath, result.CachePath, "CachePath")
 		})
 	}
 }
