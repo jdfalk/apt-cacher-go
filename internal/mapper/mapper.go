@@ -2,6 +2,7 @@ package mapper
 
 import (
 	"fmt"
+	"log"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -23,10 +24,18 @@ func New() *PathMapper {
 	m := &PathMapper{}
 
 	// Initialize with default rules
-	m.AddRule(`^(debian|ubuntu)/dists/(.*)$`, "%s")
-	m.AddRule(`^security\.debian\.org/(.*)$`, "security.debian.org")
-	m.AddRule(`^(archive|security)\.ubuntu\.com/ubuntu/(.*)$`, "archive.ubuntu.com/ubuntu")
-	m.AddRule(`^ftp\.(.*?)\.debian\.org/(.*)$`, "deb.debian.org")
+	if err := m.AddRule(`^(debian|ubuntu)/dists/(.*)$`, "%s"); err != nil {
+		log.Printf("Warning: Failed to add mapping rule: %v", err)
+	}
+	if err := m.AddRule(`^security\.debian\.org/(.*)$`, "security.debian.org"); err != nil {
+		log.Printf("Warning: Failed to add mapping rule: %v", err)
+	}
+	if err := m.AddRule(`^(archive|security)\.ubuntu\.com/ubuntu/(.*)$`, "archive.ubuntu.com/ubuntu"); err != nil {
+		log.Printf("Warning: Failed to add mapping rule: %v", err)
+	}
+	if err := m.AddRule(`^ftp\.(.*?)\.debian\.org/(.*)$`, "deb.debian.org"); err != nil {
+		log.Printf("Warning: Failed to add mapping rule: %v", err)
+	}
 
 	return m
 }
