@@ -4,110 +4,67 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/signal"
-	"syscall"
 
 	"github.com/jdfalk/apt-cacher-go/internal/config"
 	"github.com/jdfalk/apt-cacher-go/internal/server"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
-// Command line flags
 var (
-	listenAddress string
-	port          int
-	cacheDir      string
-	tlsEnabled    bool
-	tlsPort       int
-	tlsCertFile   string
-	tlsKeyFile    string
-	maxCacheSize  int64
+	cfgFile    string
+	cacheDir   string
+	listenAddr string
+	logLevel   string
 )
 
-// NewCommand creates the serve command
+// NewCommand returns the serve command
 func NewCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start the apt-cacher-go server",
-		Long:  `Start the apt-cacher-go server to provide caching proxy services for Debian/Ubuntu repositories.`,
-		Run: func(cmd *cobra.Command, args []string) {
-			runServer()
+		Long:  `Start the apt-cacher-go server to proxy and cache package requests`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runServe()
 		},
 	}
 
-	// Define flags
-	cmd.Flags().StringVarP(&listenAddress, "listen", "l", "0.0.0.0", "Address to listen on")
-	cmd.Flags().IntVarP(&port, "port", "p", 3142, "Port to listen on")
-	cmd.Flags().StringVarP(&cacheDir, "cache-dir", "c", "/var/cache/apt-cacher-go", "Directory for cached packages")
-	cmd.Flags().BoolVar(&tlsEnabled, "tls", false, "Enable TLS/HTTPS")
-	cmd.Flags().IntVar(&tlsPort, "tls-port", 3143, "Port for TLS/HTTPS")
-	cmd.Flags().StringVar(&tlsCertFile, "tls-cert", "", "TLS certificate file")
-	cmd.Flags().StringVar(&tlsKeyFile, "tls-key", "", "TLS key file")
-	cmd.Flags().Int64Var(&maxCacheSize, "max-cache-size", 1024*1024*1024, "Maximum cache size in bytes (default 1GB)")
-
-	// Bind flags to viper
-	viper.BindPFlag("listen_address", cmd.Flags().Lookup("listen"))
-	viper.BindPFlag("port", cmd.Flags().Lookup("port"))
-	viper.BindPFlag("cache_dir", cmd.Flags().Lookup("cache-dir"))
-	viper.BindPFlag("tls.enabled", cmd.Flags().Lookup("tls"))
-	viper.BindPFlag("tls.port", cmd.Flags().Lookup("tls-port"))
-	viper.BindPFlag("tls.cert_file", cmd.Flags().Lookup("tls-cert"))
-	viper.BindPFlag("tls.key_file", cmd.Flags().Lookup("tls-key"))
-	viper.BindPFlag("max_cache_size", cmd.Flags().Lookup("max-cache-size"))
+	// Add flags
+	cmd.Flags().StringVar(&cfgFile, "config", "", "config file (default is /etc/apt-cacher-go/config.yaml)")
+	cmd.Flags().StringVar(&cacheDir, "cache-dir", "/var/cache/apt-cacher-go", "Directory for cached packages")
+	cmd.Flags().StringVar(&listenAddr, "listen", ":3142", "Address to listen on")
+	cmd.Flags().StringVar(&logLevel, "log-level", "info", "Logging level (debug, info, warn, error)")
 
 	return cmd
 }
 
-func runServer() {
-	// Create configuration from viper values
+func runServe() error {
+	// Configure from viper/flags
 	cfg := &config.Config{
-		ListenAddress:          viper.GetString("listen_address"),
-		Port:                   viper.GetInt("port"),
-		CacheDir:               viper.GetString("cache_dir"),
-		MaxCacheSize:           viper.GetInt64("max_cache_size"),
-		TLSEnabled:             viper.GetBool("tls.enabled"),
-		TLSPort:                viper.GetInt("tls.port"),
-		TLSCertFile:            viper.GetString("tls.cert_file"),
-		TLSKeyFile:             viper.GetString("tls.key_file"),
-		MaxConcurrentDownloads: viper.GetInt("max_concurrent_downloads"),
+		CacheDir:      cacheDir,
+		ListenAddress: listenAddr, // Fixed field name to match config.Config
+		// LogLevel is not in Config, so we don't set it here
 	}
 
-	// Set default for max concurrent downloads if not provided
-	if cfg.MaxConcurrentDownloads == 0 {
-		cfg.MaxConcurrentDownloads = 10
+	// Override with direct flag values if provided
+	if cacheDir != "" {
+		cfg.CacheDir = cacheDir
 	}
+	if listenAddr != "" {
+		cfg.ListenAddress = listenAddr // Fixed field name
+	}
+	// Log level requires additional handling since it's not in config.Config
 
 	// Ensure cache directory exists
 	if err := os.MkdirAll(cfg.CacheDir, 0755); err != nil {
-		log.Fatalf("Failed to create cache directory: %v", err)
+		return fmt.Errorf("failed to create cache directory: %w", err)
 	}
 
-	// Initialize server
-	srv, err := server.New(cfg)
+	// Create and start server
+	srv, err := server.New(cfg) // Use server.New instead of server.NewServer
 	if err != nil {
-		log.Fatalf("Failed to initialize server: %v", err)
+		return fmt.Errorf("failed to initialize server: %w", err)
 	}
 
-	// Start server in a goroutine
-	go func() {
-		if err := srv.Start(); err != nil {
-			log.Fatalf("Server error: %v", err)
-		}
-	}()
-
-	fmt.Printf("apt-cacher-go server started on %s:%d\n", cfg.ListenAddress, cfg.Port)
-	if cfg.TLSEnabled {
-		fmt.Printf("TLS enabled on port %d\n", cfg.TLSPort)
-	}
-
-	// Handle graceful shutdown
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	<-sigChan
-
-	fmt.Println("Shutting down server...")
-	if err := srv.Shutdown(); err != nil {
-		log.Fatalf("Server shutdown error: %v", err)
-	}
+	log.Printf("Starting apt-cacher-go server on %s:%d\n", cfg.ListenAddress, cfg.Port)
+	return srv.Start()
 }
