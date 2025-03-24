@@ -53,10 +53,8 @@ jobs:
             go test ./... -coverprofile=./cover.out -covermode=atomic -coverpkg=./...
             go tool cover -html=./cover.out -o coverage.html
 
-      - name: Run Integration Tests
-        run: |
-          cd integration
-          bash run-integration-tests.sh
+      # We don't need to run integration tests here since they're already run in the dedicated workflow
+      # This avoids duplicating work and saves CI time/resources
 
       - name: Build Binary
         run: |
