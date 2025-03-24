@@ -211,10 +211,10 @@ func (s *Server) adminGetStats(w http.ResponseWriter, r *http.Request) {
 	uptime := time.Since(s.startTime).Round(time.Second).String()
 
 	// Create JSON response
-	response := map[string]interface{}{
+	response := map[string]any{ // Changed from interface{} to any
 		"version": s.version,
 		"uptime":  uptime,
-		"requests": map[string]interface{}{
+		"requests": map[string]any{ // Changed from interface{} to any
 			"total":                stats.TotalRequests,
 			"cache_hits":           stats.CacheHits,
 			"cache_misses":         stats.CacheMisses,
@@ -222,8 +222,8 @@ func (s *Server) adminGetStats(w http.ResponseWriter, r *http.Request) {
 			"avg_response_time_ms": stats.AvgResponseTime,
 			"bytes_served":         stats.BytesServed,
 		},
-		"cache": map[string]interface{}{
-			"entries":        cacheStats.Items, // Changed from ItemCount to Items
+		"cache": map[string]any{ // Changed from interface{} to any
+			"entries":        cacheStats.Items,
 			"size_bytes":     cacheStats.CurrentSize,
 			"max_size_bytes": cacheStats.MaxSize,
 			"usage_percent":  float64(cacheStats.CurrentSize) / float64(cacheStats.MaxSize) * 100,
