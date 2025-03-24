@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"runtime"
 	"time"
@@ -87,7 +88,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// Return as JSON
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(status)
+	if err := json.NewEncoder(w).Encode(status); err != nil {
+		log.Printf("Error encoding health status JSON: %v", err)
+	}
 }
 
 // handleMetrics serves Prometheus metrics
