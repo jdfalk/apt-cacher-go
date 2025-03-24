@@ -28,7 +28,7 @@ type Server struct {
 	metrics     *metrics.Collector
 	prometheus  *metrics.PrometheusCollector
 	acl         *security.ACL
-	mapper      *mapper.AdvancedMapper
+	mapper      *mapper.PathMapper
 	startTime   time.Time
 	version     string
 	logger      *log.Logger // Add logger field
@@ -46,7 +46,7 @@ func New(cfg *config.Config) (*Server, error) {
 	}
 
 	// Create advanced path mapper
-	m := mapper.NewAdvancedMapper()
+	m := mapper.New()
 
 	// Register custom mapping rules from config
 	for _, rule := range cfg.MappingRules {
