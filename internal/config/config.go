@@ -1,7 +1,7 @@
 package config
 
 import (
-	"io/ioutil"
+	"os" // Replace io/ioutil with os
 	"time"
 
 	"gopkg.in/yaml.v2"
@@ -33,12 +33,12 @@ type Config struct {
 	MappingRules []MappingRule `yaml:"mapping_rules"`
 
 	// Security settings
-	AllowedIPs  []string `yaml:"allowed_ips"`
-	RateLimit   int      `yaml:"rate_limit"`
-	AuthEnabled bool     `yaml:"auth_enabled"`
-	AdminUser    string   `yaml:"username"`
-	AdminPassword    string   `yaml:"password"`
-	AdminAuth   bool     `yaml:"admin_auth"`
+	AllowedIPs    []string `yaml:"allowed_ips"`
+	RateLimit     int      `yaml:"rate_limit"`
+	AuthEnabled   bool     `yaml:"auth_enabled"`
+	AdminUser     string   `yaml:"username"`
+	AdminPassword string   `yaml:"password"`
+	AdminAuth     bool     `yaml:"admin_auth"`
 
 	// Metrics configuration
 	MetricsEnabled bool `yaml:"metrics_enabled"`
@@ -69,7 +69,7 @@ type MappingRule struct {
 
 // LoadConfigFile loads configuration from a YAML file
 func LoadConfigFile(path string) (*Config, error) {
-	data, err := ioutil.ReadFile(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
