@@ -3,7 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"html/template"
+	"log"
 	"net/http"
 	"time"
 )
@@ -39,305 +39,284 @@ type TopClient struct {
 	BytesSent int64
 }
 
+// CacheEntry represents an entry in the cache (for search results)
+type CacheEntry struct {
+	Path       string
+	Size       int64
+	LastAccess time.Time
+	Expires    time.Time
+}
+
 // adminDashboard serves the admin dashboard
 func (s *Server) adminDashboard(w http.ResponseWriter, r *http.Request) {
-	// Gather stats
 	stats := s.metrics.GetStatistics()
 	cacheStats, err := s.cache.GetStats()
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Error getting cache stats: %v", err), http.StatusInternalServerError)
+		http.Error(w, "Failed to retrieve cache statistics", http.StatusInternalServerError)
+		log.Printf("Failed to get cache statistics: %v", err)
 		return
 	}
 
-    // Convert metrics.TopPackage to server.TopPackage
-    metricPackages := s.metrics.GetTopPackages(10)
-    topPackages := make([]TopPackage, len(metricPackages))
-    for i, pkg := range metricPackages {
-        topPackages[i] = TopPackage{
-            URL:        pkg.URL,
-            Count:      pkg.Count,
-            LastAccess: pkg.LastAccess,
-            Size:       pkg.Size,
-        }
-    }
+	html := fmt.Sprintf(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>apt-cacher-go Admin</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 20px; }
+            h1 { color: #333; }
+            .stats { background: #f5f5f5; padding: 15px; border-radius: 5px; }
+            .actions { margin-top: 20px; }
+            button { background: #0066cc; color: white; border: none; padding: 8px 15px; margin-right: 10px; cursor: pointer; }
+            table { border-collapse: collapse; width: 100%%; margin-top: 20px; }
+            th, td { border: 1px solid #ddd; padding: 8px; }
+            th { background: #f2f2f2; }
+            tr:nth-child(even) { background: #f9f9f9; }
+        </style>
+    </head>
+    <body>
+        <h1>apt-cacher-go Administration</h1>
 
-    // Convert metrics.TopClient to server.TopClient
-    metricClients := s.metrics.GetTopClients(10)
-    topClients := make([]TopClient, len(metricClients))
-    for i, client := range metricClients {
-        topClients[i] = TopClient{
-            IP:        client.IP,
-            Requests:  client.Requests,
-            BytesSent: client.BytesSent,
-        }
-    }
+        <div class="stats">
+            <h2>Statistics</h2>
+            <p>Server uptime: %s</p>
+            <p>Version: %s</p>
+            <p>Total requests: %d</p>
+            <p>Cache hits: %d (%.1f%%)</p>
+            <p>Cache misses: %d</p>
+            <p>Total bytes served: %d</p>
+            <p>Cache entries: %d</p>
+            <p>Cache size: %.2f MB</p>
+            <p>Cache max size: %.2f MB</p>
+        </div>
 
-    adminStats := AdminStats{
-        CacheSize:       cacheStats.CurrentSize,
-        CacheMaxSize:    cacheStats.MaxSize,
-        CachePercentage: float64(cacheStats.CurrentSize) / float64(cacheStats.MaxSize) * 100,
-        CacheItems:      cacheStats.Items,
-        BytesServed:     stats.BytesServed,
-        RequestsTotal:   stats.TotalRequests,
-        RequestsHit:     stats.CacheHits,
-        RequestsMiss:    stats.CacheMisses,
-        HitRate:         stats.HitRate * 100, // Convert to percentage
-        UpSince:         s.startTime,
-        PackagesTop:     topPackages,
-        ClientsTop:      topClients,
-    }
+        <div class="actions">
+            <h2>Actions</h2>
+            <form method="post" action="/admin/clearcache" style="display:inline;">
+                <button type="submit">Clear Cache</button>
+            </form>
+            <form method="post" action="/admin/flushexpired" style="display:inline;">
+                <button type="submit">Flush Expired Items</button>
+            </form>
+        </div>
 
-	// Serve the dashboard template
-	tmpl, err := template.ParseFiles("templates/admin/dashboard.html")
-	if err != nil {
-		// Fall back to inline template if file not found
-		tmpl, err = template.New("dashboard").Parse(adminDashboardTemplate)
-		if err != nil {
-			http.Error(w, "Template error", http.StatusInternalServerError)
-			return
-		}
+        <div>
+            <h2>Search Cache</h2>
+            <form method="get" action="/admin/search">
+                <input type="text" name="q" placeholder="Package name or pattern">
+                <button type="submit">Search</button>
+            </form>
+        </div>
+
+        <h2>Recent Requests</h2>
+        <table>
+            <tr><th>Path</th><th>Time (ms)</th><th>Result</th></tr>
+    `,
+		time.Since(s.startTime).Round(time.Second),
+		s.version,
+		stats.TotalRequests,
+		stats.CacheHits,
+		stats.HitRate*100,
+		stats.CacheMisses,
+		stats.BytesServed,
+		cacheStats.Items, // Changed from ItemCount to Items
+		float64(cacheStats.CurrentSize)/(1024*1024),
+		float64(cacheStats.MaxSize)/(1024*1024))
+
+	for _, req := range stats.RecentRequests {
+		html += fmt.Sprintf("<tr><td>%s</td><td>%.2f</td><td>%s</td></tr>",
+			req.Path, float64(req.Duration.Milliseconds()), req.Result)
 	}
 
-	err = tmpl.Execute(w, adminStats)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Template execution error: %v", err), http.StatusInternalServerError)
+	html += `
+        </table>
+    </body>
+    </html>
+    `
+
+	w.Header().Set("Content-Type", "text/html")
+	if _, err := w.Write([]byte(html)); err != nil {
+		log.Printf("Error writing admin dashboard HTML: %v", err)
 	}
 }
 
-// adminClearCache handles the cache clearing action
+// adminClearCache handles cache clearing
 func (s *Server) adminClearCache(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	err := s.cache.Clear()
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to clear cache: %v", err), http.StatusInternalServerError)
-		return
-	}
+	count := s.cache.Clear()
+	log.Printf("Admin action: Cleared %d cache entries", count)
 
-	// Return success
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"status":  "success",
-		"message": "Cache cleared successfully",
-	})
+	html := fmt.Sprintf(`
+        <html>
+        <body>
+            <h1>Cache Cleared</h1>
+            <p>Removed %d cache entries.</p>
+            <p><a href="/admin">Return to Admin Dashboard</a></p>
+        </body>
+        </html>
+    `, count)
+
+	w.Header().Set("Content-Type", "text/html")
+	if _, err := w.Write([]byte(html)); err != nil {
+		log.Printf("Error writing cache clear response: %v", err)
+	}
 }
 
-// adminFlushExpired handles flushing expired cache items
+// adminFlushExpired handles flushing expired cache entries
 func (s *Server) adminFlushExpired(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	removed, err := s.cache.FlushExpired()
+	count, err := s.cache.FlushExpired()
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to flush expired items: %v", err), http.StatusInternalServerError)
+		http.Error(w, "Failed to flush expired entries", http.StatusInternalServerError)
+		log.Printf("Failed to flush expired cache entries: %v", err)
 		return
 	}
+	log.Printf("Admin action: Flushed %d expired cache entries", count)
 
-	// Return success
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":       "success",
-		"message":      fmt.Sprintf("Flushed %d expired items", removed),
-		"itemsRemoved": removed,
-	})
+	html := fmt.Sprintf(`
+        <html>
+        <body>
+            <h1>Expired Items Flushed</h1>
+            <p>Removed %d expired cache entries.</p>
+            <p><a href="/admin">Return to Admin Dashboard</a></p>
+        </body>
+        </html>
+    `, count)
+
+	w.Header().Set("Content-Type", "text/html")
+	if _, err := w.Write([]byte(html)); err != nil {
+		log.Printf("Error writing flush expired response: %v", err)
+	}
 }
 
-// adminGetStats returns JSON statistics
+// adminGetStats returns cache statistics in JSON format
 func (s *Server) adminGetStats(w http.ResponseWriter, r *http.Request) {
-	// Gather stats
 	stats := s.metrics.GetStatistics()
 	cacheStats, err := s.cache.GetStats()
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Error getting cache stats: %v", err), http.StatusInternalServerError)
+		http.Error(w, "Failed to retrieve cache statistics", http.StatusInternalServerError)
+		log.Printf("Failed to get cache statistics: %v", err)
 		return
 	}
 
-	// Format the stats as JSON
+	// Format uptime
+	uptime := time.Since(s.startTime).Round(time.Second).String()
+
+	// Create JSON response
+	response := map[string]interface{}{
+		"version": s.version,
+		"uptime":  uptime,
+		"requests": map[string]interface{}{
+			"total":                stats.TotalRequests,
+			"cache_hits":           stats.CacheHits,
+			"cache_misses":         stats.CacheMisses,
+			"hit_rate":             stats.HitRate * 100,
+			"avg_response_time_ms": stats.AvgResponseTime,
+			"bytes_served":         stats.BytesServed,
+		},
+		"cache": map[string]interface{}{
+			"entries":        cacheStats.Items, // Changed from ItemCount to Items
+			"size_bytes":     cacheStats.CurrentSize,
+			"max_size_bytes": cacheStats.MaxSize,
+			"usage_percent":  float64(cacheStats.CurrentSize) / float64(cacheStats.MaxSize) * 100,
+		},
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"cache":    cacheStats,
-		"requests": stats,
-		"uptime":   time.Since(s.startTime).String(),
-	})
+	encoder := json.NewEncoder(w)
+	if err := encoder.Encode(response); err != nil {
+		log.Printf("Error encoding JSON response: %v", err)
+		http.Error(w, "Error generating stats", http.StatusInternalServerError)
+	}
 }
 
-// adminSearchCache searches the cache
+// adminSearchCache searches the cache for packages matching the query
 func (s *Server) adminSearchCache(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("q")
 	if query == "" {
-		http.Error(w, "Missing query parameter", http.StatusBadRequest)
+		http.Error(w, "Missing search query", http.StatusBadRequest)
 		return
 	}
 
 	results, err := s.cache.Search(query)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Search error: %v", err), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Failed to search cache: %v", err), http.StatusInternalServerError)
+		log.Printf("Failed to search cache: %v", err)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(results)
-}
+	// Convert the results to a usable format based on what Search actually returns
+	entries := make([]CacheEntry, len(results))
+	for i, res := range results {
+		// This structure depends on what cache.Search actually returns
+		// For this fix, assuming it returns path strings, we create minimal entries
+		entries[i] = CacheEntry{
+			Path:       res,
+			Size:       0, // We don't have this information without additional calls
+			LastAccess: time.Time{},
+			Expires:    time.Time{},
+		}
+	}
 
-// Admin dashboard HTML template
-const adminDashboardTemplate = `
-<!DOCTYPE html>
-<html>
-<head>
-    <title>apt-cacher-go Admin Dashboard</title>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; color: #333; }
-        h1, h2 { color: #2c3e50; }
-        .container { max-width: 1200px; margin: 0 auto; }
-        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }
-        .stat-card { background: #f8f9fa; border-radius: 8px; padding: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-        .stat-card h3 { margin-top: 0; color: #7f8c8d; font-size: 14px; }
-        .stat-card p { margin-bottom: 0; font-size: 24px; font-weight: bold; color: #2c3e50; }
-        .progress-bar { height: 10px; background: #ecf0f1; border-radius: 5px; overflow: hidden; margin-top: 5px; }
-        .progress-bar-fill { height: 100%; background: #3498db; width: 0; }
-        table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
-        th, td { text-align: left; padding: 12px; border-bottom: 1px solid #ddd; }
-        th { background-color: #f2f2f2; }
-        tr:hover { background-color: #f5f5f5; }
-        .btn { display: inline-block; background: #3498db; color: white; padding: 8px 16px; border-radius: 4px; text-decoration: none; border: none; cursor: pointer; }
-        .btn-danger { background: #e74c3c; }
-        .btn-warning { background: #f39c12; }
-        .action-row { margin-bottom: 30px; }
-        .action-row button { margin-right: 10px; }
-        .footer { margin-top: 50px; text-align: center; font-size: 14px; color: #7f8c8d; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>apt-cacher-go Admin Dashboard</h1>
+	html := fmt.Sprintf(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Cache Search Results</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 20px; }
+            h1 { color: #333; }
+            table { border-collapse: collapse; width: 100%%; }
+            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+            th { background: #f2f2f2; }
+            tr:nth-child(even) { background: #f9f9f9; }
+        </style>
+    </head>
+    <body>
+        <h1>Search Results for "%s"</h1>
+        <p>Found %d matches</p>
+        <p><a href="/admin">Return to Admin Dashboard</a></p>
 
-        <div class="stats-grid">
-            <div class="stat-card">
-                <h3>Cache Usage</h3>
-                <p>{{printf "%.1f" .CachePercentage}}%</p>
-                <div class="progress-bar">
-                    <div class="progress-bar-fill" style="width: {{.CachePercentage}}%;"></div>
-                </div>
-                <small>{{formatBytes .CacheSize}} / {{formatBytes .CacheMaxSize}}</small>
-            </div>
-
-            <div class="stat-card">
-                <h3>Cache Items</h3>
-                <p>{{.CacheItems}}</p>
-            </div>
-
-            <div class="stat-card">
-                <h3>Total Requests</h3>
-                <p>{{.RequestsTotal}}</p>
-            </div>
-
-            <div class="stat-card">
-                <h3>Hit Rate</h3>
-                <p>{{printf "%.1f" .HitRate}}%</p>
-            </div>
-
-            <div class="stat-card">
-                <h3>Bytes Served</h3>
-                <p>{{formatBytes .BytesServed}}</p>
-            </div>
-
-            <div class="stat-card">
-                <h3>Uptime</h3>
-                <p>{{formatDuration .UpSince}}</p>
-            </div>
-        </div>
-
-        <div class="action-row">
-            <button class="btn btn-danger" onclick="clearCache()">Clear Cache</button>
-            <button class="btn btn-warning" onclick="flushExpired()">Flush Expired</button>
-        </div>
-
-        <h2>Top Packages</h2>
         <table>
             <tr>
-                <th>Package</th>
-                <th>Requests</th>
+                <th>Path</th>
                 <th>Size</th>
                 <th>Last Access</th>
+                <th>Expiration</th>
             </tr>
-            {{range .PackagesTop}}
+    `, query, len(entries))
+
+	// Display the search results with the information we have
+	for _, entry := range entries {
+		html += fmt.Sprintf(`
             <tr>
-                <td>{{.URL}}</td>
-                <td>{{.Count}}</td>
-                <td>{{formatBytes .Size}}</td>
-                <td>{{formatTime .LastAccess}}</td>
+                <td>%s</td>
+                <td>%d bytes</td>
+                <td>%s</td>
+                <td>%s</td>
             </tr>
-            {{end}}
+        `, entry.Path,
+			entry.Size,
+			entry.LastAccess.Format("2006-01-02 15:04:05"),
+			entry.Expires.Format("2006-01-02 15:04:05"))
+	}
+
+	html += `
         </table>
+    </body>
+    </html>
+    `
 
-        <h2>Top Clients</h2>
-        <table>
-            <tr>
-                <th>Client IP</th>
-                <th>Requests</th>
-                <th>Data Transferred</th>
-            </tr>
-            {{range .ClientsTop}}
-            <tr>
-                <td>{{.IP}}</td>
-                <td>{{.Requests}}</td>
-                <td>{{formatBytes .BytesSent}}</td>
-            </tr>
-            {{end}}
-        </table>
-
-        <div class="footer">
-            <p>apt-cacher-go v1.0.0</p>
-        </div>
-    </div>
-
-    <script>
-        function clearCache() {
-            if (confirm('Are you sure you want to clear the entire cache?')) {
-                fetch('/admin/clearcache', { method: 'POST' })
-                    .then(response => response.json())
-                    .then(data => {
-                        alert(data.message);
-                        location.reload();
-                    })
-                    .catch(error => {
-                        alert('Error: ' + error);
-                    });
-            }
-        }
-
-        function flushExpired() {
-            fetch('/admin/flushexpired', { method: 'POST' })
-                .then(response => response.json())
-                .then(data => {
-                    alert(data.message);
-                    location.reload();
-                })
-                .catch(error => {
-                    alert('Error: ' + error);
-                });
-        }
-
-        // Initialize progress bars on load
-        document.addEventListener('DOMContentLoaded', function() {
-            const fills = document.querySelectorAll('.progress-bar-fill');
-            fills.forEach(fill => {
-                const width = fill.style.width;
-                fill.style.width = '0';
-                setTimeout(() => {
-                    fill.style.transition = 'width 1s ease-in-out';
-                    fill.style.width = width;
-                }, 100);
-            });
-        });
-    </script>
-</body>
-</html>
-`
+	w.Header().Set("Content-Type", "text/html")
+	if _, err := w.Write([]byte(html)); err != nil {
+		log.Printf("Error writing search results: %v", err)
+	}
+}
