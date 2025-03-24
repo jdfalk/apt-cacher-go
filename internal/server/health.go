@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"runtime"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // HealthStatus represents the health check response
@@ -90,5 +92,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // handleMetrics serves Prometheus metrics
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
-	s.prometheus.Handler().ServeHTTP(w, r)
+	handler := promhttp.Handler()
+	handler.ServeHTTP(w, r)
 }
