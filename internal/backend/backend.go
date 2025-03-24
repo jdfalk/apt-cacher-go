@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"path"
@@ -192,7 +193,11 @@ func (m *Manager) processReleaseFile(repo string, path string, data []byte) {
 	for _, filename := range filenames {
 		if strings.Contains(filename, "Packages") || strings.Contains(filename, "Sources") {
 			fullPath := fmt.Sprintf("/%s/%s/%s", repo, basedir, filename)
-			go m.Fetch(fullPath)
+			go func(path string) {
+				if _, err := m.Fetch(path); err != nil {
+					log.Printf("Failed to prefetch %s: %v", path, err)
+				}
+			}(fullPath)
 		}
 	}
 }
