@@ -20,7 +20,7 @@ jobs:
       run: go mod verify
 
     - name: Build
-      run: go build -v ./cmd/apt-cacher-go
+      run: go build -v .
 
     - name: Run tests
       run: go test -v ./...

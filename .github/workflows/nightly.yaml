@@ -53,7 +53,7 @@ jobs:
         run: |
           mkdir -p dist
           DATE_TAG=$(date +'%Y%m%d-%H%M%S')
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.arch }} go build -o dist/apt-cacher-go-nightly-${{ matrix.goos }}-${{ matrix.arch }}-$DATE_TAG ./cmd/apt-cacher-go
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.arch }} go build -o dist/apt-cacher-go-nightly-${{ matrix.goos }}-${{ matrix.arch }}-$DATE_TAG .
 
       - name: Upload Binaries as Artifacts
         uses: actions/upload-artifact@v4
