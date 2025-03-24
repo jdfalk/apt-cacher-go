@@ -2,6 +2,7 @@ package mapper
 
 import (
 	"fmt"
+	"log"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -45,14 +46,22 @@ func NewAdvancedMapper() *AdvancedMapper {
 	}
 
 	// Initialize with default rules
-	m.AddRegexRule(`^(debian|ubuntu)/dists/(.*)$`, "%s", 100)
-	m.AddRegexRule(`^security\.debian\.org/(.*)$`, "security.debian.org", 90)
-	m.AddRegexRule(`^(archive|security)\.ubuntu\.com/ubuntu/(.*)$`, "archive.ubuntu.com/ubuntu", 90)
+	if err := m.AddRegexRule(`^(debian|ubuntu)/dists/(.*)$`, "%s", 100); err != nil {
+		log.Printf("Warning: Failed to add regex rule: %v", err)
+	}
+	if err := m.AddRegexRule(`^security\.debian\.org/(.*)$`, "security.debian.org", 90); err != nil {
+		log.Printf("Warning: Failed to add regex rule: %v", err)
+	}
+	if err := m.AddRegexRule(`^(archive|security)\.ubuntu\.com/ubuntu/(.*)$`, "archive.ubuntu.com/ubuntu", 90); err != nil {
+		log.Printf("Warning: Failed to add regex rule: %v", err)
+	}
 	m.AddPrefixRule("debian-security", "security.debian.org", 80)
 	m.AddPrefixRule("ubuntu-security", "security.ubuntu.com/ubuntu", 80)
 
 	// Advanced rules with rewriting
-	m.AddRewriteRule(`^ppa/(.+?)/(.+?)/ubuntu/(.*)$`, "ppa.launchpad.net/$1/$2/ubuntu", "$3", 70)
+	if err := m.AddRewriteRule(`^ppa/(.+?)/(.+?)/ubuntu/(.*)$`, "ppa.launchpad.net/$1/$2/ubuntu", "$3", 70); err != nil {
+		log.Printf("Warning: Failed to add rewrite rule: %v", err)
+	}
 
 	return m
 }
