@@ -13,26 +13,32 @@ type Config struct {
 	ListenAddress string `yaml:"listen_address"`
 	Port          int    `yaml:"port"`
 	AdminPort     int    `yaml:"admin_port"`
+	TLSEnabled    bool   `yaml:"tls_enabled"`
 	TLSCert       string `yaml:"tls_cert"`
 	TLSKey        string `yaml:"tls_key"`
+	TLSPort       int    `yaml:"tls_port"`
 	LogFile       string `yaml:"log_file"`
 	LogLevel      string `yaml:"log_level"`
 
 	// Cache configuration
 	CacheDir    string            `yaml:"cache_dir"`
 	CacheSize   string            `yaml:"cache_size"`
-	CacheTTLs   map[string]string `yaml:"cache_ttls"` // Added field for cache TTLs
+	CacheTTLs   map[string]string `yaml:"cache_ttls"`
 	CleanupFreq string            `yaml:"cleanup_freq"`
 
 	// Backend configuration
 	Backends []Backend `yaml:"backends"`
 
+	// Mapping rules
+	MappingRules []MappingRule `yaml:"mapping_rules"`
+
 	// Security settings
 	AllowedIPs  []string `yaml:"allowed_ips"`
 	RateLimit   int      `yaml:"rate_limit"`
 	AuthEnabled bool     `yaml:"auth_enabled"`
-	Username    string   `yaml:"username"`
-	Password    string   `yaml:"password"`
+	AdminUser    string   `yaml:"username"`
+	AdminPassword    string   `yaml:"password"`
+	AdminAuth   bool     `yaml:"admin_auth"`
 
 	// Metrics configuration
 	MetricsEnabled bool `yaml:"metrics_enabled"`
