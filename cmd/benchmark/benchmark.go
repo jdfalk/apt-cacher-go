@@ -13,108 +13,84 @@ import (
 	"github.com/spf13/viper"
 )
 
-// Command line flags
+// Flags
 var (
-	targetURL       string
-	concurrency     int
-	duration        int
-	outputFile      string
-	requestPatterns []string
+	target     string
+	conc       int
+	duration   string
+	outputFile string
+	patterns   []string
 )
-
-// Results of the benchmark
-type BenchmarkResults struct {
-	TotalRequests      int
-	SuccessfulRequests int
-	FailedRequests     int
-	TotalBytes         int64
-	TotalDuration      time.Duration
-	MinResponseTime    time.Duration
-	MaxResponseTime    time.Duration
-	AvgResponseTime    time.Duration
-}
 
 // NewCommand creates the benchmark command
 func NewCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "benchmark",
-		Short: "Run performance benchmark",
-		Long:  `Run performance benchmark against a running apt-cacher-go server or other compatible service.`,
+		Short: "Run benchmarks against the server",
+		Long:  `Run performance benchmarks against a running apt-cacher-go server`,
 		Run: func(cmd *cobra.Command, args []string) {
-			runBenchmark()
+			runBenchmark(target, conc, duration, patterns, outputFile)
 		},
 	}
 
-	// Define flags
-	cmd.Flags().StringVarP(&targetURL, "target", "t", "http://localhost:3142", "Target server URL")
-	cmd.Flags().IntVarP(&concurrency, "concurrency", "c", 10, "Number of concurrent clients")
-	cmd.Flags().IntVarP(&duration, "duration", "d", 30, "Duration of benchmark in seconds")
-	cmd.Flags().StringVarP(&outputFile, "output", "o", "", "Output file for benchmark results (default: stdout)")
-	cmd.Flags().StringSliceVarP(&requestPatterns, "patterns", "p", []string{
-		"/ubuntu/dists/jammy/main/binary-amd64/Packages.gz",
-		"/ubuntu/pool/main/h/hello/hello_2.10-2ubuntu2_amd64.deb",
-	}, "Request patterns to benchmark")
+	// Add flags
+	cmd.Flags().StringVarP(&target, "target", "t", "http://localhost:3142", "Target server URL")
+	cmd.Flags().IntVarP(&conc, "concurrency", "c", 10, "Number of concurrent requests")
+	cmd.Flags().StringVarP(&duration, "duration", "d", "30s", "Test duration")
+	cmd.Flags().StringVarP(&outputFile, "output", "o", "", "Output file for results")
+	cmd.Flags().StringSliceVarP(&patterns, "patterns", "p", []string{
+		"/debian/dists/stable/Release",
+		"/ubuntu/dists/focal/main/binary-amd64/Packages.gz",
+		"/debian/pool/main/h/hello/hello_2.10-2_amd64.deb",
+	}, "Request patterns")
 
-	// Bind flags to viper
-	viper.BindPFlag("benchmark.target", cmd.Flags().Lookup("target"))
-	viper.BindPFlag("benchmark.concurrency", cmd.Flags().Lookup("concurrency"))
-	viper.BindPFlag("benchmark.duration", cmd.Flags().Lookup("duration"))
-	viper.BindPFlag("benchmark.output", cmd.Flags().Lookup("output"))
-	viper.BindPFlag("benchmark.patterns", cmd.Flags().Lookup("patterns"))
+	// Bind flags to viper for config file support
+	if err := viper.BindPFlag("benchmark.target", cmd.Flags().Lookup("target")); err != nil {
+		log.Printf("Warning: Failed to bind flag 'target': %v", err)
+	}
+	if err := viper.BindPFlag("benchmark.concurrency", cmd.Flags().Lookup("concurrency")); err != nil {
+		log.Printf("Warning: Failed to bind flag 'concurrency': %v", err)
+	}
+	if err := viper.BindPFlag("benchmark.duration", cmd.Flags().Lookup("duration")); err != nil {
+		log.Printf("Warning: Failed to bind flag 'duration': %v", err)
+	}
 
 	return cmd
 }
 
-func runBenchmark() {
-	// Get values from viper with fallback to command line flags
-	target := viper.GetString("benchmark.target")
-	if target == "" {
-		target = targetURL
+// runBenchmark runs the benchmark test
+func runBenchmark(target string, conc int, durationStr string, patterns []string, outputFile string) {
+	// Parse duration
+	testDuration, err := time.ParseDuration(durationStr)
+	if err != nil {
+		log.Fatalf("Invalid duration: %v", err)
 	}
 
-	conc := viper.GetInt("benchmark.concurrency")
-	if conc == 0 {
-		conc = concurrency
-	}
+	log.Printf("Starting benchmark against %s with %d concurrent clients for %s", target, conc, testDuration)
 
-	dur := viper.GetInt("benchmark.duration")
-	if dur == 0 {
-		dur = duration
-	}
-
-	output := viper.GetString("benchmark.output")
-	if output == "" {
-		output = outputFile
-	}
-
-	patterns := viper.GetStringSlice("benchmark.patterns")
-	if len(patterns) == 0 {
-		patterns = requestPatterns
-	}
-
-	fmt.Printf("Starting benchmark against %s\n", target)
-	fmt.Printf("Concurrency: %d, Duration: %d seconds\n", conc, dur)
-	fmt.Printf("Request patterns: %v\n", patterns)
-
-	// Prepare benchmark
-	results := &BenchmarkResults{
-		MinResponseTime: time.Hour, // Start with a large value to be reduced
-	}
-	var wg sync.WaitGroup
+	// Create HTTP client with reasonable timeouts
 	client := &http.Client{
 		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:        conc,
+			MaxIdleConnsPerHost: conc,
+			IdleConnTimeout:     90 * time.Second,
+		},
 	}
 
-	// Create channels for communication
+	// Channel to signal workers to stop
 	stopCh := make(chan struct{})
+
+	// Channel for benchmark results
 	resultsCh := make(chan struct {
 		success      bool
 		bytes        int64
 		responseTime time.Duration
-	}, conc*100)
+	}, 1000)
 
 	// Start workers
-	for i := 0; i < conc; i++ {
+	var wg sync.WaitGroup
+	for i := range make([]struct{}, conc) {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
@@ -122,48 +98,99 @@ func runBenchmark() {
 		}(i)
 	}
 
-	// Start results collector
-	var resultsWg sync.WaitGroup
-	resultsWg.Add(1)
-	go func() {
-		defer resultsWg.Done()
-		for result := range resultsCh {
-			results.TotalRequests++
-			if result.success {
-				results.SuccessfulRequests++
-				results.TotalBytes += result.bytes
-			} else {
-				results.FailedRequests++
-			}
+	// Collect results in a separate goroutine
+	var totalRequests, successRequests, failedRequests int64
+	var totalBytes, totalTime int64
+	var minTime, maxTime int64 = 1<<63 - 1, 0
 
-			if result.responseTime < results.MinResponseTime {
-				results.MinResponseTime = result.responseTime
+	resultsDone := make(chan struct{})
+	go func() {
+		for result := range resultsCh {
+			totalRequests++
+			if result.success {
+				successRequests++
+				totalBytes += result.bytes
+				responseNs := result.responseTime.Nanoseconds()
+				totalTime += responseNs
+				if responseNs < minTime {
+					minTime = responseNs
+				}
+				if responseNs > maxTime {
+					maxTime = responseNs
+				}
+			} else {
+				failedRequests++
 			}
-			if result.responseTime > results.MaxResponseTime {
-				results.MaxResponseTime = result.responseTime
-			}
-			results.TotalDuration += result.responseTime
 		}
+		close(resultsDone)
 	}()
 
-	// Run benchmark for the specified duration
-	time.Sleep(time.Duration(dur) * time.Second)
+	// Run for the specified duration
+	time.Sleep(testDuration)
+
+	// Signal workers to stop
 	close(stopCh)
 
-	// Wait for workers to finish
+	// Wait for all workers to finish
 	wg.Wait()
-	close(resultsCh)
-	resultsWg.Wait()
 
-	// Calculate average response time
-	if results.SuccessfulRequests > 0 {
-		results.AvgResponseTime = results.TotalDuration / time.Duration(results.SuccessfulRequests)
+	// Close the results channel and wait for the collector to finish
+	close(resultsCh)
+	<-resultsDone
+
+	// Calculate final results
+	elapsedSeconds := testDuration.Seconds()
+	reqPerSec := float64(totalRequests) / elapsedSeconds
+	bytesPerSec := float64(totalBytes) / elapsedSeconds
+	avgTime := "N/A"
+	if successRequests > 0 {
+		avgTime = time.Duration(totalTime / successRequests).String()
 	}
 
-	// Print results
-	reportResults(results, output)
+	// Prepare results
+	results := fmt.Sprintf(`
+Benchmark Results:
+-----------------
+Duration:           %s
+Concurrency:        %d
+Total Requests:     %d
+Successful:         %d
+Failed:             %d
+Requests/sec:       %.2f
+Transfer:           %.2f MB
+Bandwidth:          %.2f MB/s
+Min Response Time:  %s
+Max Response Time:  %s
+Avg Response Time:  %s
+`,
+		testDuration,
+		conc,
+		totalRequests,
+		successRequests,
+		failedRequests,
+		reqPerSec,
+		float64(totalBytes)/(1024*1024),
+		bytesPerSec/(1024*1024),
+		time.Duration(minTime).String(),
+		time.Duration(maxTime).String(),
+		avgTime,
+	)
+
+	// Output results
+	if outputFile == "" {
+		fmt.Println(results)
+	} else {
+		err := os.WriteFile(outputFile, []byte(results), 0644)
+		if err != nil {
+			log.Printf("Error writing results: %v", err)
+			fmt.Println(results)
+		} else {
+			fmt.Printf("Results written to %s\n", outputFile)
+		}
+	}
 }
 
+// benchmarkWorker is a worker that sends requests in a loop until stopped
 func benchmarkWorker(client *http.Client, baseURL string, patterns []string, stop <-chan struct{}, results chan<- struct {
 	success      bool
 	bytes        int64
@@ -172,88 +199,53 @@ func benchmarkWorker(client *http.Client, baseURL string, patterns []string, sto
 	patternCount := len(patterns)
 	counter := 0
 
+	log.Printf("Worker %d started", workerID) // Using the workerID parameter for logging
+
 	for {
 		select {
 		case <-stop:
 			return
 		default:
-			// Select a pattern using a simple round-robin approach
+			// Select a pattern using round-robin
 			pattern := patterns[counter%patternCount]
 			counter++
 
+			// Make the request
 			start := time.Now()
-			success, bytes := makeRequest(client, baseURL+pattern)
-			responseTime := time.Since(start)
+			success := true
+			bytesRead := int64(0)
 
+			resp, err := client.Get(baseURL + pattern)
+			if err != nil {
+				success = false
+			} else {
+				// Read and discard the body
+				bytesRead, err = io.Copy(io.Discard, resp.Body)
+				resp.Body.Close()
+
+				if err != nil {
+					success = false
+				}
+
+				// Consider non-2xx responses as failures
+				if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+					success = false
+				}
+			}
+
+			// Send result
 			results <- struct {
 				success      bool
 				bytes        int64
 				responseTime time.Duration
 			}{
 				success:      success,
-				bytes:        bytes,
-				responseTime: responseTime,
+				bytes:        bytesRead,
+				responseTime: time.Since(start),
 			}
 
-			// Small sleep to prevent overwhelming the system
+			// Small delay to prevent overwhelming the system
 			time.Sleep(10 * time.Millisecond)
 		}
-	}
-}
-
-func makeRequest(client *http.Client, url string) (bool, int64) {
-	resp, err := client.Get(url)
-	if err != nil {
-		return false, 0
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return false, 0
-	}
-
-	// Read and discard the body to measure bytes
-	bytes, err := io.Copy(io.Discard, resp.Body)
-	if err != nil {
-		return false, 0
-	}
-
-	return true, bytes
-}
-
-func reportResults(results *BenchmarkResults, outputFile string) {
-	report := fmt.Sprintf(`
-Benchmark Results:
------------------
-Total Requests:        %d
-Successful Requests:   %d (%.2f%%)
-Failed Requests:       %d
-Total Data Transferred: %.2f MB
-Requests Per Second:   %.2f
-Average Response Time: %s
-Min Response Time:     %s
-Max Response Time:     %s
-`,
-		results.TotalRequests,
-		results.SuccessfulRequests,
-		float64(results.SuccessfulRequests)/float64(results.TotalRequests)*100.0,
-		results.FailedRequests,
-		float64(results.TotalBytes)/(1024*1024),
-		float64(results.TotalRequests)/float64(duration),
-		results.AvgResponseTime,
-		results.MinResponseTime,
-		results.MaxResponseTime,
-	)
-
-	if outputFile == "" {
-		// Print to stdout
-		fmt.Println(report)
-	} else {
-		// Write to file
-		err := os.WriteFile(outputFile, []byte(report), 0644)
-		if err != nil {
-			log.Fatalf("Failed to write results to file: %v", err)
-		}
-		fmt.Printf("Results written to %s\n", outputFile)
 	}
 }
