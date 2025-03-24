@@ -12,17 +12,17 @@ import (
 
 // HealthStatus represents the health check response
 type HealthStatus struct {
-	Status           string      `json:"status"`
-	Version          string      `json:"version"`
-	Uptime           string      `json:"uptime"`
-	CacheStatus      string      `json:"cacheStatus"`
-	BackendStatus    string      `json:"backendStatus"`
-	SystemInfo       SystemInfo  `json:"systemInfo"`
-	LatestRequests   int         `json:"latestRequests"`
-	CacheStats       interface{} `json:"cacheStats,omitempty"`
-	BackendStats     interface{} `json:"backendStats,omitempty"`
-	HitRate          float64     `json:"hitRate"`
-	LastErrorMessage string      `json:"lastErrorMessage,omitempty"`
+	Status           string     `json:"status"`
+	Version          string     `json:"version"`
+	Uptime           string     `json:"uptime"`
+	CacheStatus      string     `json:"cacheStatus"`
+	BackendStatus    string     `json:"backendStatus"`
+	SystemInfo       SystemInfo `json:"systemInfo"`
+	LatestRequests   int        `json:"latestRequests"`
+	CacheStats       any        `json:"cacheStats,omitempty"`   // Changed from interface{} to any
+	BackendStats     any        `json:"backendStats,omitempty"` // Changed from interface{} to any
+	HitRate          float64    `json:"hitRate"`
+	LastErrorMessage string     `json:"lastErrorMessage,omitempty"`
 }
 
 // SystemInfo contains system-level information
@@ -80,7 +80,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// Include detailed stats if requested
 	if detailed {
 		status.CacheStats = cacheStats
-		status.BackendStats = map[string]interface{}{
+		status.BackendStats = map[string]any{ // Changed from interface{} to any
 			"recentRequests": metrics.RecentRequests,
 		}
 	}
