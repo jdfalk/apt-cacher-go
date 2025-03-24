@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -30,6 +31,7 @@ type Server struct {
 	mapper      *mapper.AdvancedMapper
 	startTime   time.Time
 	version     string
+	logger      *log.Logger // Add logger field
 }
 
 // New creates a new Server instance
@@ -82,7 +84,8 @@ func New(cfg *config.Config) (*Server, error) {
 		acl:        acl,
 		mapper:     m,
 		startTime:  time.Now(),
-		version:    "1.0.0", // Set version
+		version:    "1.0.0",                                              // Set version
+		logger:     log.New(os.Stdout, "apt-cacher-go: ", log.LstdFlags), // Initialize logger
 		httpServer: &http.Server{
 			Addr:    fmt.Sprintf("%s:%d", cfg.ListenAddress, cfg.Port),
 			Handler: acl.Middleware(mux),
@@ -213,7 +216,9 @@ func (s *Server) wrapWithMetrics(h http.HandlerFunc) http.HandlerFunc {
 // handleReady serves the readiness check endpoint
 func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"status":"ready"}`))
+	if _, err := w.Write([]byte(`{"status":"ready"}`)); err != nil {
+		log.Printf("Error writing ready response: %v", err)
+	}
 }
 
 // responseWriter wraps http.ResponseWriter to capture status code
@@ -276,7 +281,9 @@ func (s *Server) handlePackageRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Send the response
-	w.Write(data)
+	if _, err := w.Write(data); err != nil {
+		log.Printf("Error writing package data: %v", err)
+	}
 }
 
 // getContentType determines the content type based on the file extension
@@ -350,7 +357,9 @@ func (s *Server) handleReportRequest(w http.ResponseWriter, r *http.Request) {
     `
 
 	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(html))
+	if _, err := w.Write([]byte(html)); err != nil {
+		log.Printf("Error writing report HTML: %v", err)
+	}
 }
 
 // handleAdminAuth wraps a handler function with admin authentication
