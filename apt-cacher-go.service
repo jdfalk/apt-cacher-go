@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 User=apt-cacher
 Group=apt-cacher
-ExecStart=/usr/local/bin/apt-cacher-go --config /etc/apt-cacher-go/config.yaml
+ExecStart=/usr/local/bin/apt-cacher-go serve --config /etc/apt-cacher-go/config.yaml
 Restart=on-failure
 
 # Security hardening
