@@ -36,6 +36,9 @@ type Server struct {
 
 // New creates a new Server instance
 func New(cfg *config.Config) (*Server, error) {
+	// Output configuration being used
+	fmt.Printf("Creating server with: Cache Directory: %s\n", cfg.CacheDir)
+
 	maxCacheSize, err := cfg.ParseCacheSize()
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse cache size: %v", err)
@@ -50,6 +53,9 @@ func New(cfg *config.Config) (*Server, error) {
 
 	// Register custom mapping rules from config
 	for _, rule := range cfg.MappingRules {
+		fmt.Printf("Adding mapping rule: %s %s -> %s (priority: %d)\n",
+			rule.Type, rule.Pattern, rule.Repository, rule.Priority)
+
 		switch rule.Type {
 		case "regex":
 			if err := m.AddRegexRule(rule.Pattern, rule.Repository, rule.Priority); err != nil {

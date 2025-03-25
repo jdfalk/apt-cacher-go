@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os" // Replace io/ioutil with os
 	"time"
 
@@ -133,4 +134,80 @@ func (c *Config) GetCacheTTL(fileType string) (time.Duration, error) {
 		}
 	}
 	return time.ParseDuration(ttl)
+}
+
+// Validate ensures the configuration has valid values
+func (c *Config) Validate() error {
+	// Verify cache directory exists or can be created
+	if c.CacheDir != "" {
+		// Try to create the cache directory if it doesn't exist
+		if err := os.MkdirAll(c.CacheDir, 0755); err != nil {
+			return fmt.Errorf("failed to create cache directory %s: %w", c.CacheDir, err)
+		}
+	}
+
+	// Validate backends have required fields
+	for i, backend := range c.Backends {
+		if backend.Name == "" {
+			return fmt.Errorf("backend #%d is missing a name", i+1)
+		}
+		if backend.URL == "" {
+			return fmt.Errorf("backend %s is missing URL", backend.Name)
+		}
+	}
+
+	// Validate mapping rules
+	for i, rule := range c.MappingRules {
+		if rule.Type == "" {
+			return fmt.Errorf("mapping rule #%d is missing a type", i+1)
+		}
+		if rule.Pattern == "" {
+			return fmt.Errorf("mapping rule #%d is missing a pattern", i+1)
+		}
+		if rule.Repository == "" {
+			return fmt.Errorf("mapping rule #%d is missing a repository", i+1)
+		}
+	}
+
+	return nil
+}
+
+// Debug prints the configuration to the log for debugging purposes
+func (c *Config) Debug() string {
+	info := "Config loaded: \n"
+	info += fmt.Sprintf("  Listen: %s:%d\n", c.ListenAddress, c.Port)
+	info += fmt.Sprintf("  Cache Dir: %s\n", c.CacheDir)
+	info += fmt.Sprintf("  Cache Size: %s\n", c.CacheSize)
+
+	info += "  Backends:\n"
+	for _, b := range c.Backends {
+		info += fmt.Sprintf("    - %s: %s (priority: %d)\n", b.Name, b.URL, b.Priority)
+	}
+
+	info += "  Mapping Rules:\n"
+	for _, r := range c.MappingRules {
+		info += fmt.Sprintf("    - Type: %s, Pattern: %s -> Repo: %s (priority: %d)\n",
+			r.Type, r.Pattern, r.Repository, r.Priority)
+	}
+
+	return info
+}
+
+// LoadConfigFileWithDebug loads and validates config with debug output
+func LoadConfigFileWithDebug(path string) (*Config, error) {
+	config, err := LoadConfigFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("error loading config file: %w", err)
+	}
+
+	// Log the loaded config
+	fmt.Printf("Loaded configuration from %s\n", path)
+	fmt.Println(config.Debug())
+
+	// Validate the config
+	if err := config.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
+	return config, nil
 }
