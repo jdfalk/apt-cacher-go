@@ -1,0 +1,46 @@
+name: Apply Release Template
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  update-release-body:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get release
+        id: get_release
+        uses: bruceadams/get-release@v1.3.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Apply template to release
+        id: release_template
+        run: |
+          # Extract version without 'v' prefix
+          VERSION="${{ steps.get_release.outputs.tag_name }}"
+          VERSION_CLEAN=${VERSION#v}
+
+          # Read template and substitute variables
+          TEMPLATE=$(cat .github/RELEASE_TEMPLATE.md)
+          RELEASE_BODY="${TEMPLATE//\$\{version\}/$VERSION_CLEAN}"
+
+          # Save to file with proper escaping for multiline content
+          echo "$RELEASE_BODY" > release_body.md
+
+          # Debug output
+          echo "Generated release body:"
+          cat release_body.md
+
+      - name: Update release body
+        uses: softprops/action-gh-release@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ steps.get_release.outputs.tag_name }}
+          body_path: release_body.md
