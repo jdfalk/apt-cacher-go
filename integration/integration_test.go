@@ -23,10 +23,8 @@ import (
 // getTestDir returns a directory suitable for testing, creating the .file_system_root if needed
 func getTestDir(t *testing.T) string {
 	// First, find the project root directory
-	// This assumes the tests are being run from the project root or a subdirectory
 	projectRoot, err := findProjectRoot()
 	if err != nil {
-		// Fall back to temp directory if we can't find the project root
 		t.Logf("Couldn't determine project root: %v", err)
 		t.Logf("Falling back to temporary directory")
 		return ""
@@ -34,9 +32,16 @@ func getTestDir(t *testing.T) string {
 
 	// Create .file_system_root directory if it doesn't exist
 	testRoot := filepath.Join(projectRoot, ".file_system_root")
+
+	// Check if directory exists first
+	if stat, err := os.Stat(testRoot); err == nil && stat.IsDir() {
+		// Directory already exists
+		return testRoot
+	}
+
+	// Directory doesn't exist, create it
 	if err := os.MkdirAll(testRoot, 0755); err != nil {
 		t.Logf("Failed to create .file_system_root: %v", err)
-		t.Logf("Falling back to temporary directory")
 		return ""
 	}
 
@@ -87,8 +92,13 @@ func setupTestServer(t *testing.T, mockURL string) (*TestServer, func()) {
 	var err error
 
 	if testRoot != "" {
-		// Create a unique directory within .file_system_root
-		tempDir = filepath.Join(testRoot, fmt.Sprintf("apt-cacher-test-%d", time.Now().UnixNano()))
+		// Create a unique directory within .file_system_root with timestamp
+		dirName := fmt.Sprintf("apt-cacher-test-%d", time.Now().UnixNano())
+		tempDir = filepath.Join(testRoot, dirName)
+
+		// Always attempt to remove it first to prevent problems with leftover directories
+		os.RemoveAll(tempDir)
+
 		err = os.MkdirAll(tempDir, 0755)
 		if err != nil {
 			t.Logf("Failed to create test dir in .file_system_root: %v", err)

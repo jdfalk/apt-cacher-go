@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -30,6 +31,7 @@ type Manager struct {
 	downloadCancel context.CancelFunc // Added field to store the cancel function
 	downloadQ      *queue.Queue
 	prefetcher     *Prefetcher
+	cacheDir       string
 }
 
 // Backend represents a single upstream repository
@@ -68,6 +70,7 @@ func New(cfg *config.Config, cache *cache.Cache, mapper *mapper.PathMapper) *Man
 		mapper:         mapper, // Use the provided mapper instead of creating a new one
 		downloadCtx:    downloadCtx,
 		downloadCancel: downloadCancel, // Store the cancel function
+		cacheDir:       cfg.CacheDir,
 	}
 
 	// Create the download queue with a downloader function
@@ -160,9 +163,15 @@ func (m *Manager) Fetch(requestPath string) ([]byte, error) {
 		expiration = 30 * 24 * time.Hour // Package files are kept for a month
 	}
 
-	// Store in cache with the appropriate expiration
-	if err := m.cache.PutWithExpiration(cacheKey, data, expiration); err != nil {
+	// Replace the existing cache put operation with storeCachedFile
+	if err := m.storeCachedFile(data, cacheKey); err != nil {
 		return nil, fmt.Errorf("failed to cache data: %w", err)
+	}
+
+	// Also update the cache expiration metadata separately
+	if err := m.cache.UpdateExpiration(cacheKey, expiration); err != nil {
+		log.Printf("Warning: failed to update cache expiration for %s: %v", cacheKey, err)
+		// Don't return an error here, as the file was successfully cached
 	}
 
 	// If this is an index file, trigger analysis and prefetch
@@ -341,4 +350,31 @@ func (m *Manager) Download(ctx context.Context, path string, backend *Backend) (
 
 	// Return the result
 	return &result, nil
+}
+
+// storeCachedFile stores a downloaded file in the cache
+func (m *Manager) storeCachedFile(data []byte, cacheKey string) error {
+	// Construct the complete cache path
+	cachePath := filepath.Join(m.cacheDir, cacheKey)
+
+	// Ensure the directory exists
+	dir := filepath.Dir(cachePath)
+
+	// Check if directory exists first
+	if stat, err := os.Stat(dir); err == nil && stat.IsDir() {
+		// Directory already exists, proceed to file creation
+	} else {
+		// Try to create the directory
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			// Check again if it exists (could be a race condition)
+			if stat, statErr := os.Stat(dir); statErr == nil && stat.IsDir() {
+				// Directory now exists
+			} else {
+				return fmt.Errorf("failed to create cache directory: %w", err)
+			}
+		}
+	}
+
+	// Write the file
+	return os.WriteFile(cachePath, data, 0644)
 }

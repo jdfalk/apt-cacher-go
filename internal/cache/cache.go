@@ -114,7 +114,7 @@ func (c *Cache) PutWithExpiration(key string, data []byte, expiration time.Durat
 
 	// Create directories if needed
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := ensureDirectoryExists(dir); err != nil {
 		return err
 	}
 
@@ -378,4 +378,54 @@ func (c *Cache) pathForKey(key string) string {
 func containsIgnoreCase(s, substr string) bool {
 	s, substr = strings.ToLower(s), strings.ToLower(substr)
 	return strings.Contains(s, substr)
+}
+
+// ensureDirectoryExists ensures a directory exists for cached files
+func ensureDirectoryExists(path string) error {
+	// Check if the directory already exists first
+	if stat, err := os.Stat(path); err == nil && stat.IsDir() {
+		// Directory already exists, no need to create it
+		return nil
+	}
+
+	// Directory doesn't exist or there was an error checking, try to create it
+	if err := os.MkdirAll(path, 0755); err != nil {
+		// Check if the directory was created by another process in the meantime
+		if stat, statErr := os.Stat(path); statErr == nil && stat.IsDir() {
+			// Directory now exists, someone else created it
+			return nil
+		}
+		return fmt.Errorf("failed to create directory %s: %w", path, err)
+	}
+
+	return nil
+}
+
+// UpdateExpiration updates the expiration time for an existing cache entry
+func (c *Cache) UpdateExpiration(key string, expiration time.Duration) error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	// Check if entry exists in the expiration map
+	_, exists := c.expiration[key]
+	if !exists {
+		// Create new expiration entry if it doesn't exist but file does
+		path := c.pathForKey(key)
+		if _, err := os.Stat(path); err == nil {
+			// File exists, create expiration for it
+			c.expiration[key] = time.Now().Add(expiration)
+
+			// Update LRU - get file size and add to LRU
+			fileInfo, err := os.Stat(path)
+			if err == nil {
+				c.lru.Add(key, fileInfo.Size())
+			}
+			return nil
+		}
+		return fmt.Errorf("cannot update expiration for non-existent cache entry: %s", key)
+	}
+
+	// Update expiration time
+	c.expiration[key] = time.Now().Add(expiration)
+	return nil
 }
