@@ -39,6 +39,46 @@ type PathMapper struct {
 	mutex sync.RWMutex
 }
 
+// PackageMapper maps hashes to package names
+type PackageMapper struct {
+	hashToPackage map[string]string
+	mutex         sync.RWMutex
+}
+
+// NewPackageMapper creates a new package mapper
+func NewPackageMapper() *PackageMapper {
+	return &PackageMapper{
+		hashToPackage: make(map[string]string),
+	}
+}
+
+// AddHashMapping adds a mapping from hash to package name
+func (pm *PackageMapper) AddHashMapping(hash, packageName string) {
+	pm.mutex.Lock()
+	defer pm.mutex.Unlock()
+	pm.hashToPackage[hash] = packageName
+}
+
+// GetPackageNameForHash returns the package name for a hash path
+func (pm *PackageMapper) GetPackageNameForHash(path string) string {
+	// Check if this is a by-hash path
+	if !strings.Contains(path, "/by-hash/") {
+		return ""
+	}
+
+	// Extract the hash from the path
+	parts := strings.Split(path, "/")
+	if len(parts) < 2 {
+		return ""
+	}
+	hash := parts[len(parts)-1]
+
+	pm.mutex.RLock()
+	defer pm.mutex.RUnlock()
+
+	return pm.hashToPackage[hash]
+}
+
 // New creates a new path mapper with predefined rules (using advanced implementation)
 func New() *PathMapper {
 	m := &PathMapper{

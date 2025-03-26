@@ -36,16 +36,17 @@ type CacheSearchResult struct {
 
 // Cache manages the package cache
 type Cache struct {
-	baseDir      string
-	maxSize      int64
-	currentSize  int64
-	mutex        sync.RWMutex
-	expiration   map[string]time.Time // Tracks expiration times
-	lru          *LRUCache            // Tracks LRU order
-	hits         int64
-	misses       int64
-	packageIndex *parser.PackageIndex
-	indexPath    string
+	baseDir            string
+	maxSize            int64
+	currentSize        int64
+	mutex              sync.RWMutex
+	expiration         map[string]time.Time // Tracks expiration times
+	lru                *LRUCache            // Tracks LRU order
+	hits               int64
+	misses             int64
+	packageIndex       *parser.PackageIndex
+	indexPath          string
+	inProgressRequests sync.Map // Track in-progress requests to prevent duplicates
 }
 
 // New creates a new Cache instance
@@ -90,6 +91,31 @@ func New(baseDir string, maxSizeMB int64) (*Cache, error) {
 
 // Get attempts to retrieve a file from the cache
 func (c *Cache) Get(key string) ([]byte, bool, error) {
+	// First check if there's already a request in progress for this key
+	if pending, exists := c.inProgressRequests.LoadOrStore(key, make(chan struct{})); exists {
+		// Wait for the other request to complete
+		ch := pending.(chan struct{})
+		<-ch
+
+		// Now try to get from cache
+		return c.getFromCache(key)
+	}
+
+	// This is the first request for this key
+	defer func() {
+		// Signal that the request is complete and remove from the map
+		if ch, ok := c.inProgressRequests.Load(key); ok {
+			close(ch.(chan struct{}))
+			c.inProgressRequests.Delete(key)
+		}
+	}()
+
+	// Original cache lookup logic follows
+	return c.getFromCache(key)
+}
+
+// Helper method to get from cache (actual implementation)
+func (c *Cache) getFromCache(key string) ([]byte, bool, error) {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
 
@@ -486,20 +512,13 @@ func (c *Cache) UpdateExpiration(key string, expiration time.Duration) error {
 	// Check if entry exists in the expiration map
 	_, exists := c.expiration[key]
 	if !exists {
-		// Create new expiration entry if it doesn't exist but file does
-		path := c.pathForKey(key)
-		if _, err := os.Stat(path); err == nil {
-			// File exists, create expiration for it
-			c.expiration[key] = time.Now().Add(expiration)
-
-			// Update LRU - get file size and add to LRU
-			fileInfo, err := os.Stat(path)
-			if err == nil {
-				c.lru.Add(key, fileInfo.Size())
+			// Check if the file actually exists on disk before reporting an error
+			path := c.pathForKey(key)
+			if _, err := os.Stat(path); os.IsNotExist(err) {
+				return fmt.Errorf("cannot update expiration for non-existent cache entry: %s", key)
 			}
-			return nil
-		}
-		return fmt.Errorf("cannot update expiration for non-existent cache entry: %s", key)
+			// File exists but wasn't in our expiration map - add it
+			log.Printf("Adding missing expiration entry for existing file: %s", key)
 	}
 
 	// Update expiration time

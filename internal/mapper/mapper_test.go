@@ -86,3 +86,42 @@ func TestIsRepositoryIndexFile(t *testing.T) {
 		})
 	}
 }
+
+func TestPackageMapper(t *testing.T) {
+	pm := NewPackageMapper()
+
+	// Test adding a hash mapping
+	packageName := "nginx"
+	hash := "8e4565d1b45eaf04b98c814ddda511ee5a1f80e50568009f24eec817a7797052"
+	pm.AddHashMapping(hash, packageName)
+
+	// Test retrieving package name from hash
+	testCases := []struct {
+		name     string
+		path     string
+		expected string
+	}{
+		{
+			name:     "Valid hash path",
+			path:     "/ubuntu-ports/dists/oracular-updates/main/binary-arm64/by-hash/SHA256/8e4565d1b45eaf04b98c814ddda511ee5a1f80e50568009f24eec817a7797052",
+			expected: "nginx",
+		},
+		{
+			name:     "Unknown hash",
+			path:     "/ubuntu-ports/dists/oracular-updates/main/binary-arm64/by-hash/SHA256/unknownhash",
+			expected: "",
+		},
+		{
+			name:     "Not a hash path",
+			path:     "/ubuntu/dists/jammy/Release",
+			expected: "",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := pm.GetPackageNameForHash(tc.path)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+}

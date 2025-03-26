@@ -20,19 +20,20 @@ import (
 
 // Server represents the apt-cacher HTTP server
 type Server struct {
-	cfg         *config.Config
-	httpServer  *http.Server
-	httpsServer *http.Server
-	adminServer *http.Server // New field for admin server
-	cache       *cache.Cache
-	backend     *backend.Manager
-	metrics     *metrics.Collector
-	prometheus  *metrics.PrometheusCollector
-	acl         *security.ACL
-	mapper      *mapper.PathMapper
-	startTime   time.Time
-	version     string
-	logger      *log.Logger // Add logger field
+	cfg           *config.Config
+	httpServer    *http.Server
+	httpsServer   *http.Server
+	adminServer   *http.Server // New field for admin server
+	cache         *cache.Cache
+	backend       *backend.Manager
+	metrics       *metrics.Collector
+	prometheus    *metrics.PrometheusCollector
+	acl           *security.ACL
+	mapper        *mapper.PathMapper
+	packageMapper *mapper.PackageMapper // Add packageMapper field
+	startTime     time.Time
+	version       string
+	logger        *log.Logger // Add logger field
 }
 
 // New creates a new Server instance
@@ -235,45 +236,74 @@ func (s *Server) Shutdown() error {
 }
 
 // wrapWithMetrics wraps a handler with metrics collection
-func (s *Server) wrapWithMetrics(h http.HandlerFunc) http.HandlerFunc {
+func (s *Server) wrapWithMetrics(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Extract client IP
+		clientIP := extractClientIP(r)
+
+		// Start timing
 		start := time.Now()
 
-		// Wrap the response writer to capture status code
-		wrapped := newResponseWriter(w)
+		// Wrap response writer to capture status
+		rw := newResponseWriter(w)
 
-		// Increment in-progress requests
-		s.prometheus.IncRequestsInProgress()
-		s.prometheus.IncConnections()
+		// Get associated package name if available
+		packageName := ""
+		if s.packageMapper != nil {
+			packageName = s.packageMapper.GetPackageNameForHash(r.URL.Path)
+		}
 
-		defer func() {
-			duration := time.Since(start)
-			status := fmt.Sprintf("%d", wrapped.statusCode)
+		// Process the request
+		next(rw, r)
 
-			// Record metrics
-			s.prometheus.RecordRequest(status)
+		// Record timing and status
+		duration := time.Since(start)
+		status := "hit"
+		if rw.statusCode >= 400 {
+			status = "error"
+		} else if rw.statusCode == 307 || rw.statusCode == 302 {
+			status = "redirect"
+		} else if rw.statusCode == 200 && strings.Contains(r.Header.Get("X-Cache"), "MISS") {
+			status = "miss"
+		}
 
-			// Determine path type for response time metrics
-			pathType := "package"
-			if strings.Contains(r.URL.Path, "Release") ||
-				strings.Contains(r.URL.Path, "Packages") ||
-				strings.Contains(r.URL.Path, "Sources") {
-				pathType = "index"
-			} else if strings.Contains(r.URL.Path, "admin") {
-				pathType = "admin"
-			}
+		// Log with enhanced information
+		packageInfo := ""
+		if packageName != "" {
+			packageInfo = fmt.Sprintf(" [%s]", packageName)
+		}
 
-			s.prometheus.RecordResponseTime(pathType, duration)
-			s.prometheus.DecRequestsInProgress()
-			s.prometheus.DecConnections()
+		log.Printf("%s %s%s\t%.2f\t%s\t%d bytes",
+			clientIP, r.URL.Path, packageInfo,
+			float64(duration.Milliseconds())/1000.0, status,
+			rw.bytesWritten)
 
-			// Record in internal metrics
-			s.metrics.RecordRequest(r.URL.Path, duration)
-		}()
+		// Record metrics - simplify to use only the existing methods in metrics.Collector
+		s.metrics.RecordRequest(r.URL.Path, duration)
 
-		// Call the original handler
-		h(wrapped, r)
+		// Update hit/miss stats based on status
+		if status == "hit" {
+			s.metrics.RecordCacheHit(r.URL.Path, rw.bytesWritten)
+		} else if status == "miss" {
+			s.metrics.RecordCacheMiss(r.URL.Path, rw.bytesWritten)
+		} else if status == "error" {
+			s.metrics.RecordError(r.URL.Path)
+		}
 	}
+}
+
+// Helper function to format byte sizes
+func byteCountSI(b int64) string {
+	const unit = 1000
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "kMGTPE"[exp])
 }
 
 // handleReady serves the readiness check endpoint
@@ -284,15 +314,26 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// responseWriter wraps http.ResponseWriter to capture status code
+// responseWriter wraps http.ResponseWriter to capture status code and bytes written
 type responseWriter struct {
 	http.ResponseWriter
-	statusCode int
+	statusCode   int
+	bytesWritten int64
+}
+
+// Write captures the number of bytes written
+func (rw *responseWriter) Write(b []byte) (int, error) {
+	n, err := rw.ResponseWriter.Write(b)
+	rw.bytesWritten += int64(n)
+	return n, err
 }
 
 // newResponseWriter creates a new response writer wrapper
 func newResponseWriter(w http.ResponseWriter) *responseWriter {
-	return &responseWriter{w, http.StatusOK}
+	return &responseWriter{
+		ResponseWriter: w,
+		statusCode:     http.StatusOK, // Default status code
+	}
 }
 
 // WriteHeader captures the status code
@@ -562,4 +603,23 @@ func addDefaultRepositories(cfg *config.Config, m *mapper.PathMapper) {
 			})
 		}
 	}
+}
+
+// extractClientIP extracts the client IP from a request
+func extractClientIP(r *http.Request) string {
+	// Check X-Forwarded-For header first (for proxies)
+	forwarded := r.Header.Get("X-Forwarded-For")
+	if forwarded != "" {
+		// X-Forwarded-For can contain multiple IPs, take the first one
+		ips := strings.Split(forwarded, ",")
+		return strings.TrimSpace(ips[0])
+	}
+
+	// Otherwise use RemoteAddr
+	ip := r.RemoteAddr
+	// Remove port if present
+	if idx := strings.LastIndex(ip, ":"); idx != -1 {
+		ip = ip[:idx]
+	}
+	return ip
 }
