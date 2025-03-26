@@ -13,18 +13,50 @@ import (
 
 // Prefetcher manages background prefetching of packages
 type Prefetcher struct {
-	manager   *Manager
-	active    sync.Map // Track active prefetch operations
-	maxActive int
-	// Add a WaitGroup to track active goroutines
-	wg sync.WaitGroup
+	manager     *Manager
+	active      sync.Map // Track active prefetch operations
+	maxActive   int
+	cleanupTick *time.Ticker
+	wg          sync.WaitGroup
+	stopCh      chan struct{}
+}
+
+// PrefetchOperation tracks a single prefetch operation
+type PrefetchOperation struct {
+	URL       string
+	StartTime time.Time
+	Done      chan struct{}
+	Result    string
 }
 
 // NewPrefetcher creates a new prefetcher
 func NewPrefetcher(manager *Manager, maxActive int) *Prefetcher {
-	return &Prefetcher{
-		manager:   manager,
-		maxActive: maxActive,
+	p := &Prefetcher{
+		manager:     manager,
+		maxActive:   maxActive,
+		cleanupTick: time.NewTicker(30 * time.Second),
+		stopCh:      make(chan struct{}),
+	}
+
+	// Start background cleanup goroutine
+	go p.cleanupRoutine()
+
+	return p
+}
+
+// cleanupRoutine periodically checks for stale operations
+func (p *Prefetcher) cleanupRoutine() {
+	p.wg.Add(1)
+	defer p.wg.Done()
+
+	for {
+		select {
+		case <-p.cleanupTick.C:
+			p.cleanupStalePrefetches(2 * time.Minute)
+		case <-p.stopCh:
+			p.cleanupTick.Stop()
+			return
+		}
 	}
 }
 
@@ -42,16 +74,22 @@ func (p *Prefetcher) ProcessIndexFile(repo string, path string, data []byte) {
 		return
 	}
 
-	// Limit to most popular packages (could be more sophisticated with popularity data)
+	// Skip if no URLs found
+	if len(urls) == 0 {
+		log.Printf("Prefetch operation completed: processed 0/0 URLs in %v", time.Duration(0))
+		return
+	}
+
+	// Limit to most popular packages
 	if len(urls) > 20 {
 		urls = urls[:20]
 	}
 
-	// Count active prefetch operations - use a more reliable approach
+	// Count active prefetch operations
 	activeCount := 0
 	p.active.Range(func(_, _ interface{}) bool {
 		activeCount++
-		return activeCount < p.maxActive
+		return true
 	})
 
 	// Skip if too many active prefetch operations
@@ -61,70 +99,116 @@ func (p *Prefetcher) ProcessIndexFile(repo string, path string, data []byte) {
 	}
 
 	// Set a timeout for the entire prefetch operation
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 
 	// Prefetch packages in background
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
-		defer cancel() // Ensure the context is always canceled
+		defer cancel()
 
-		// Track when this prefetch operation started
 		startTime := time.Now()
 		prefetchCount := 0
+		completedCount := 0
 
 		for _, url := range urls {
-			// Check if context is done (timeout or cancellation)
+			// Check if context is done
 			if ctx.Err() != nil {
-				log.Printf("Prefetch operation canceled or timed out after %v", time.Since(startTime))
 				break
 			}
 
-			// Skip if already being prefetched
-			if _, exists := p.active.LoadOrStore(url, startTime); exists {
+			// Check if we have too many active operations now
+			currentActiveCount := 0
+			p.active.Range(func(_, _ interface{}) bool {
+				currentActiveCount++
+				return true
+			})
+
+			if currentActiveCount >= p.maxActive {
+				log.Printf("Reached max active operations during prefetch: %d", currentActiveCount)
+				break
+			}
+
+			// Create operation tracking
+			op := &PrefetchOperation{
+				URL:       url,
+				StartTime: time.Now(),
+				Done:      make(chan struct{}),
+			}
+
+			// Check if already being prefetched
+			if _, exists := p.active.LoadOrStore(url, op); exists {
 				continue
 			}
 
-			// Always clean up at the end of this iteration
-			defer p.active.Delete(url)
-
-			// Add a timeout for each individual prefetch
-			fetchCtx, fetchCancel := context.WithTimeout(ctx, 30*time.Second)
-
-			log.Printf("Prefetching %s", url)
 			prefetchCount++
+			log.Printf("Prefetching %s", url)
 
-			// Use a channel to track completion with timeout
-			done := make(chan struct{})
-			var fetchErr error
+			// Fetch with timeout
+			go func(operation *PrefetchOperation, u string) {
+				_, fetchCancel := context.WithTimeout(ctx, 30*time.Second)
+				defer fetchCancel()
+				defer close(operation.Done)
+				defer p.active.Delete(u)
 
-			go func() {
-				_, fetchErr = p.manager.Fetch(url)
-				close(done)
-			}()
-
-			// Wait for either completion or timeout
-			select {
-			case <-done:
-				if fetchErr != nil {
-					log.Printf("Error prefetching %s: %v", url, fetchErr)
+				// Fetch the file
+				_, err := p.manager.Fetch(u)
+				if err != nil {
+					if strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "not found") {
+						// 404 errors are expected for some files - not a real error
+						operation.Result = "not_found"
+						log.Printf("Failed to prefetch %s: backend returned non-OK status: 404", u)
+					} else {
+						operation.Result = "error"
+						log.Printf("Error prefetching %s: %v", u, err)
+					}
+				} else {
+					operation.Result = "success"
 				}
-			case <-fetchCtx.Done():
-				log.Printf("Prefetch timed out for %s", url)
+
+				// Clean up this operation
+				p.active.Delete(u)
+				completedCount++
+			}(op, url)
+
+			// Avoid hammering the backend
+			select {
+			case <-time.After(100 * time.Millisecond):
+				// Rate limiting
+			case <-ctx.Done():
+				break
 			}
-
-			// Clean up the context
-			fetchCancel()
-
-			// Remove from active map after processing (whether successful or not)
-			p.active.Delete(url)
 		}
 
-		log.Printf("Prefetch operation completed: processed %d/%d URLs in %v",
-			prefetchCount, len(urls), time.Since(startTime))
+		// Wait for all operations to complete or time out
+		waitCtx, waitCancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer waitCancel()
 
-		// Do a final cleanup of any items lingering too long (over 5 minutes)
-		p.cleanupStalePrefetches(5 * time.Minute)
+		activeOps := make([]*PrefetchOperation, 0)
+		p.active.Range(func(k, v interface{}) bool {
+			if op, ok := v.(*PrefetchOperation); ok {
+				activeOps = append(activeOps, op)
+			}
+			return true
+		})
+
+		// Wait for each operation
+		for _, op := range activeOps {
+			select {
+			case <-op.Done:
+				// Operation completed
+			case <-waitCtx.Done():
+				// Timeout waiting for operations
+				log.Printf("Timed out waiting for prefetch operations to complete")
+				break
+			}
+		}
+
+		// Final cleanup
+		p.cleanupStalePrefetches(10 * time.Second)
+
+		log.Printf("Prefetch operation completed: processed %d/%d URLs in %v",
+			completedCount, prefetchCount, time.Since(startTime))
 	}()
 }
 
@@ -134,15 +218,22 @@ func (p *Prefetcher) cleanupStalePrefetches(maxAge time.Duration) {
 	cleaned := 0
 
 	p.active.Range(func(key, value interface{}) bool {
-		// Check if the start time is too old
-		if startTime, ok := value.(time.Time); ok {
-			if now.Sub(startTime) > maxAge {
+		if op, ok := value.(*PrefetchOperation); ok {
+			if now.Sub(op.StartTime) > maxAge {
 				p.active.Delete(key)
 				cleaned++
-				log.Printf("Cleaned up stale prefetch: %v (age: %v)", key, now.Sub(startTime))
+				log.Printf("Cleaned up stale prefetch: %v (age: %v)", key, now.Sub(op.StartTime))
+
+				// Close the done channel if it hasn't been closed yet
+				select {
+				case <-op.Done:
+					// Already closed
+				default:
+					close(op.Done)
+				}
 			}
 		} else {
-			// If the value isn't a time.Time for some reason, clean it up
+			// Old format data in the map, just clean it up
 			p.active.Delete(key)
 			cleaned++
 		}
@@ -156,6 +247,9 @@ func (p *Prefetcher) cleanupStalePrefetches(maxAge time.Duration) {
 
 // Shutdown waits for all prefetch operations to complete
 func (p *Prefetcher) Shutdown() {
+	// Signal the cleanup routine to stop
+	close(p.stopCh)
+
 	// Wait with a timeout
 	done := make(chan struct{})
 	go func() {
@@ -169,4 +263,17 @@ func (p *Prefetcher) Shutdown() {
 	case <-time.After(5 * time.Second):
 		log.Printf("Timed out waiting for prefetch operations to complete")
 	}
+}
+
+// ForceCleanup immediately cleans up all prefetch operations
+// Can be called from admin endpoints to unstick a stuck prefetcher
+func (p *Prefetcher) ForceCleanup() int {
+	cleaned := 0
+	p.active.Range(func(key, _ interface{}) bool {
+		p.active.Delete(key)
+		cleaned++
+		return true
+	})
+	log.Printf("Force-cleaned %d prefetch operations", cleaned)
+	return cleaned
 }

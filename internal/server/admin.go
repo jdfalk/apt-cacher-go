@@ -433,3 +433,22 @@ func (s *Server) adminCachePackage(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Error writing cache package response: %v", err)
 	}
 }
+
+// adminCleanupPrefetcher handles force-cleaning of the prefetcher
+func (s *Server) adminCleanupPrefetcher(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	count := s.backend.ForceCleanupPrefetcher()
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"success": true,
+		"message": fmt.Sprintf("Cleaned up %d stale prefetch operations", count),
+		"count":   count,
+	}); err != nil {
+		log.Printf("Error encoding JSON response: %v", err)
+	}
+}

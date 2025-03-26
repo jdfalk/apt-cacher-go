@@ -133,6 +133,7 @@ func New(cfg *config.Config) (*Server, error) {
 		adminMux.HandleFunc("/admin/stats", s.handleAdminAuth(s.adminGetStats))
 		adminMux.HandleFunc("/admin/search", s.handleAdminAuth(s.adminSearchCache))
 		adminMux.HandleFunc("/admin/cache", s.handleAdminAuth(s.adminCachePackage))
+		http.HandleFunc("/admin/cleanup-prefetcher", s.handleAdminAuth(s.adminCleanupPrefetcher))
 
 		// Create admin server
 		s.adminServer = &http.Server{

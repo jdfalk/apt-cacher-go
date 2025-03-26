@@ -423,3 +423,11 @@ func (m *Manager) ProcessPackagesFile(repo string, path string, data []byte) {
 		}
 	}
 }
+
+// ForceCleanupPrefetcher forces cleanup of stale prefetch operations
+func (m *Manager) ForceCleanupPrefetcher() int {
+	if m.prefetcher != nil {
+		return m.prefetcher.ForceCleanup()
+	}
+	return 0
+}
