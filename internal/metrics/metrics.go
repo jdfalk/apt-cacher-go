@@ -25,6 +25,8 @@ type Statistics struct {
 	BytesServed     int64
 	AvgResponseTime float64
 	RecentRequests  []RequestInfo
+	LastClientIP    string // New field to track last client IP
+	LastFileSize    int64  // New field to track last file size
 }
 
 // PackageStats tracks statistics about a package
@@ -70,6 +72,8 @@ type Collector struct {
 	maxRecentItems int
 	packages       map[string]PackageStats
 	clients        map[string]ClientStats
+	lastClientIP   string // New field to track last client IP
+	lastFileSize   int64  // New field to track last file size
 }
 
 // New creates a new metrics collector
@@ -150,6 +154,20 @@ func (c *Collector) RecordError(path string) {
 	}
 }
 
+// SetLastClientIP sets the last client IP
+func (c *Collector) SetLastClientIP(ip string) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	c.lastClientIP = ip
+}
+
+// SetLastFileSize sets the last file size
+func (c *Collector) SetLastFileSize(size int64) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	c.lastFileSize = size
+}
+
 // GetStatistics returns the current statistics
 func (c *Collector) GetStatistics() Statistics {
 	c.mutex.RLock()
@@ -161,6 +179,8 @@ func (c *Collector) GetStatistics() Statistics {
 		CacheMisses:    c.cacheMisses,
 		Errors:         c.errors,
 		BytesServed:    c.bytesServed,
+		LastClientIP:   c.lastClientIP, // Add this field
+		LastFileSize:   c.lastFileSize, // Add this field
 		RecentRequests: make([]RequestInfo, len(c.requests)),
 	}
 

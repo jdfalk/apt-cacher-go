@@ -221,12 +221,14 @@ func (s *Server) adminGetStats(w http.ResponseWriter, r *http.Request) {
 			"hit_rate":             stats.HitRate * 100,
 			"avg_response_time_ms": stats.AvgResponseTime,
 			"bytes_served":         stats.BytesServed,
+			"last_client_ip":       stats.LastClientIP, // Add this field
 		},
 		"cache": map[string]any{ // Changed from interface{} to any
 			"entries":        cacheStats.Items,
 			"size_bytes":     cacheStats.CurrentSize,
 			"max_size_bytes": cacheStats.MaxSize,
 			"usage_percent":  float64(cacheStats.CurrentSize) / float64(cacheStats.MaxSize) * 100,
+			"last_file_size": stats.LastFileSize, // Add this field
 		},
 	}
 

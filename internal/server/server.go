@@ -336,6 +336,15 @@ func (s *Server) handlePackageRequest(w http.ResponseWriter, r *http.Request) {
 		// If we don't have the file or it's modified, continue with normal flow
 	}
 
+	// Get client IP
+	clientIP := r.RemoteAddr
+	if idx := strings.LastIndex(clientIP, ":"); idx != -1 {
+		clientIP = clientIP[:idx] // Strip port number if present
+	}
+
+	// Update last client IP
+	s.metrics.SetLastClientIP(clientIP)
+
 	// Fetch the package
 	data, err := s.backend.Fetch(requestPath)
 	if err != nil {
@@ -343,6 +352,9 @@ func (s *Server) handlePackageRequest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Package not found", http.StatusNotFound)
 		return
 	}
+
+	// Update last file size
+	s.metrics.SetLastFileSize(int64(len(data)))
 
 	// Determine content type
 	contentType := getContentType(requestPath)
