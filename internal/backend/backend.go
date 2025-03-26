@@ -96,6 +96,9 @@ func (m *Manager) Shutdown() {
 
 	// Stop the download queue
 	m.downloadQ.Stop()
+
+	// Add this line to properly shutdown the prefetcher
+	m.prefetcher.Shutdown()
 }
 
 // Fetch retrieves a package from the appropriate backend
@@ -143,74 +146,74 @@ func (m *Manager) Fetch(requestPath string) ([]byte, error) {
 		fileType,
 		mappingResult.RemotePath)
 
-    // Select backend based on the repository name
-    backend, err := m.selectBackendByName(mappingResult.Repository)
-    if err != nil {
-        if found {
-            // If backend selection fails but we have cached data, use it
-            log.Printf("Backend selection failed, using cached data: %v", err)
-            return data, nil
-        }
-        return nil, err
-    }
+	// Select backend based on the repository name
+	backend, err := m.selectBackendByName(mappingResult.Repository)
+	if err != nil {
+		if found {
+			// If backend selection fails but we have cached data, use it
+			log.Printf("Backend selection failed, using cached data: %v", err)
+			return data, nil
+		}
+		return nil, err
+	}
 
-    // Construct full URL
-    u, err := url.Parse(backend.BaseURL)
-    if err != nil {
-        if found {
-            return data, nil  // Use cached data if URL parsing fails
-        }
-        return nil, err
-    }
-    u.Path = path.Join(u.Path, mappingResult.RemotePath)
-    fullURL := u.String()
+	// Construct full URL
+	u, err := url.Parse(backend.BaseURL)
+	if err != nil {
+		if found {
+			return data, nil // Use cached data if URL parsing fails
+		}
+		return nil, err
+	}
+	u.Path = path.Join(u.Path, mappingResult.RemotePath)
+	fullURL := u.String()
 
-    // Use the download queue to fetch
-    priority := 1
-    if mappingResult.IsIndex || isSignatureFile {
-        priority = 10  // Higher priority for index/signature files
-    }
+	// Use the download queue to fetch
+	priority := 1
+	if mappingResult.IsIndex || isSignatureFile {
+		priority = 10 // Higher priority for index/signature files
+	}
 
-    resultCh := m.downloadQ.Submit(fullURL, priority)
-    result := <-resultCh
+	resultCh := m.downloadQ.Submit(fullURL, priority)
+	result := <-resultCh
 
-    if result.Error != nil {
-        if found {
-            // If download fails but we have cached data, use it
-            log.Printf("Download failed, using cached data: %v", result.Error)
-            return data, nil
-        }
-        return nil, result.Error
-    }
+	if result.Error != nil {
+		if found {
+			// If download fails but we have cached data, use it
+			log.Printf("Download failed, using cached data: %v", result.Error)
+			return data, nil
+		}
+		return nil, result.Error
+	}
 
-    // Determine cache policy based on file type
-    var expiration time.Duration
-    if mappingResult.IsIndex || isSignatureFile {
-        // Index files expire quickly (1 hour by default)
-        expiration, _ = time.ParseDuration("1h")
-    } else {
-        // Package files are kept for a month
-        expiration, _ = time.ParseDuration("720h")
-    }
+	// Determine cache policy based on file type
+	var expiration time.Duration
+	if mappingResult.IsIndex || isSignatureFile {
+		// Index files expire quickly (1 hour by default)
+		expiration, _ = time.ParseDuration("1h")
+	} else {
+		// Package files are kept for a month
+		expiration, _ = time.ParseDuration("720h")
+	}
 
-    // Store in cache with expiration
-    err = m.cache.PutWithExpiration(cacheKey, result.Data, expiration)
-    if err != nil {
-        log.Printf("Warning: failed to cache %s: %v", cacheKey, err)
-    }
+	// Store in cache with expiration
+	err = m.cache.PutWithExpiration(cacheKey, result.Data, expiration)
+	if err != nil {
+		log.Printf("Warning: failed to cache %s: %v", cacheKey, err)
+	}
 
-    // Process packages files and release files in the background
-    if mappingResult.IsIndex && strings.Contains(mappingResult.RemotePath, "Packages") {
-        go m.ProcessPackagesFile(mappingResult.Repository, mappingResult.RemotePath, result.Data)
-    }
+	// Process packages files and release files in the background
+	if mappingResult.IsIndex && strings.Contains(mappingResult.RemotePath, "Packages") {
+		go m.ProcessPackagesFile(mappingResult.Repository, mappingResult.RemotePath, result.Data)
+	}
 
-    // Process Release files to find additional index files
-    if mappingResult.IsIndex && (strings.HasSuffix(mappingResult.RemotePath, "Release") ||
-        strings.HasSuffix(mappingResult.RemotePath, "InRelease")) {
-        go m.processReleaseFile(mappingResult.Repository, mappingResult.RemotePath, result.Data)
-    }
+	// Process Release files to find additional index files
+	if mappingResult.IsIndex && (strings.HasSuffix(mappingResult.RemotePath, "Release") ||
+		strings.HasSuffix(mappingResult.RemotePath, "InRelease")) {
+		go m.processReleaseFile(mappingResult.Repository, mappingResult.RemotePath, result.Data)
+	}
 
-    return result.Data, nil
+	return result.Data, nil
 }
 
 // processReleaseFile analyzes a Release file to find additional index files
