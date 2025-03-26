@@ -251,6 +251,17 @@ func (s *Server) adminSearchCache(w http.ResponseWriter, r *http.Request) {
 	// Search by path (existing code)
 	pathResults, _ := s.cache.Search(query)
 
+	// Convert string results to CacheEntry objects for display
+	entryResults := make([]CacheEntry, len(pathResults))
+	for i, path := range pathResults {
+		// Create a basic CacheEntry with just the path since that's what we have
+		entryResults[i] = CacheEntry{
+			Path:       path,
+			Size:       0,           // We don't have size information
+			LastAccess: time.Time{}, // We don't have access time information
+		}
+	}
+
 	// Search by package name (new code)
 	packageResults, _ := s.cache.SearchByPackageName(query)
 
@@ -330,14 +341,14 @@ func (s *Server) adminSearchCache(w http.ResponseWriter, r *http.Request) {
     `
 
 	// Add path-based results (existing code)
-	for _, entry := range pathResults {
+	for _, entry := range entryResults {
 		html += fmt.Sprintf(`
-            <tr>
-                <td>%s</td>
-                <td>%d bytes</td>
-                <td>%s</td>
-            </tr>
-        `, entry.Path, entry.Size, entry.LastAccess.Format("2006-01-02 15:04:05"))
+			<tr>
+				<td>%s</td>
+				<td>%d bytes</td>
+				<td>%s</td>
+			</tr>
+		`, entry.Path, entry.Size, entry.LastAccess.Format("2006-01-02 15:04:05"))
 	}
 
 	html += `

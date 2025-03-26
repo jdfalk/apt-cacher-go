@@ -7,10 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync
+	"sync"
 	"time"
 
-	"github.com/yourusername/yourproject/parser"
+	"github.com/jdfalk/apt-cacher-go/internal/parser"
 )
 
 // CacheStats contains cache statistics
@@ -22,6 +22,16 @@ type CacheStats struct {
 	MissRate    float64
 	Hits        int64
 	Misses      int64
+}
+
+// CacheSearchResult represents a search result with package information
+type CacheSearchResult struct {
+	Path        string
+	PackageName string
+	Version     string
+	Size        int64
+	LastAccess  time.Time
+	IsCached    bool
 }
 
 // Cache manages the package cache
@@ -296,34 +306,34 @@ func (c *Cache) Search(pattern string) ([]string, error) {
 
 // SearchByPackageName searches for packages by name
 func (c *Cache) SearchByPackageName(query string) ([]CacheSearchResult, error) {
-    results := []CacheSearchResult{}
+	results := []CacheSearchResult{}
 
-    packages := c.packageIndex.Search(query)
-    for _, pkg := range packages {
-        cachePath := filepath.Join(c.baseDir, pkg.Filename)
+	packages := c.packageIndex.Search(query)
+	for _, pkg := range packages {
+		cachePath := filepath.Join(c.baseDir, pkg.Filename)
 
-        // Check if package is cached
-        info, err := os.Stat(cachePath)
-        isCached := err == nil
+		// Check if package is cached
+		info, err := os.Stat(cachePath)
+		isCached := err == nil
 
-        size := int64(0)
-        lastAccess := time.Time{}
-        if isCached {
-            size = info.Size()
-            lastAccess = info.ModTime()
-        }
+		size := int64(0)
+		lastAccess := time.Time{}
+		if isCached {
+			size = info.Size()
+			lastAccess = info.ModTime()
+		}
 
-        results = append(results, CacheSearchResult{
-            Path:       pkg.Filename,
-            PackageName: pkg.Package,
-            Version:    pkg.Version,
-            Size:       size,
-            LastAccess: lastAccess,
-            IsCached:   isCached,
-        })
-    }
+		results = append(results, CacheSearchResult{
+			Path:        pkg.Filename,
+			PackageName: pkg.Package,
+			Version:     pkg.Version,
+			Size:        size,
+			LastAccess:  lastAccess,
+			IsCached:    isCached,
+		})
+	}
 
-    return results, nil
+	return results, nil
 }
 
 // cleanup removes least recently used files when cache is too large
@@ -499,6 +509,34 @@ func (c *Cache) UpdateExpiration(key string, expiration time.Duration) error {
 
 // SavePackageIndex saves the package index to disk
 func (c *Cache) SavePackageIndex() error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	return c.savePackageIndexLocked()
+}
+
+// GetPackageIndex returns a reference to the package index
+func (c *Cache) GetPackageIndex() *parser.PackageIndex {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+	return c.packageIndex
+}
+
+// UpdatePackageIndex updates the package index with new package information
+func (c *Cache) UpdatePackageIndex(packages []parser.PackageInfo) error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	// Add each package to the index
+	for _, pkg := range packages {
+		c.packageIndex.AddPackage(pkg)
+	}
+
+	// Save the updated index
+	return c.savePackageIndexLocked()
+}
+
+// savePackageIndexLocked saves the package index to disk (assumes mutex is already locked)
+func (c *Cache) savePackageIndexLocked() error {
 	data, err := json.Marshal(c.packageIndex)
 	if err != nil {
 		return err

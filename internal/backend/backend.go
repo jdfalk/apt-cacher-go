@@ -201,12 +201,12 @@ func (m *Manager) Fetch(requestPath string) ([]byte, error) {
 			// Extract repository name
 			repo := mappingResult.Repository
 
-			// Parse packages and update index
-			_, err := parser.ParsePackagesFileWithIndex(data, m.cache.PackageIndex)
+			// Parse packages
+			packages, err := parser.ParsePackagesFile(data)
 			if err == nil {
-				// Save updated index
-				if err := m.cache.SavePackageIndex(); err != nil {
-					log.Printf("Warning: failed to save package index: %v", err)
+				// Update the package index
+				if err := m.cache.UpdatePackageIndex(packages); err != nil {
+					log.Printf("Warning: failed to update package index: %v", err)
 				}
 			}
 

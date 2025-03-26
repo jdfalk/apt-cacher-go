@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"sync
+	"sync"
 	"time"
 )
 
