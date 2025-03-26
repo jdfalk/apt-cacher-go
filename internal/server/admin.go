@@ -72,6 +72,7 @@ func (s *Server) adminDashboard(w http.ResponseWriter, r *http.Request) {
             th, td { border: 1px solid #ddd; padding: 8px; }
             th { background: #f2f2f2; }
             tr:nth-child(even) { background: #f9f9f9; }
+            .truncate { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         </style>
     </head>
     <body>
@@ -110,7 +111,14 @@ func (s *Server) adminDashboard(w http.ResponseWriter, r *http.Request) {
 
         <h2>Recent Requests</h2>
         <table>
-            <tr><th>Path</th><th>Time (ms)</th><th>Result</th></tr>
+            <tr>
+                <th>Path</th>
+                <th>Package Name</th>
+                <th>Client IP</th>
+                <th>Time (ms)</th>
+                <th>Result</th>
+                <th>Size</th>
+            </tr>
     `,
 		time.Since(s.startTime).Round(time.Second),
 		s.version,
@@ -119,13 +127,36 @@ func (s *Server) adminDashboard(w http.ResponseWriter, r *http.Request) {
 		stats.HitRate*100,
 		stats.CacheMisses,
 		stats.BytesServed,
-		cacheStats.Items, // Changed from ItemCount to Items
+		cacheStats.Items,
 		float64(cacheStats.CurrentSize)/(1024*1024),
 		float64(cacheStats.MaxSize)/(1024*1024))
 
 	for _, req := range stats.RecentRequests {
-		html += fmt.Sprintf("<tr><td>%s</td><td>%.2f</td><td>%s</td></tr>",
-			req.Path, float64(req.Duration.Milliseconds()), req.Result)
+		// Format request information with package name and client IP
+		packageName := req.PackageName
+		if packageName == "" {
+			packageName = "-"
+		}
+
+		bytesText := "-"
+		if req.Bytes > 0 {
+			bytesText = byteCountSI(req.Bytes)
+		}
+
+		html += fmt.Sprintf(`<tr>
+			<td class="truncate" title="%s">%s</td>
+			<td>%s</td>
+			<td>%s</td>
+			<td>%.2f</td>
+			<td>%s</td>
+			<td>%s</td>
+		</tr>`,
+			req.Path, req.Path,
+			packageName,
+			req.ClientIP,
+			float64(req.Duration.Milliseconds()),
+			req.Result,
+			bytesText)
 	}
 
 	html += `

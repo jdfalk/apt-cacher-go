@@ -278,8 +278,8 @@ func (s *Server) wrapWithMetrics(next http.HandlerFunc) http.HandlerFunc {
 			float64(duration.Milliseconds())/1000.0, status,
 			rw.bytesWritten)
 
-		// Record metrics - simplify to use only the existing methods in metrics.Collector
-		s.metrics.RecordRequest(r.URL.Path, duration)
+		// Record metrics with full information including client IP and package name
+		s.metrics.RecordRequest(r.URL.Path, duration, clientIP, packageName)
 
 		// Update hit/miss stats based on status
 		if status == "hit" {
@@ -354,8 +354,13 @@ func (s *Server) handlePackageRequest(w http.ResponseWriter, r *http.Request) {
 
 	// Start timing the request
 	start := time.Now()
+	clientIP := extractClientIP(r)
+	packageName := ""
+	if s.packageMapper != nil {
+		packageName = s.packageMapper.GetPackageNameForHash(requestPath)
+	}
 	defer func() {
-		s.metrics.RecordRequest(requestPath, time.Since(start))
+		s.metrics.RecordRequest(requestPath, time.Since(start), clientIP, packageName)
 	}()
 
 	log.Printf("Request: %s %s", r.Method, requestPath)
@@ -382,7 +387,7 @@ func (s *Server) handlePackageRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get client IP
-	clientIP := r.RemoteAddr
+	clientIP = r.RemoteAddr
 	if idx := strings.LastIndex(clientIP, ":"); idx != -1 {
 		clientIP = clientIP[:idx] // Strip port number if present
 	}

@@ -8,11 +8,13 @@ import (
 
 // RequestInfo tracks information about a single request
 type RequestInfo struct {
-	Path     string
-	Time     time.Time
-	Duration time.Duration
-	Result   string // "hit", "miss", "error"
-	Bytes    int64
+	Path        string
+	Time        time.Time
+	Duration    time.Duration
+	Result      string // "hit", "miss", "error"
+	Bytes       int64
+	PackageName string // Add package name field
+	ClientIP    string // Add client IP field
 }
 
 // Statistics holds aggregated statistics
@@ -87,15 +89,17 @@ func New() *Collector {
 }
 
 // RecordRequest records information about a request
-func (c *Collector) RecordRequest(path string, duration time.Duration) {
+func (c *Collector) RecordRequest(path string, duration time.Duration, clientIP string, packageName string) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
 	info := RequestInfo{
-		Path:     path,
-		Time:     time.Now(),
-		Duration: duration,
-		Result:   "miss", // Default, should be updated by caller
+		Path:        path,
+		Time:        time.Now(),
+		Duration:    duration,
+		Result:      "miss", // Default, should be updated by caller
+		ClientIP:    clientIP,
+		PackageName: packageName,
 	}
 
 	// Add to recent requests
@@ -109,6 +113,16 @@ func (c *Collector) RecordRequest(path string, duration time.Duration) {
 	// Update totals
 	c.totalRequests++
 	c.totalTime += duration
+
+	// Update client stats if clientIP is provided
+	if clientIP != "" {
+		clientStats, exists := c.clients[clientIP]
+		if !exists {
+			clientStats = ClientStats{IP: clientIP}
+		}
+		clientStats.Requests++
+		c.clients[clientIP] = clientStats
+	}
 }
 
 // RecordCacheHit records a cache hit
