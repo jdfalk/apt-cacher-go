@@ -35,9 +35,11 @@ type Cache struct {
 
 // New creates a new Cache instance
 func New(baseDir string, maxSizeMB int64) (*Cache, error) {
-	// Create cache directory if it doesn't exist
-	if err := os.MkdirAll(baseDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create cache directory: %w", err)
+	log.Printf("Initializing cache in directory: %s", baseDir)
+
+	// Create cache directory if it doesn't exist using robust directory creation
+	if err := ensureDirectoryExists(baseDir); err != nil {
+		return nil, fmt.Errorf("failed to create/access cache directory: %w", err)
 	}
 
 	c := &Cache{
@@ -51,6 +53,9 @@ func New(baseDir string, maxSizeMB int64) (*Cache, error) {
 	if err := c.updateCacheSize(); err != nil {
 		return nil, err
 	}
+
+	log.Printf("Cache initialized successfully: %s (current size: %d bytes, max: %d bytes)",
+		baseDir, c.currentSize, c.maxSize)
 
 	// Start background cleanup goroutine
 	go c.backgroundCleanup()
@@ -115,12 +120,12 @@ func (c *Cache) PutWithExpiration(key string, data []byte, expiration time.Durat
 	// Create directories if needed
 	dir := filepath.Dir(path)
 	if err := ensureDirectoryExists(dir); err != nil {
-		return err
+		return fmt.Errorf("failed to ensure directory for cache file: %w", err)
 	}
 
 	// Write file
 	if err := os.WriteFile(path, data, 0644); err != nil {
-		return err
+		return fmt.Errorf("failed to write cache file: %w", err)
 	}
 
 	fileSize := int64(len(data))
@@ -382,22 +387,37 @@ func containsIgnoreCase(s, substr string) bool {
 
 // ensureDirectoryExists ensures a directory exists for cached files
 func ensureDirectoryExists(path string) error {
-	// Check if the directory already exists first
-	if stat, err := os.Stat(path); err == nil && stat.IsDir() {
-		// Directory already exists, no need to create it
+	// First check if directory already exists
+	info, err := os.Stat(path)
+
+	// If directory exists and is a directory, we're good
+	if err == nil && info.IsDir() {
+		log.Printf("Cache directory already exists: %s", path)
 		return nil
 	}
 
-	// Directory doesn't exist or there was an error checking, try to create it
+	// If error is something other than "not exists", report it
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("cannot access path %s: %w", path, err)
+	}
+
+	// If path exists but is not a directory, that's an error
+	if err == nil && !info.IsDir() {
+		return fmt.Errorf("path exists but is not a directory: %s", path)
+	}
+
+	// At this point we know the directory doesn't exist - create it with full permissions
+	log.Printf("Creating cache directory: %s", path)
 	if err := os.MkdirAll(path, 0755); err != nil {
-		// Check if the directory was created by another process in the meantime
-		if stat, statErr := os.Stat(path); statErr == nil && stat.IsDir() {
-			// Directory now exists, someone else created it
+		// One last check in case of race condition where another process created it
+		if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {
+			log.Printf("Directory created by another process: %s", path)
 			return nil
 		}
 		return fmt.Errorf("failed to create directory %s: %w", path, err)
 	}
 
+	log.Printf("Created cache directory successfully: %s", path)
 	return nil
 }
 
