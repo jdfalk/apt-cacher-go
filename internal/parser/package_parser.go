@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync
+	"time"
 )
 
 // PackageInfo represents a single package's metadata
@@ -34,6 +36,47 @@ type IndexInfo struct {
 	Architectures []string
 	Components    []string
 	Description   string
+}
+
+// PackageIndex maps package names to their repository locations
+type PackageIndex struct {
+	Packages    map[string][]PackageInfo // Map package names to their details
+	LastUpdated time.Time
+	mutex       sync.RWMutex
+}
+
+// NewPackageIndex creates a new package index
+func NewPackageIndex() *PackageIndex {
+	return &PackageIndex{
+		Packages:    make(map[string][]PackageInfo),
+		LastUpdated: time.Now(),
+	}
+}
+
+// AddPackage adds a package to the index
+func (idx *PackageIndex) AddPackage(pkg PackageInfo) {
+	idx.mutex.Lock()
+	defer idx.mutex.Unlock()
+
+	idx.Packages[pkg.Package] = append(idx.Packages[pkg.Package], pkg)
+	idx.LastUpdated = time.Now()
+}
+
+// Search searches the index for packages matching a query
+func (idx *PackageIndex) Search(query string) []PackageInfo {
+	idx.mutex.RLock()
+	defer idx.mutex.RUnlock()
+
+	var results []PackageInfo
+	query = strings.ToLower(query)
+
+	for name, pkgs := range idx.Packages {
+		if strings.Contains(strings.ToLower(name), query) {
+			results = append(results, pkgs...)
+		}
+	}
+
+	return results
 }
 
 // ParsePackagesFile parses a Packages file (plain or gzipped)
@@ -111,6 +154,21 @@ func ParsePackagesFile(data []byte) ([]PackageInfo, error) {
 	}
 
 	return packages, nil
+}
+
+// ParsePackagesFileWithIndex parses a Packages file and builds an index
+func ParsePackagesFileWithIndex(data []byte, index *PackageIndex) ([]PackageInfo, error) {
+    packages, err := ParsePackagesFile(data)
+    if err != nil {
+        return nil, err
+    }
+
+    // Add packages to index
+    for _, pkg := range packages {
+        index.AddPackage(pkg)
+    }
+
+    return packages, nil
 }
 
 // ParseReleaseFile parses a Release file

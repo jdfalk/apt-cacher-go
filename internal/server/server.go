@@ -128,6 +128,7 @@ func New(cfg *config.Config) (*Server, error) {
 		adminMux.HandleFunc("/admin/flushexpired", s.handleAdminAuth(s.adminFlushExpired))
 		adminMux.HandleFunc("/admin/stats", s.handleAdminAuth(s.adminGetStats))
 		adminMux.HandleFunc("/admin/search", s.handleAdminAuth(s.adminSearchCache))
+		adminMux.HandleFunc("/admin/cache", s.handleAdminAuth(s.adminCachePackage))
 
 		// Create admin server
 		s.adminServer = &http.Server{

@@ -198,7 +198,20 @@ func (m *Manager) Fetch(requestPath string) ([]byte, error) {
 
 		// Process index files in the background if appropriate
 		if strings.Contains(mappingResult.RemotePath, "Packages") {
-			go m.prefetcher.ProcessIndexFile(mappingResult.Repository, mappingResult.RemotePath, data)
+			// Extract repository name
+			repo := mappingResult.Repository
+
+			// Parse packages and update index
+			_, err := parser.ParsePackagesFileWithIndex(data, m.cache.PackageIndex)
+			if err == nil {
+				// Save updated index
+				if err := m.cache.SavePackageIndex(); err != nil {
+					log.Printf("Warning: failed to save package index: %v", err)
+				}
+			}
+
+			// Continue with existing prefetch logic
+			go m.prefetcher.ProcessIndexFile(repo, mappingResult.RemotePath, data)
 		}
 
 		return data, nil

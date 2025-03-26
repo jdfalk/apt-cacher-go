@@ -1,13 +1,16 @@
 package cache
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
+	"sync
 	"time"
+
+	"github.com/yourusername/yourproject/parser"
 )
 
 // CacheStats contains cache statistics
@@ -23,14 +26,16 @@ type CacheStats struct {
 
 // Cache manages the package cache
 type Cache struct {
-	baseDir     string
-	maxSize     int64
-	currentSize int64
-	mutex       sync.RWMutex
-	expiration  map[string]time.Time // Tracks expiration times
-	lru         *LRUCache            // Tracks LRU order
-	hits        int64
-	misses      int64
+	baseDir      string
+	maxSize      int64
+	currentSize  int64
+	mutex        sync.RWMutex
+	expiration   map[string]time.Time // Tracks expiration times
+	lru          *LRUCache            // Tracks LRU order
+	hits         int64
+	misses       int64
+	packageIndex *parser.PackageIndex
+	indexPath    string
 }
 
 // New creates a new Cache instance
@@ -43,10 +48,20 @@ func New(baseDir string, maxSizeMB int64) (*Cache, error) {
 	}
 
 	c := &Cache{
-		baseDir:    baseDir,
-		maxSize:    maxSizeMB * 1024 * 1024, // Convert MB to bytes
-		expiration: make(map[string]time.Time),
-		lru:        NewLRUCache(100000), // Track up to 100K files
+		baseDir:      baseDir,
+		maxSize:      maxSizeMB * 1024 * 1024, // Convert MB to bytes
+		expiration:   make(map[string]time.Time),
+		lru:          NewLRUCache(100000), // Track up to 100K files
+		packageIndex: parser.NewPackageIndex(),
+		indexPath:    filepath.Join(baseDir, "package_index.json"),
+	}
+
+	// Load existing index if available
+	if data, err := os.ReadFile(c.indexPath); err == nil {
+		var idx parser.PackageIndex
+		if err := json.Unmarshal(data, &idx); err == nil {
+			c.packageIndex = &idx
+		}
 	}
 
 	// Calculate initial cache size
@@ -279,6 +294,38 @@ func (c *Cache) Search(pattern string) ([]string, error) {
 	return matches, err
 }
 
+// SearchByPackageName searches for packages by name
+func (c *Cache) SearchByPackageName(query string) ([]CacheSearchResult, error) {
+    results := []CacheSearchResult{}
+
+    packages := c.packageIndex.Search(query)
+    for _, pkg := range packages {
+        cachePath := filepath.Join(c.baseDir, pkg.Filename)
+
+        // Check if package is cached
+        info, err := os.Stat(cachePath)
+        isCached := err == nil
+
+        size := int64(0)
+        lastAccess := time.Time{}
+        if isCached {
+            size = info.Size()
+            lastAccess = info.ModTime()
+        }
+
+        results = append(results, CacheSearchResult{
+            Path:       pkg.Filename,
+            PackageName: pkg.Package,
+            Version:    pkg.Version,
+            Size:       size,
+            LastAccess: lastAccess,
+            IsCached:   isCached,
+        })
+    }
+
+    return results, nil
+}
+
 // cleanup removes least recently used files when cache is too large
 func (c *Cache) cleanup() error {
 	// If we're not over the limit, no need to clean
@@ -448,4 +495,13 @@ func (c *Cache) UpdateExpiration(key string, expiration time.Duration) error {
 	// Update expiration time
 	c.expiration[key] = time.Now().Add(expiration)
 	return nil
+}
+
+// SavePackageIndex saves the package index to disk
+func (c *Cache) SavePackageIndex() error {
+	data, err := json.Marshal(c.packageIndex)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(c.indexPath, data, 0644)
 }

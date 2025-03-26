@@ -240,7 +240,7 @@ func (s *Server) adminGetStats(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// adminSearchCache searches the cache for packages matching the query
+// Modified adminSearchCache function
 func (s *Server) adminSearchCache(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("q")
 	if query == "" {
@@ -248,26 +248,13 @@ func (s *Server) adminSearchCache(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results, err := s.cache.Search(query)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to search cache: %v", err), http.StatusInternalServerError)
-		log.Printf("Failed to search cache: %v", err)
-		return
-	}
+	// Search by path (existing code)
+	pathResults, _ := s.cache.Search(query)
 
-	// Convert the results to a usable format based on what Search actually returns
-	entries := make([]CacheEntry, len(results))
-	for i, res := range results {
-		// This structure depends on what cache.Search actually returns
-		// For this fix, assuming it returns path strings, we create minimal entries
-		entries[i] = CacheEntry{
-			Path:       res,
-			Size:       0, // We don't have this information without additional calls
-			LastAccess: time.Time{},
-			Expires:    time.Time{},
-		}
-	}
+	// Search by package name (new code)
+	packageResults, _ := s.cache.SearchByPackageName(query)
 
+	// Create HTML output
 	html := fmt.Sprintf(`
     <!DOCTYPE html>
     <html>
@@ -275,40 +262,82 @@ func (s *Server) adminSearchCache(w http.ResponseWriter, r *http.Request) {
         <title>Cache Search Results</title>
         <style>
             body { font-family: Arial, sans-serif; margin: 20px; }
-            h1 { color: #333; }
+            h1, h2 { color: #333; }
             table { border-collapse: collapse; width: 100%%; }
             th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
             th { background: #f2f2f2; }
             tr:nth-child(even) { background: #f9f9f9; }
+            .not-cached { color: #cc0000; }
+            button { background: #0066cc; color: white; border: none; padding: 5px 10px; cursor: pointer; }
         </style>
     </head>
     <body>
         <h1>Search Results for "%s"</h1>
-        <p>Found %d matches</p>
         <p><a href="/admin">Return to Admin Dashboard</a></p>
 
+        <h2>Package Search Results</h2>
+        <p>Found %d matching packages</p>
+        <table>
+            <tr>
+                <th>Package Name</th>
+                <th>Version</th>
+                <th>Path</th>
+                <th>Size</th>
+                <th>Cached</th>
+                <th>Action</th>
+            </tr>
+    `, query, len(packageResults))
+
+	// Add package results rows
+	for _, result := range packageResults {
+		cacheStatus := "Yes"
+		cacheClass := ""
+		cacheAction := ""
+
+		if !result.IsCached {
+			cacheStatus = "No"
+			cacheClass = "not-cached"
+			cacheAction = fmt.Sprintf(`
+                <form method="post" action="/admin/cache">
+                    <input type="hidden" name="path" value="%s">
+                    <button type="submit">Cache Now</button>
+                </form>
+            `, result.Path)
+		}
+
+		html += fmt.Sprintf(`
+            <tr>
+                <td>%s</td>
+                <td>%s</td>
+                <td>%s</td>
+                <td>%d bytes</td>
+                <td class="%s">%s</td>
+                <td>%s</td>
+            </tr>
+        `, result.PackageName, result.Version, result.Path, result.Size, cacheClass, cacheStatus, cacheAction)
+	}
+
+	html += `
+        </table>
+
+        <h2>File Path Results</h2>
         <table>
             <tr>
                 <th>Path</th>
                 <th>Size</th>
                 <th>Last Access</th>
-                <th>Expiration</th>
             </tr>
-    `, query, len(entries))
+    `
 
-	// Display the search results with the information we have
-	for _, entry := range entries {
+	// Add path-based results (existing code)
+	for _, entry := range pathResults {
 		html += fmt.Sprintf(`
             <tr>
                 <td>%s</td>
                 <td>%d bytes</td>
                 <td>%s</td>
-                <td>%s</td>
             </tr>
-        `, entry.Path,
-			entry.Size,
-			entry.LastAccess.Format("2006-01-02 15:04:05"),
-			entry.Expires.Format("2006-01-02 15:04:05"))
+        `, entry.Path, entry.Size, entry.LastAccess.Format("2006-01-02 15:04:05"))
 	}
 
 	html += `
@@ -321,4 +350,42 @@ func (s *Server) adminSearchCache(w http.ResponseWriter, r *http.Request) {
 	if _, err := w.Write([]byte(html)); err != nil {
 		log.Printf("Error writing search results: %v", err)
 	}
+}
+
+// Add this function to internal/server/admin.go
+func (s *Server) adminCachePackage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	path := r.FormValue("path")
+	if path == "" {
+		http.Error(w, "Missing path parameter", http.StatusBadRequest)
+		return
+	}
+
+	// Start package download in background
+	go func() {
+		log.Printf("Admin-triggered package download: %s", path)
+		_, err := s.backend.Fetch("/" + path)
+		if err != nil {
+			log.Printf("Error caching package %s: %v", path, err)
+		} else {
+			log.Printf("Successfully cached package %s", path)
+		}
+	}()
+
+	html := fmt.Sprintf(`
+        <html>
+        <body>
+            <h1>Package Caching Initiated</h1>
+            <p>Started caching %s in the background.</p>
+            <p><a href="/admin">Return to Admin Dashboard</a></p>
+        </body>
+        </html>
+    `, path)
+
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte(html))
 }
