@@ -45,7 +45,9 @@ func (tc *TestCache) UpdatePackageIndex(packages []parser.PackageInfo) error {
 		}
 
 		// Call the real UpdatePackageIndex method if it's accessible
-		tc.Cache.UpdatePackageIndex(packages)
+		if err := tc.Cache.UpdatePackageIndex(packages); err != nil {
+			return err
+		}
 	}
 	return nil
 }
