@@ -5,6 +5,11 @@ listen_address: "0.0.0.0" # Listen on all IPv4 interfaces
 port: 3142
 admin_port: 3143 # Port for admin interface
 
+# Add this new section for HTTPS handling
+https_remap:
+  enabled: true # Enable transparent HTTPS-to-HTTP remapping
+  verify_packages: true # Still verify package signatures
+
 # TLS configuration
 tls_enabled: false
 tls_port: 3144 # Changed to avoid conflict with admin port
@@ -53,6 +58,22 @@ backends:
   - name: "debian-security"
     url: "http://security.debian.org/debian-security"
     priority: 70
+  # Third-party repositories with explicit HTTP URLs
+  - name: "docker"
+    url: "http://download.docker.com/linux/ubuntu"
+    priority: 60
+  - name: "grafana"
+    url: "http://packages.grafana.com/oss/deb"
+    priority: 55
+  - name: "plex"
+    url: "http://downloads.plex.tv/repo/deb"
+    priority: 50
+  - name: "postgresql"
+    url: "http://apt.postgresql.org/pub/repos/apt"
+    priority: 45
+  - name: "hwraid"
+    url: "http://hwraid.le-vert.net/ubuntu"
+    priority: 40
 
 # Advanced mapping rules (optional)
 mapping_rules:
@@ -64,3 +85,33 @@ mapping_rules:
     pattern: "^security\\.debian\\.org/(.*)$"
     repository: "security.debian.org"
     priority: 90
+
+  # Docker rules
+  - type: "prefix"
+    pattern: "docker/linux/ubuntu"
+    repository: "docker"
+    priority: 60
+
+  # Grafana rules
+  - type: "prefix"
+    pattern: "grafana/oss/deb"
+    repository: "grafana"
+    priority: 55
+
+  # Plex rules
+  - type: "prefix"
+    pattern: "plex/repo/deb"
+    repository: "plex"
+    priority: 50
+
+  # PostgreSQL rules
+  - type: "prefix"
+    pattern: "postgresql/pub/repos/apt"
+    repository: "postgresql"
+    priority: 45
+
+  # HWRaid rules
+  - type: "prefix"
+    pattern: "hwraid/ubuntu"
+    repository: "hwraid"
+    priority: 40

@@ -115,6 +115,9 @@ func New(cfg *config.Config) (*Server, error) {
 	mainMux.HandleFunc("/health", s.handleHealth)
 	mainMux.HandleFunc("/ready", s.handleReady)
 
+	// Add HTTPS handler for CONNECT method
+	mainMux.HandleFunc("/https/", s.wrapWithMetrics(s.handleHTTPSRequest))
+
 	// Create and set up admin server if port is different from main port
 	if cfg.AdminPort > 0 && cfg.AdminPort != cfg.Port {
 		// Register admin routes on admin server
@@ -296,6 +299,12 @@ func (rw *responseWriter) WriteHeader(code int) {
 
 // handlePackageRequest handles package download requests
 func (s *Server) handlePackageRequest(w http.ResponseWriter, r *http.Request) {
+	// Check if this is an HTTPS request
+	if r.URL.Scheme == "https" || strings.HasPrefix(r.URL.Path, "/https/") {
+		s.handleHTTPSRequest(w, r)
+		return
+	}
+
 	requestPath := r.URL.Path
 
 	// Start timing the request
