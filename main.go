@@ -12,6 +12,7 @@ import (
 
 	"github.com/jdfalk/apt-cacher-go/cmd/benchmark"
 	"github.com/jdfalk/apt-cacher-go/cmd/serve"
+	"github.com/jdfalk/apt-cacher-go/cmd/admin"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -44,6 +45,7 @@ func init() {
 	// Add subcommands
 	rootCmd.AddCommand(serve.NewCommand())
 	rootCmd.AddCommand(benchmark.NewCommand())
+	rootCmd.AddCommand(admin.NewCommand()) // Add the new admin command
 }
 
 func initConfig() {
