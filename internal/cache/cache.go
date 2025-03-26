@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jdfalk/apt-cacher-go/internal/mapper"
 	"github.com/jdfalk/apt-cacher-go/internal/parser"
 )
 
@@ -47,6 +48,8 @@ type Cache struct {
 	packageIndex       *parser.PackageIndex
 	indexPath          string
 	inProgressRequests sync.Map // Track in-progress requests to prevent duplicates
+	packageMapper      *mapper.PackageMapper
+	updateIndexFunc    func(packages []parser.PackageInfo) error
 }
 
 // New creates a new Cache instance
@@ -92,23 +95,25 @@ func New(baseDir string, maxSizeMB int64) (*Cache, error) {
 // Get attempts to retrieve a file from the cache
 func (c *Cache) Get(key string) ([]byte, bool, error) {
 	// First check if there's already a request in progress for this key
-	if pending, exists := c.inProgressRequests.LoadOrStore(key, make(chan struct{})); exists {
-		// Wait for the other request to complete
-		ch := pending.(chan struct{})
-		<-ch
+	{
+		if pending, exists := c.inProgressRequests.LoadOrStore(key, make(chan struct{})); exists {
+			// Wait for the other request to complete
+			ch := pending.(chan struct{})
+			<-ch
 
-		// Now try to get from cache
-		return c.getFromCache(key)
-	}
-
-	// This is the first request for this key
-	defer func() {
-		// Signal that the request is complete and remove from the map
-		if ch, ok := c.inProgressRequests.Load(key); ok {
-			close(ch.(chan struct{}))
-			c.inProgressRequests.Delete(key)
+			// Now try to get from cache
+			return c.getFromCache(key)
 		}
-	}()
+
+		// This is the first request for this key
+		defer func() {
+			// Signal that the request is complete and remove from the map
+			if ch, ok := c.inProgressRequests.Load(key); ok {
+				close(ch.(chan struct{}))
+				c.inProgressRequests.Delete(key)
+			}
+		}()
+	}
 
 	// Original cache lookup logic follows
 	return c.getFromCache(key)
@@ -332,6 +337,10 @@ func (c *Cache) Search(pattern string) ([]string, error) {
 
 // SearchByPackageName searches for packages by name
 func (c *Cache) SearchByPackageName(query string) ([]CacheSearchResult, error) {
+	if c.packageIndex == nil {
+		return nil, nil
+	}
+
 	results := []CacheSearchResult{}
 
 	packages := c.packageIndex.Search(query)
@@ -512,13 +521,13 @@ func (c *Cache) UpdateExpiration(key string, expiration time.Duration) error {
 	// Check if entry exists in the expiration map
 	_, exists := c.expiration[key]
 	if !exists {
-			// Check if the file actually exists on disk before reporting an error
-			path := c.pathForKey(key)
-			if _, err := os.Stat(path); os.IsNotExist(err) {
-				return fmt.Errorf("cannot update expiration for non-existent cache entry: %s", key)
-			}
-			// File exists but wasn't in our expiration map - add it
-			log.Printf("Adding missing expiration entry for existing file: %s", key)
+		// Check if the file actually exists on disk before reporting an error
+		path := c.pathForKey(key)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			return fmt.Errorf("cannot update expiration for non-existent cache entry: %s", key)
+		}
+		// File exists but wasn't in our expiration map - add it
+		log.Printf("Adding missing expiration entry for existing file: %s", key)
 	}
 
 	// Update expiration time

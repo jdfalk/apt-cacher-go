@@ -116,6 +116,16 @@ func TestPackageMapper(t *testing.T) {
 			path:     "/ubuntu/dists/jammy/Release",
 			expected: "",
 		},
+		{
+			name:     "Empty path",
+			path:     "",
+			expected: "",
+		},
+		{
+			name:     "Invalid path format",
+			path:     "/by-hash/",
+			expected: "",
+		},
 	}
 
 	for _, tc := range testCases {
@@ -124,4 +134,13 @@ func TestPackageMapper(t *testing.T) {
 			assert.Equal(t, tc.expected, result)
 		})
 	}
+
+	// Test multiple hashes
+	pm.AddHashMapping("another-hash", "python3.9")
+
+	result1 := pm.GetPackageNameForHash("/path/by-hash/SHA256/8e4565d1b45eaf04b98c814ddda511ee5a1f80e50568009f24eec817a7797052")
+	assert.Equal(t, "nginx", result1)
+
+	result2 := pm.GetPackageNameForHash("/path/by-hash/SHA256/another-hash")
+	assert.Equal(t, "python3.9", result2)
 }

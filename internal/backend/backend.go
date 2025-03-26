@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jdfalk/apt-cacher-go/internal/cache"
+	cachelib "github.com/jdfalk/apt-cacher-go/internal/cache"
 	"github.com/jdfalk/apt-cacher-go/internal/config"
 	"github.com/jdfalk/apt-cacher-go/internal/mapper"
 	"github.com/jdfalk/apt-cacher-go/internal/parser"
@@ -24,7 +24,7 @@ import (
 // Manager handles connections to upstream repositories
 type Manager struct {
 	backends       []*Backend
-	cache          *cache.Cache
+	cache          *cachelib.Cache
 	client         *http.Client
 	mapper         *mapper.PathMapper
 	downloadCtx    context.Context
@@ -43,7 +43,7 @@ type Backend struct {
 }
 
 // New creates a new backend manager
-func New(cfg *config.Config, cache *cache.Cache, mapper *mapper.PathMapper) *Manager {
+func New(cfg *config.Config, cache *cachelib.Cache, mapper *mapper.PathMapper) *Manager {
 	// Create HTTP client for backends
 	client := &http.Client{
 		Timeout: 30 * time.Second,
@@ -100,39 +100,39 @@ func (m *Manager) Shutdown() {
 
 // Fetch retrieves a package from the appropriate backend
 func (m *Manager) Fetch(requestPath string) ([]byte, error) {
-    // Map the request path to a repository and cache path
-    mappingResult, err := m.mapper.MapPath(requestPath)
-    if (err != nil) {
-        return nil, err
-    }
+	// Map the request path to a repository and cache path
+	mappingResult, err := m.mapper.MapPath(requestPath)
+	if err != nil {
+		return nil, err
+	}
 
-    // Check if the file exists in cache first
-    cacheKey := mappingResult.CachePath
+	// Check if the file exists in cache first
+	cacheKey := mappingResult.CachePath
 
-    // Handle repository signature files specially
-    isSignatureFile := strings.HasSuffix(mappingResult.RemotePath, ".gpg") ||
-        strings.HasSuffix(mappingResult.RemotePath, "InRelease") ||
-        strings.HasSuffix(mappingResult.RemotePath, "Release")
+	// Handle repository signature files specially
+	isSignatureFile := strings.HasSuffix(mappingResult.RemotePath, ".gpg") ||
+		strings.HasSuffix(mappingResult.RemotePath, "InRelease") ||
+		strings.HasSuffix(mappingResult.RemotePath, "Release")
 
-    // Try to get from cache first
-    data, found, err := m.cache.Get(cacheKey)
-    if err == nil && found {
-        // For regular files, always use cache if found
-        if !mappingResult.IsIndex && !isSignatureFile {
-            return data, nil
-        }
+	// Try to get from cache first
+	data, found, err := m.cache.Get(cacheKey)
+	if err == nil && found {
+		// For regular files, always use cache if found
+		if !mappingResult.IsIndex && !isSignatureFile {
+			return data, nil
+		}
 
-        // For index and signature files, check if they are fresh
-        if m.cache.IsFresh(cacheKey) {
-            // If cache is fresh, use it
-            log.Printf("Using cached %s", requestPath)
-            return data, nil
-        }
+		// For index and signature files, check if they are fresh
+		if m.cache.IsFresh(cacheKey) {
+			// If cache is fresh, use it
+			log.Printf("Using cached %s", requestPath)
+			return data, nil
+		}
 
-        // Otherwise, refresh from backend but still return cached data
-        // if backend fails
-        log.Printf("Refreshing %s", requestPath)
-    }
+		// Otherwise, refresh from backend but still return cached data
+		// if backend fails
+		log.Printf("Refreshing %s", requestPath)
+	}
 
 	// Fetch from backend if not found in cache or needs refreshing
 	fileType := "file"
