@@ -58,6 +58,9 @@ backends:
   - name: "debian-security"
     url: "http://security.debian.org/debian-security"
     priority: 70
+  - name: "ubuntu-ports"
+    url: "http://ports.ubuntu.com/ubuntu-ports"
+    priority: 95
   # Third-party repositories with explicit HTTP URLs
   - name: "docker"
     url: "http://download.docker.com/linux/ubuntu"
@@ -115,3 +118,9 @@ mapping_rules:
     pattern: "hwraid/ubuntu"
     repository: "hwraid"
     priority: 40
+
+  # Ubuntu Ports rules
+  - type: "prefix"
+    pattern: "ubuntu-ports"
+    repository: "ubuntu-ports"
+    priority: 95
