@@ -37,6 +37,10 @@ func init() {
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is /etc/apt-cacher-go/config.yaml)")
 
+	// Silence usage on error to prevent confusion
+	rootCmd.SilenceUsage = true
+	rootCmd.SilenceErrors = true
+
 	// Add subcommands
 	rootCmd.AddCommand(serve.NewCommand())
 	rootCmd.AddCommand(benchmark.NewCommand())
@@ -66,7 +70,7 @@ func initConfig() {
 }
 func main() {
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 		os.Exit(1)
 	}
 }
