@@ -28,43 +28,77 @@ func NewCommand() *cobra.Command {
 		},
 	}
 
-	// Add flags
+	// Add flags - keep current defaults for compatibility
 	cmd.Flags().StringVar(&cfgFile, "config", "", "config file (default is /etc/apt-cacher-go/config.yaml)")
-	cmd.Flags().StringVar(&cacheDir, "cache-dir", "/var/cache/apt-cacher-go", "Directory for cached packages")
-	cmd.Flags().StringVar(&listenAddr, "listen", ":3142", "Address to listen on")
+	cmd.Flags().StringVar(&cacheDir, "cache-dir", "", "Directory for cached packages (overrides config file)")
+	cmd.Flags().StringVar(&listenAddr, "listen", "", "Address to listen on (overrides config file)")
 	cmd.Flags().StringVar(&logLevel, "log-level", "info", "Logging level (debug, info, warn, error)")
 
 	return cmd
 }
 
 func runServe() error {
-	// Configure from viper/flags
-	cfg := &config.Config{
-		CacheDir:      cacheDir,
-		ListenAddress: listenAddr, // Fixed field name to match config.Config
-		// LogLevel is not in Config, so we don't set it here
+	// Load configuration from file first
+	var cfg *config.Config
+	var err error
+
+	if cfgFile != "" {
+		// Load and validate with debug output to help troubleshoot
+		log.Printf("Loading config from: %s", cfgFile)
+		cfg, err = config.LoadConfigFileWithDebug(cfgFile)
+	} else {
+		// Try default locations
+		defaultLocations := []string{
+			"/etc/apt-cacher-go/config.yaml",
+			"./config.yaml",
+		}
+
+		for _, loc := range defaultLocations {
+			if _, err := os.Stat(loc); err == nil {
+				log.Printf("Found config at default location: %s", loc)
+				cfg, err = config.LoadConfigFileWithDebug(loc)
+				if err == nil {
+					break
+				}
+			}
+		}
+
+		// If still no config, use empty config
+		if cfg == nil {
+			cfg = &config.Config{
+				CacheDir:      "/var/cache/apt-cacher-go",
+				ListenAddress: "0.0.0.0",
+				Port:          3142,
+			}
+			log.Printf("No config file found, using defaults")
+		}
 	}
 
-	// Override with direct flag values if provided
+	if err != nil {
+		return fmt.Errorf("config loading error: %w", err)
+	}
+
+	// Override with command-line flags if provided
 	if cacheDir != "" {
+		log.Printf("Overriding cache_dir from flag: %s", cacheDir)
 		cfg.CacheDir = cacheDir
 	}
+
 	if listenAddr != "" {
-		cfg.ListenAddress = listenAddr // Fixed field name
-	}
-	// Log level requires additional handling since it's not in config.Config
-
-	// Ensure cache directory exists
-	if err := os.MkdirAll(cfg.CacheDir, 0755); err != nil {
-		return fmt.Errorf("failed to create cache directory: %w", err)
+		log.Printf("Overriding listen_address from flag: %s", listenAddr)
+		cfg.ListenAddress = listenAddr
 	}
 
-	// Create and start server
-	srv, err := server.New(cfg) // Use server.New instead of server.NewServer
+	// Log final configuration being used
+	log.Printf("FINAL CONFIG - Using cache directory: %s", cfg.CacheDir)
+	log.Printf("FINAL CONFIG - Using listen address: %s:%d", cfg.ListenAddress, cfg.Port)
+
+	// Create and start server - removed our own MkdirAll since it's handled in server.New
+	srv, err := server.New(cfg)
 	if err != nil {
-		return fmt.Errorf("failed to initialize server: %w", err)
+		return fmt.Errorf("server initialization failed: %w", err)
 	}
 
-	log.Printf("Starting apt-cacher-go server on %s:%d\n", cfg.ListenAddress, cfg.Port)
+	log.Printf("Starting apt-cacher-go server on %s:%d", cfg.ListenAddress, cfg.Port)
 	return srv.Start()
 }
