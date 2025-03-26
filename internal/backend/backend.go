@@ -126,6 +126,83 @@ func (m *Manager) Fetch(requestPath string) ([]byte, error) {
 		// Otherwise fall through to backend fetch
 	}
 
+	// Handle repository signature files specially
+	isSignatureFile := strings.HasSuffix(mappingResult.RemotePath, ".gpg") ||
+		strings.HasSuffix(mappingResult.RemotePath, "InRelease") ||
+		strings.HasSuffix(mappingResult.RemotePath, "Release")
+
+	if isSignatureFile {
+		// Always fetch these files fresh, don't reuse potentially stale signatures
+		log.Printf("Fetching signature file: %s", mappingResult.RemotePath)
+
+		// Select backend based on the repository name
+		backend, err := m.selectBackendByName(mappingResult.Repository)
+		if err != nil {
+			return nil, err
+		}
+
+		// Construct full URL
+		u, err := url.Parse(backend.BaseURL)
+		if err != nil {
+			return nil, fmt.Errorf("invalid backend URL: %w", err)
+		}
+		u.Path = path.Join(u.Path, mappingResult.RemotePath)
+		fullURL := u.String()
+
+		data, err := m.downloadFromURL(fullURL)
+		if err != nil {
+			return nil, err
+		}
+
+		// Cache it but with a shorter TTL
+		expiration := 30 * time.Minute // Short TTL for signature files
+		if err := m.cache.UpdateExpiration(cacheKey, expiration); err != nil {
+			log.Printf("Warning: failed to update cache expiration for signature file %s: %v", cacheKey, err)
+			// Continue execution as this isn't a fatal error
+		}
+		if err := m.storeCachedFile(data, cacheKey); err != nil {
+			log.Printf("Warning: failed to cache signature file %s: %v", cacheKey, err)
+		}
+		return data, nil
+	}
+	// Handle index files (metadata) when they aren't in cache or need refreshing
+	if mappingResult.IsIndex {
+		// Select backend based on the repository name
+		backend, err := m.selectBackendByName(mappingResult.Repository)
+		if err != nil {
+			return nil, err
+		}
+
+		// Construct full URL
+		u, err := url.Parse(backend.BaseURL)
+		if err != nil {
+			return nil, fmt.Errorf("invalid backend URL: %w", err)
+		}
+		u.Path = path.Join(u.Path, mappingResult.RemotePath)
+		fullURL := u.String()
+
+		// Direct download for index files to ensure freshness
+		data, err := m.downloadFromURL(fullURL)
+		if err != nil {
+			return nil, err
+		}
+
+		// Cache with appropriate expiration
+		expiration := 30 * time.Minute // Index files expire quickly
+		if err := m.cache.UpdateExpiration(cacheKey, expiration); err != nil {
+			log.Printf("Warning: failed to update cache expiration for %s: %v", cacheKey, err)
+		}
+		if err := m.storeCachedFile(data, cacheKey); err != nil {
+			log.Printf("Warning: failed to cache index file %s: %v", cacheKey, err)
+		}
+
+		// Process index files in the background if appropriate
+		if strings.Contains(mappingResult.RemotePath, "Packages") {
+			go m.prefetcher.ProcessIndexFile(mappingResult.Repository, mappingResult.RemotePath, data)
+		}
+
+		return data, nil
+	}
 	// Select backend based on the repository name
 	backend, err := m.selectBackendByName(mappingResult.Repository)
 	if err != nil {

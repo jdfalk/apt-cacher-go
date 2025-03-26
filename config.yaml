@@ -1,31 +1,43 @@
 # apt-cacher-go advanced configuration
 
 # Server configuration
-listen_address: "0.0.0.0"
+listen_address: "0.0.0.0" # Listen on all IPv4 interfaces
 port: 3142
+admin_port: 3143 # Port for admin interface
 
 # TLS configuration
 tls_enabled: false
-tls_port: 3143
-tls_cert_file: "/etc/apt-cacher-go/cert.pem"
-tls_key_file: "/etc/apt-cacher-go/key.pem"
+tls_port: 3144 # Changed to avoid conflict with admin port
+tls_cert: "/etc/apt-cacher-go/cert.pem"
+tls_key: "/etc/apt-cacher-go/key.pem"
+log_file: "/var/log/apt-cacher-go.log"
+log_level: "info"
 
 # Cache configuration
-cache_dir: "/var/cache/apt-cacher-go"
-max_cache_size: 40960 # 40GB
-cleanup_interval: 1 # Run cleanup every hour
+cache_dir: "/mnt/bigdata/apt-cache-go"
+cache_size: "40G"
+cleanup_freq: "1h"
+
+# Cache TTLs
+cache_ttls:
+  index: "1h" # Release files expire quickly
+  package: "30d" # Packages can be cached longer
 
 # Security
 allowed_ips:
-  - "0.0.0.0/0" # Allow all by default
-admin_auth: "admin:password" # Change this in production!
+  - "0.0.0.0/0" # Allow all IPv4
+  - "::/0" # Allow all IPv6
+rate_limit: 100 # Requests per minute per IP
+auth_enabled: false
+admin_auth: false
+admin_user: "admin"
+admin_password: "password"
+
+# Metrics
+metrics_enabled: true
 
 # Download queue
 max_concurrent_downloads: 10
-
-# Prefetching
-prefetch_enabled: true
-max_prefetches:
 
 # Repository backends
 backends:
@@ -41,3 +53,14 @@ backends:
   - name: "debian-security"
     url: "http://security.debian.org/debian-security"
     priority: 70
+
+# Advanced mapping rules (optional)
+mapping_rules:
+  - type: "regex"
+    pattern: "^(debian|ubuntu)/dists/(.*)$"
+    repository: "%s"
+    priority: 100
+  - type: "regex"
+    pattern: "^security\\.debian\\.org/(.*)$"
+    repository: "security.debian.org"
+    priority: 90

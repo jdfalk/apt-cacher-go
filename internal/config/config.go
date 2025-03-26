@@ -2,7 +2,9 @@ package config
 
 import (
 	"fmt"
-	"os" // Replace io/ioutil with os
+	"log"
+	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v2"
@@ -75,8 +77,32 @@ func LoadConfigFile(path string) (*Config, error) {
 		return nil, err
 	}
 
+	// First unmarshal into a map to handle string vs bool for admin_auth
+	var configMap map[string]interface{}
+	if err := yaml.Unmarshal(data, &configMap); err != nil {
+		return nil, err
+	}
+
+	// Check if admin_auth is a string and contains a colon
+	if authVal, ok := configMap["admin_auth"]; ok {
+		if authStr, ok := authVal.(string); ok && strings.Contains(authStr, ":") {
+			// It's "user:password" format, split and set the appropriate fields
+			parts := strings.SplitN(authStr, ":", 2)
+			configMap["admin_auth"] = true
+			configMap["admin_user"] = parts[0]
+			configMap["admin_password"] = parts[1]
+		}
+	}
+
+	// Serialize back to YAML
+	correctedData, err := yaml.Marshal(configMap)
+	if err != nil {
+		return nil, err
+	}
+
+	// Now unmarshal into the Config struct
 	config := &Config{}
-	if err := yaml.Unmarshal(data, config); err != nil {
+	if err := yaml.Unmarshal(correctedData, config); err != nil {
 		return nil, err
 	}
 
@@ -102,6 +128,31 @@ func LoadConfigFile(path string) (*Config, error) {
 		config.CacheTTLs = map[string]string{
 			"index":   "1h",
 			"package": "30d",
+		}
+	}
+
+	// Apply defaults for security
+	if len(config.AllowedIPs) == 0 {
+		// Default to allowing all IPs
+		config.AllowedIPs = []string{"0.0.0.0/0", "::/0"}
+	} else {
+		// Check if we need to add IPv6 support
+		hasIPv4All := false
+		hasIPv6All := false
+
+		for _, ip := range config.AllowedIPs {
+			if ip == "0.0.0.0/0" {
+				hasIPv4All = true
+			}
+			if ip == "::/0" {
+				hasIPv6All = true
+			}
+		}
+
+		// If allowing all IPv4 but not IPv6, add IPv6
+		if hasIPv4All && !hasIPv6All {
+			config.AllowedIPs = append(config.AllowedIPs, "::/0")
+			log.Printf("Added IPv6 support (`::/0`) to allowed IPs")
 		}
 	}
 

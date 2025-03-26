@@ -23,6 +23,7 @@ type Server struct {
 	cfg         *config.Config
 	httpServer  *http.Server
 	httpsServer *http.Server
+	adminServer *http.Server // New field for admin server
 	cache       *cache.Cache
 	backend     *backend.Manager
 	metrics     *metrics.Collector
@@ -82,8 +83,11 @@ func New(cfg *config.Config) (*Server, error) {
 		return nil, fmt.Errorf("failed to initialize ACL: %w", err)
 	}
 
-	// Create HTTP handler
-	mux := http.NewServeMux()
+	// Create main HTTP handler
+	mainMux := http.NewServeMux()
+
+	// Create admin HTTP handler
+	adminMux := http.NewServeMux()
 
 	s := &Server{
 		cfg:        cfg,
@@ -98,26 +102,51 @@ func New(cfg *config.Config) (*Server, error) {
 		logger:     log.New(os.Stdout, "apt-cacher-go: ", log.LstdFlags), // Initialize logger
 		httpServer: &http.Server{
 			Addr:    fmt.Sprintf("%s:%d", cfg.ListenAddress, cfg.Port),
-			Handler: acl.Middleware(mux),
+			Handler: acl.Middleware(mainMux),
 		},
 	}
 
-	// Register handlers
-	mux.HandleFunc("/", s.wrapWithMetrics(s.handlePackageRequest))
-	mux.HandleFunc("/acng-report.html", s.wrapWithMetrics(s.handleReportRequest))
+	// Register main handlers (non-admin routes)
+	mainMux.HandleFunc("/", s.wrapWithMetrics(s.handlePackageRequest))
+	mainMux.HandleFunc("/acng-report.html", s.wrapWithMetrics(s.handleReportRequest))
 
-	// Admin routes
-	mux.HandleFunc("/admin", s.handleAdminAuth(s.adminDashboard))
-	mux.HandleFunc("/admin/", s.handleAdminAuth(s.adminDashboard))
-	mux.HandleFunc("/admin/clearcache", s.handleAdminAuth(s.adminClearCache))
-	mux.HandleFunc("/admin/flushexpired", s.handleAdminAuth(s.adminFlushExpired))
-	mux.HandleFunc("/admin/stats", s.handleAdminAuth(s.adminGetStats))
-	mux.HandleFunc("/admin/search", s.handleAdminAuth(s.adminSearchCache))
+	// Monitoring and health endpoints on main server
+	mainMux.HandleFunc("/metrics", s.handleMetrics)
+	mainMux.HandleFunc("/health", s.handleHealth)
+	mainMux.HandleFunc("/ready", s.handleReady)
 
-	// Monitoring and health endpoints
-	mux.HandleFunc("/metrics", s.handleMetrics)
-	mux.HandleFunc("/health", s.handleHealth)
-	mux.HandleFunc("/ready", s.handleReady)
+	// Create and set up admin server if port is different from main port
+	if cfg.AdminPort > 0 && cfg.AdminPort != cfg.Port {
+		// Register admin routes on admin server
+		adminMux.HandleFunc("/", s.handleAdminAuth(s.adminDashboard))
+		adminMux.HandleFunc("/admin", s.handleAdminAuth(s.adminDashboard))
+		adminMux.HandleFunc("/admin/", s.handleAdminAuth(s.adminDashboard))
+		adminMux.HandleFunc("/admin/clearcache", s.handleAdminAuth(s.adminClearCache))
+		adminMux.HandleFunc("/admin/flushexpired", s.handleAdminAuth(s.adminFlushExpired))
+		adminMux.HandleFunc("/admin/stats", s.handleAdminAuth(s.adminGetStats))
+		adminMux.HandleFunc("/admin/search", s.handleAdminAuth(s.adminSearchCache))
+
+		// Create admin server
+		s.adminServer = &http.Server{
+			Addr:    fmt.Sprintf("%s:%d", cfg.ListenAddress, cfg.AdminPort),
+			Handler: acl.Middleware(adminMux),
+		}
+
+		log.Printf("Admin interface will be available at http://%s:%d/",
+			cfg.ListenAddress, cfg.AdminPort)
+	} else {
+		// If admin port is same as main port or not configured,
+		// add admin routes to main server
+		mainMux.HandleFunc("/admin", s.handleAdminAuth(s.adminDashboard))
+		mainMux.HandleFunc("/admin/", s.handleAdminAuth(s.adminDashboard))
+		mainMux.HandleFunc("/admin/clearcache", s.handleAdminAuth(s.adminClearCache))
+		mainMux.HandleFunc("/admin/flushexpired", s.handleAdminAuth(s.adminFlushExpired))
+		mainMux.HandleFunc("/admin/stats", s.handleAdminAuth(s.adminGetStats))
+		mainMux.HandleFunc("/admin/search", s.handleAdminAuth(s.adminSearchCache))
+
+		log.Printf("Admin interface will be available at http://%s:%d/admin",
+			cfg.ListenAddress, cfg.Port)
+	}
 
 	// If TLS is configured, set up HTTPS server
 	if cfg.TLSEnabled && cfg.TLSCert != "" && cfg.TLSKey != "" {
@@ -135,7 +164,7 @@ func New(cfg *config.Config) (*Server, error) {
 
 		s.httpsServer = &http.Server{
 			Addr:      fmt.Sprintf("%s:%d", cfg.ListenAddress, cfg.TLSPort),
-			Handler:   acl.Middleware(mux),
+			Handler:   acl.Middleware(mainMux),
 			TLSConfig: tlsConfig,
 		}
 	}
@@ -145,6 +174,16 @@ func New(cfg *config.Config) (*Server, error) {
 
 // Start begins listening for HTTP requests
 func (s *Server) Start() error {
+	// Start admin server if configured
+	if s.adminServer != nil {
+		go func() {
+			log.Printf("Starting admin server on %s", s.adminServer.Addr)
+			if err := s.adminServer.ListenAndServe(); err != http.ErrServerClosed {
+				log.Printf("Admin server error: %v", err)
+			}
+		}()
+	}
+
 	// Start HTTPS server if configured
 	if s.httpsServer != nil {
 		go func() {
@@ -169,6 +208,13 @@ func (s *Server) Shutdown() error {
 
 	// Shutdown the backend
 	s.backend.Shutdown()
+
+	// Shutdown admin server if it exists
+	if s.adminServer != nil {
+		if err := s.adminServer.Shutdown(ctx); err != nil {
+			log.Printf("Error shutting down admin server: %v", err)
+		}
+	}
 
 	// Shutdown HTTPS server if it exists
 	if s.httpsServer != nil {
@@ -390,8 +436,14 @@ func (s *Server) handleReportRequest(w http.ResponseWriter, r *http.Request) {
 // handleAdminAuth wraps a handler function with admin authentication
 func (s *Server) handleAdminAuth(handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		username, password, ok := r.BasicAuth()
+		// If admin auth is disabled, skip authentication entirely
+		if !s.cfg.AdminAuth {
+			handler(w, r)
+			return
+		}
 
+		// Otherwise require auth
+		username, password, ok := r.BasicAuth()
 		if !ok || !s.validateAdminAuth(username, password) {
 			w.Header().Set("WWW-Authenticate", `Basic realm="apt-cacher-go Admin"`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -404,10 +456,19 @@ func (s *Server) handleAdminAuth(handler http.HandlerFunc) http.HandlerFunc {
 
 // validateAdminAuth checks if the provided credentials match the configured admin auth
 func (s *Server) validateAdminAuth(username, password string) bool {
-	if !s.cfg.AdminAuth || s.cfg.AdminUser == "" || s.cfg.AdminPassword == "" {
+	// If admin auth is disabled, all auth requests should pass
+	if !s.cfg.AdminAuth {
+		return true
+	}
+
+	// Otherwise, check credentials
+	if s.cfg.AdminUser == "" || s.cfg.AdminPassword == "" {
+		// Missing credentials, deny access
+		log.Printf("Admin auth enabled but credentials not configured")
 		return false
 	}
 
+	// Check the provided credentials
 	return username == s.cfg.AdminUser && password == s.cfg.AdminPassword
 }
 
