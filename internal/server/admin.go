@@ -398,5 +398,7 @@ func (s *Server) adminCachePackage(w http.ResponseWriter, r *http.Request) {
     `, path)
 
 	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(html))
+	if _, err := w.Write([]byte(html)); err != nil {
+		log.Printf("Error writing cache package response: %v", err)
+	}
 }

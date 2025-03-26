@@ -52,6 +52,9 @@ func New(cfg *config.Config) (*Server, error) {
 	// Create advanced path mapper
 	m := mapper.New()
 
+	// Add default repositories if not disabled
+	addDefaultRepositories(cfg, m)
+
 	// Register custom mapping rules from config
 	for _, rule := range cfg.MappingRules {
 		fmt.Printf("Adding mapping rule: %s %s -> %s (priority: %d)\n",
@@ -505,4 +508,58 @@ func (s *Server) TLSPort() int {
 		return s.cfg.TLSPort
 	}
 	return 0
+}
+
+// addDefaultRepositories adds default repository backends and mappings if enabled
+func addDefaultRepositories(cfg *config.Config, m *mapper.PathMapper) {
+	// Skip if default repos are disabled
+	if cfg.DisableDefaultRepos {
+		log.Printf("Default repositories disabled via configuration")
+		return
+	}
+
+	// Add standard Debian/Ubuntu repositories if none defined
+	if len(cfg.Backends) == 0 {
+		log.Printf("Adding default repository backends")
+
+		cfg.Backends = append(cfg.Backends, []config.Backend{
+			{Name: "ubuntu-archive", URL: "http://archive.ubuntu.com/ubuntu", Priority: 100},
+			{Name: "ubuntu-security", URL: "http://security.ubuntu.com/ubuntu", Priority: 95},
+			{Name: "debian", URL: "http://deb.debian.org/debian", Priority: 90},
+			{Name: "debian-security", URL: "http://security.debian.org/debian-security", Priority: 85},
+			{Name: "debian-backports", URL: "http://deb.debian.org/debian-backports", Priority: 80},
+			{Name: "ubuntu-ports", URL: "http://ports.ubuntu.com/ubuntu-ports", Priority: 75},
+			{Name: "kali", URL: "http://http.kali.org/kali", Priority: 70},
+		}...)
+	}
+
+	// Add default mapping rules if none defined
+	if len(cfg.MappingRules) == 0 {
+		log.Printf("Adding default repository mapping rules")
+
+		// Default handling for common third-party repositories
+		defaultMappings := []struct {
+			repoName string
+			pattern  string
+			priority int
+		}{
+			{"docker", "download.docker.com/linux/ubuntu", 60},
+			{"grafana", "packages.grafana.com/oss/deb", 55},
+			{"plex", "downloads.plex.tv/repo/deb", 50},
+			{"postgresql", "apt.postgresql.org/pub/repos/apt", 45},
+			{"hwraid", "hwraid.le-vert.net/ubuntu", 40},
+		}
+
+		for _, mapping := range defaultMappings {
+			m.AddPrefixRule(mapping.pattern, mapping.repoName, mapping.priority)
+
+			// Add to MappingRules list for config consistency
+			cfg.MappingRules = append(cfg.MappingRules, config.MappingRule{
+				Type:       "prefix",
+				Pattern:    mapping.pattern,
+				Repository: mapping.repoName,
+				Priority:   mapping.priority,
+			})
+		}
+	}
 }

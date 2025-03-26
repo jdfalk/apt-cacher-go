@@ -52,6 +52,9 @@ type Config struct {
 	// Prefetching
 	PrefetchEnabled bool `yaml:"prefetch_enabled"`
 	MaxPrefetches   int  `yaml:"max_prefetches"`
+
+	// Default repositories
+	DisableDefaultRepos bool `yaml:"disable_default_repos"`
 }
 
 // Backend represents a repository backend

@@ -44,23 +44,11 @@ metrics_enabled: true
 # Download queue
 max_concurrent_downloads: 10
 
+# Repository configuration
+disable_default_repos: false # Set to true to disable built-in repository definitions
+
 # Repository backends
 backends:
-  - name: "ubuntu-archive"
-    url: "http://archive.ubuntu.com/ubuntu"
-    priority: 100
-  - name: "ubuntu-security"
-    url: "http://security.ubuntu.com/ubuntu"
-    priority: 90
-  - name: "debian"
-    url: "http://deb.debian.org/debian"
-    priority: 80
-  - name: "debian-security"
-    url: "http://security.debian.org/debian-security"
-    priority: 70
-  - name: "ubuntu-ports"
-    url: "http://ports.ubuntu.com/ubuntu-ports"
-    priority: 95
   # Third-party repositories with explicit HTTP URLs
   - name: "docker"
     url: "http://download.docker.com/linux/ubuntu"
@@ -80,15 +68,6 @@ backends:
 
 # Advanced mapping rules (optional)
 mapping_rules:
-  - type: "regex"
-    pattern: "^(debian|ubuntu)/dists/(.*)$"
-    repository: "%s"
-    priority: 100
-  - type: "regex"
-    pattern: "^security\\.debian\\.org/(.*)$"
-    repository: "security.debian.org"
-    priority: 90
-
   # Docker rules
   - type: "prefix"
     pattern: "docker/linux/ubuntu"
@@ -118,9 +97,3 @@ mapping_rules:
     pattern: "hwraid/ubuntu"
     repository: "hwraid"
     priority: 40
-
-  # Ubuntu Ports rules
-  - type: "prefix"
-    pattern: "ubuntu-ports"
-    repository: "ubuntu-ports"
-    priority: 95
