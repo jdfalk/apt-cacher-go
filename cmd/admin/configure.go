@@ -81,7 +81,13 @@ func configureAptClient(host string, port, tlsPort int, useTLS bool) error {
 	// Offer to test configuration
 	fmt.Print("Would you like to test the configuration with 'apt update'? (y/n) ")
 	var response string
-	fmt.Scanln(&response)
+	_, err := fmt.Scanln(&response)
+	if err != nil {
+		// Handle error gracefully - default to "no" if there's an input error
+		fmt.Printf("Error reading input: %v. Assuming 'no'.\n", err)
+		response = "n"
+	}
+
 	if response == "y" || response == "Y" || response == "yes" || response == "Yes" {
 		fmt.Println("Running apt update to test configuration...")
 		cmd := exec.Command("apt", "update")
