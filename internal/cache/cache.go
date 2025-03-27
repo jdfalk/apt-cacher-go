@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jdfalk/apt-cacher-go/internal/mapper"
 	"github.com/jdfalk/apt-cacher-go/internal/parser"
 )
 
@@ -48,8 +47,6 @@ type Cache struct {
 	packageIndex       *parser.PackageIndex
 	indexPath          string
 	inProgressRequests sync.Map // Track in-progress requests to prevent duplicates
-	packageMapper      *mapper.PackageMapper
-	updateIndexFunc    func(packages []parser.PackageInfo) error
 }
 
 // New creates a new Cache instance

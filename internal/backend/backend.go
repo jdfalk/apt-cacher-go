@@ -417,11 +417,9 @@ func (m *Manager) ProcessPackagesFile(repo string, path string, data []byte) {
 		return
 	}
 
-	// Store package information in cache - use interface type check instead of function nil check
-	if updateFunc := m.cache.UpdatePackageIndex; updateFunc != nil {
-		if err := updateFunc(packages); err != nil {
-			log.Printf("Error updating package index: %v", err)
-		}
+	// Store package information in cache - directly call the method
+	if err := m.cache.UpdatePackageIndex(packages); err != nil {
+		log.Printf("Error updating package index: %v", err)
 	}
 
 	// Populate package mapper with hash information
