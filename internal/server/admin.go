@@ -99,6 +99,9 @@ func (s *Server) adminDashboard(w http.ResponseWriter, r *http.Request) {
             <form method="post" action="/admin/flushexpired" style="display:inline;">
                 <button type="submit">Flush Expired Items</button>
             </form>
+            <form method="post" action="/admin/cleanup-prefetcher" style="display:inline;">
+                <button type="submit">Cleanup Prefetcher</button>
+            </form>
         </div>
 
         <div>

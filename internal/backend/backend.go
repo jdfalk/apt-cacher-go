@@ -27,6 +27,7 @@ type Manager struct {
 	cache          *cachelib.Cache
 	client         *http.Client
 	mapper         *mapper.PathMapper
+	packageMapper  *mapper.PackageMapper // Add this line
 	downloadCtx    context.Context
 	downloadCancel context.CancelFunc // Added field to store the cancel function
 	downloadQ      *queue.Queue
@@ -43,7 +44,7 @@ type Backend struct {
 }
 
 // New creates a new backend manager
-func New(cfg *config.Config, cache *cachelib.Cache, mapper *mapper.PathMapper) *Manager {
+func New(cfg *config.Config, cache *cachelib.Cache, mapper *mapper.PathMapper, packageMapper *mapper.PackageMapper) *Manager {
 	// Create HTTP client for backends
 	client := &http.Client{
 		Timeout: 30 * time.Second,
@@ -67,7 +68,8 @@ func New(cfg *config.Config, cache *cachelib.Cache, mapper *mapper.PathMapper) *
 		backends:       backends,
 		cache:          cache,
 		client:         client,
-		mapper:         mapper, // Use the provided mapper instead of creating a new one
+		mapper:         mapper,        // Use the provided mapper instead of creating a new one
+		packageMapper:  packageMapper, // Add this line
 		downloadCtx:    downloadCtx,
 		downloadCancel: downloadCancel, // Store the cancel function
 		cacheDir:       cfg.CacheDir,
@@ -409,19 +411,31 @@ func (m *Manager) storeCachedFile(data []byte, cacheKey string) error {
 
 // ProcessPackagesFile processes package index files
 func (m *Manager) ProcessPackagesFile(repo string, path string, data []byte) {
-	if strings.Contains(path, "Packages") {
-		packages, err := parser.ParsePackagesFile(data)
-		if err == nil {
-			// Update package index
-			err := m.cache.UpdatePackageIndex(packages)
-			if err != nil {
-				log.Printf("Warning: failed to update package index: %v", err)
-			}
+	packages, err := parser.ParsePackages(data)
+	if err != nil {
+		log.Printf("Error parsing packages file: %v", err)
+		return
+	}
 
-			// Process packages for prefetching
-			go m.prefetcher.ProcessIndexFile(repo, path, data)
+	// Store package information in cache - use interface type check instead of function nil check
+	if updateFunc := m.cache.UpdatePackageIndex; updateFunc != nil {
+		if err := updateFunc(packages); err != nil {
+			log.Printf("Error updating package index: %v", err)
 		}
 	}
+
+	// Populate package mapper with hash information
+	if m.packageMapper != nil {
+		for _, pkg := range packages {
+			if pkg.SHA256 != "" {
+				m.packageMapper.AddHashMapping(pkg.SHA256, pkg.Package)
+				log.Printf("Added hash mapping: %s -> %s", pkg.SHA256, pkg.Package)
+			}
+		}
+	}
+
+	// If you want to also trigger prefetching
+	m.prefetcher.ProcessIndexFile(repo, path, data)
 }
 
 // ForceCleanupPrefetcher forces cleanup of stale prefetch operations

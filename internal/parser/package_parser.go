@@ -18,7 +18,7 @@ type PackageInfo struct {
 	Architecture string
 	Filename     string
 	Size         string
-	MD5Sum       string
+	MD5sum       string
 	SHA1         string
 	SHA256       string
 	Description  string
@@ -137,7 +137,7 @@ func ParsePackagesFile(data []byte) ([]PackageInfo, error) {
 			case "Size":
 				pkg.Size = value
 			case "MD5sum":
-				pkg.MD5Sum = value
+				pkg.MD5sum = value
 			case "SHA1":
 				pkg.SHA1 = value
 			case "SHA256":
@@ -158,17 +158,17 @@ func ParsePackagesFile(data []byte) ([]PackageInfo, error) {
 
 // ParsePackagesFileWithIndex parses a Packages file and builds an index
 func ParsePackagesFileWithIndex(data []byte, index *PackageIndex) ([]PackageInfo, error) {
-    packages, err := ParsePackagesFile(data)
-    if err != nil {
-        return nil, err
-    }
+	packages, err := ParsePackagesFile(data)
+	if err != nil {
+		return nil, err
+	}
 
-    // Add packages to index
-    for _, pkg := range packages {
-        index.AddPackage(pkg)
-    }
+	// Add packages to index
+	for _, pkg := range packages {
+		index.AddPackage(pkg)
+	}
 
-    return packages, nil
+	return packages, nil
 }
 
 // ParseReleaseFile parses a Release file
@@ -271,4 +271,65 @@ func ParseIndexFilenames(releaseData []byte) ([]string, error) {
 	}
 
 	return filenames, nil
+}
+
+// ParsePackages parses a Debian Packages file and returns a slice of PackageInfo structs
+func ParsePackages(data []byte) ([]PackageInfo, error) {
+	var packages []PackageInfo
+	var currentPackage *PackageInfo
+
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		// Empty line marks the end of a package entry
+		if strings.TrimSpace(line) == "" {
+			if currentPackage != nil && currentPackage.Package != "" {
+				packages = append(packages, *currentPackage)
+				currentPackage = nil
+			}
+			continue
+		}
+
+		// Start a new package if we don't have one
+		if currentPackage == nil {
+			currentPackage = &PackageInfo{}
+		}
+
+		// Parse field: value pairs
+		if strings.Contains(line, ":") {
+			parts := strings.SplitN(line, ":", 2)
+			field := strings.TrimSpace(parts[0])
+			value := strings.TrimSpace(parts[1])
+
+			switch field {
+			case "Package":
+				currentPackage.Package = value
+			case "Version":
+				currentPackage.Version = value
+			case "Architecture":
+				currentPackage.Architecture = value
+			case "Filename":
+				currentPackage.Filename = value
+			case "Size":
+				currentPackage.Size = value
+			case "MD5sum":
+				currentPackage.MD5sum = value
+			case "SHA1":
+				currentPackage.SHA1 = value
+			case "SHA256":
+				currentPackage.SHA256 = value
+			case "Description":
+				currentPackage.Description = value
+			}
+		}
+	}
+
+	// Add the last package if there was no empty line at the end
+	if currentPackage != nil && currentPackage.Package != "" {
+		packages = append(packages, *currentPackage)
+	}
+
+	return packages, scanner.Err()
 }

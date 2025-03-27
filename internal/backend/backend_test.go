@@ -17,7 +17,7 @@ import (
 // TestCache wraps the real cache for testing purposes
 type TestCache struct {
 	*cache.Cache
-	packageMapper *mapper.PackageMapper
+	PackageMapper *mapper.PackageMapper // Change to capital P to make it exported
 }
 
 // UpdatePackageIndex is our test implementation that adds packages to the index
@@ -36,11 +36,11 @@ func (tc *TestCache) UpdatePackageIndex(packages []parser.PackageInfo) error {
 
 				// Add hash mapping for search
 				if hashPart != "" && pkg.Package != "" {
-					tc.packageMapper.AddHashMapping(hashPart, pkg.Package)
+					tc.PackageMapper.AddHashMapping(hashPart, pkg.Package) // Fixed to use exported field
 				}
 			} else if pkg.SHA256 != "" {
 				// If we have the SHA256 hash directly, add that mapping
-				tc.packageMapper.AddHashMapping(pkg.SHA256, pkg.Package)
+				tc.PackageMapper.AddHashMapping(pkg.SHA256, pkg.Package) // Fixed to use exported field
 			}
 		}
 
@@ -102,11 +102,11 @@ func TestProcessPackagesFile(t *testing.T) {
 	// Create our test cache wrapper
 	testCache := &TestCache{
 		Cache:         realCache,
-		packageMapper: packageMapper,
+		PackageMapper: packageMapper,
 	}
 
 	pathMapper := mapper.New()
-	manager := New(cfg, testCache.Cache, pathMapper)
+	manager := New(cfg, testCache.Cache, pathMapper, packageMapper)
 
 	// Test processing packages file
 	repo := "test-repo"

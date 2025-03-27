@@ -140,19 +140,19 @@ func (c *Collector) RecordCacheHit(path string, bytes int64) {
 	}
 }
 
-// RecordCacheMiss records a cache miss
+// RecordCacheMiss records a cache miss for a given path
 func (c *Collector) RecordCacheMiss(path string, bytes int64) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-
 	c.cacheMisses++
 	c.bytesServed += bytes
+}
 
-	// Update the most recent request
-	if len(c.requests) > 0 {
-		c.requests[len(c.requests)-1].Result = "miss"
-		c.requests[len(c.requests)-1].Bytes = bytes
-	}
+// RecordBytesServed records the number of bytes served
+func (c *Collector) RecordBytesServed(bytes int64) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	c.bytesServed += bytes
 }
 
 // RecordError records an error

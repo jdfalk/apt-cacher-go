@@ -93,12 +93,16 @@ func runServe() error {
 	log.Printf("FINAL CONFIG - Using cache directory: %s", cfg.CacheDir)
 	log.Printf("FINAL CONFIG - Using listen address: %s:%d", cfg.ListenAddress, cfg.Port)
 
-	// Create and start server - removed our own MkdirAll since it's handled in server.New
-	srv, err := server.New(cfg)
+	return runServer(cfg)
+}
+
+func runServer(cfg *config.Config) error {
+	// Create the server using the simplified constructor that creates all components
+	s, err := server.New(cfg, nil, nil, nil)
 	if err != nil {
-		return fmt.Errorf("server initialization failed: %w", err)
+		return fmt.Errorf("error creating server: %w", err)
 	}
 
-	log.Printf("Starting apt-cacher-go server on %s:%d", cfg.ListenAddress, cfg.Port)
-	return srv.Start()
+	// Start the server
+	return s.Start()
 }

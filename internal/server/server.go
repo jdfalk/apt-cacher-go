@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/jdfalk/apt-cacher-go/internal/backend"
-	"github.com/jdfalk/apt-cacher-go/internal/cache"
+	cachelib "github.com/jdfalk/apt-cacher-go/internal/cache" // Use alias
 	"github.com/jdfalk/apt-cacher-go/internal/config"
 	"github.com/jdfalk/apt-cacher-go/internal/mapper"
 	"github.com/jdfalk/apt-cacher-go/internal/metrics"
@@ -23,8 +23,8 @@ type Server struct {
 	cfg           *config.Config
 	httpServer    *http.Server
 	httpsServer   *http.Server
-	adminServer   *http.Server // New field for admin server
-	cache         *cache.Cache
+	adminServer   *http.Server    // New field for admin server
+	cache         *cachelib.Cache // Use the alias here too
 	backend       *backend.Manager
 	metrics       *metrics.Collector
 	prometheus    *metrics.PrometheusCollector
@@ -37,17 +37,51 @@ type Server struct {
 }
 
 // New creates a new Server instance
-func New(cfg *config.Config) (*Server, error) {
+func New(cfg *config.Config, bm *backend.Manager, cache *cachelib.Cache, packageMapper *mapper.PackageMapper) (*Server, error) {
+	// If we only received the config, initialize the other components
+	if bm == nil && cache == nil {
+		// Create a new cache - using the imported package, not the parameter
+		cacheInstance, err := cachelib.New(cfg.CacheDir, 10*1024) // 10GB default
+		if err != nil {
+			return nil, fmt.Errorf("failed to create cache: %w", err)
+		}
+
+		// Create a package mapper
+		pm := mapper.NewPackageMapper()
+
+		// Create the path mapper
+		pathMapper := mapper.New()
+
+		// Create the backend manager
+		manager := backend.New(cfg, cacheInstance, pathMapper, pm)
+
+		// Now call ourselves with all components
+		return New(cfg, manager, cacheInstance, pm)
+	}
+
+	// Create the server with the provided components
+	s := &Server{
+		cfg:           cfg,
+		backend:       bm,
+		cache:         cache,
+		metrics:       metrics.New(), // Using the correct constructor
+		packageMapper: packageMapper, // Add this line
+		startTime:     time.Now(),
+		version:       "1.0.0",
+		logger:        log.New(os.Stdout, "apt-cacher-go: ", log.LstdFlags),
+	}
+
 	// Output configuration being used
 	fmt.Printf("Creating server with: Cache Directory: %s\n", cfg.CacheDir)
 
-	maxCacheSize, err := cfg.ParseCacheSize()
+	_, err := cfg.ParseCacheSize()
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse cache size: %v", err)
 	}
-	cacheInstance, err := cache.New(cfg.CacheDir, maxCacheSize)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize cache: %w", err)
+	// Using s.cache instead of creating a new instance
+	s.cache = cache
+	if s.cache == nil {
+		return nil, fmt.Errorf("cache instance is nil")
 	}
 
 	// Create advanced path mapper
@@ -76,8 +110,8 @@ func New(cfg *config.Config) (*Server, error) {
 			}
 		}
 	}
-
-	b := backend.New(cfg, cacheInstance, m)
+	// Create backend
+	b := backend.New(cfg, s.cache, m, s.packageMapper) // Add packageMapper parameter
 	metricsCollector := metrics.New()
 	prometheusCollector := metrics.NewPrometheusCollector()
 
@@ -93,21 +127,15 @@ func New(cfg *config.Config) (*Server, error) {
 	// Create admin HTTP handler
 	adminMux := http.NewServeMux()
 
-	s := &Server{
-		cfg:        cfg,
-		cache:      cacheInstance,
-		backend:    b,
-		metrics:    metricsCollector,
-		prometheus: prometheusCollector,
-		acl:        acl,
-		mapper:     m,
-		startTime:  time.Now(),
-		version:    "1.0.0",                                              // Set version
-		logger:     log.New(os.Stdout, "apt-cacher-go: ", log.LstdFlags), // Initialize logger
-		httpServer: &http.Server{
-			Addr:    fmt.Sprintf("%s:%d", cfg.ListenAddress, cfg.Port),
-			Handler: acl.Middleware(mainMux),
-		},
+	// Set server properties
+	s.backend = b
+	s.mapper = m
+	s.metrics = metricsCollector
+	s.prometheus = prometheusCollector
+	s.acl = acl
+	s.httpServer = &http.Server{
+		Addr:    fmt.Sprintf("%s:%d", cfg.ListenAddress, cfg.Port),
+		Handler: acl.Middleware(mainMux),
 	}
 
 	// Register main handlers (non-admin routes)
@@ -252,6 +280,10 @@ func (s *Server) wrapWithMetrics(next http.HandlerFunc) http.HandlerFunc {
 		packageName := ""
 		if s.packageMapper != nil {
 			packageName = s.packageMapper.GetPackageNameForHash(r.URL.Path)
+			// Add debug logging
+			if packageName != "" {
+				log.Printf("Found package name for %s: %s", r.URL.Path, packageName)
+			}
 		}
 
 		// Process the request
@@ -274,13 +306,16 @@ func (s *Server) wrapWithMetrics(next http.HandlerFunc) http.HandlerFunc {
 			packageInfo = fmt.Sprintf(" [%s]", packageName)
 		}
 
-		log.Printf("%s %s%s\t%.2f\t%s\t%d bytes",
+		log.Printf("%s %s%s\t%.2f\t%s\t%s",
 			clientIP, r.URL.Path, packageInfo,
 			float64(duration.Milliseconds())/1000.0, status,
-			rw.bytesWritten)
+			byteCountSI(rw.bytesWritten))
 
 		// Record metrics with full information including client IP and package name
 		s.metrics.RecordRequest(r.URL.Path, duration, clientIP, packageName)
+
+		// Track bytes separately
+		s.metrics.RecordBytesServed(rw.bytesWritten)
 
 		// Update hit/miss stats based on status
 		if status == "hit" {
