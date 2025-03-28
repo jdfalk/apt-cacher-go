@@ -1,78 +1,112 @@
 # apt-cacher-go advanced configuration
 
 # Server configuration
+# PRODUCTION: For production, bind to specific interfaces instead of 0.0.0.0
 listen_address: "0.0.0.0" # Listen on all IPv4 interfaces
+# PRODUCTION: Default apt port is 3142, consider using a non-standard port for obfuscation
 port: 3142
+# PRODUCTION: Admin interface should be restricted to localhost or internal network
 admin_port: 3143 # Port for admin interface
 
-# Add this new section for HTTPS handling
+# HTTPS handling
+# PRODUCTION: HTTPS remapping should be enabled in production environments
 https_remap:
   enabled: true # Enable transparent HTTPS-to-HTTP remapping
+  # PRODUCTION: Always verify packages in production to prevent MITM attacks
   verify_packages: true # Still verify package signatures
 
 # TLS configuration
+# PRODUCTION: Enable TLS for all traffic in production environments
 tls_enabled: false
 tls_port: 3144 # Changed to avoid conflict with admin port
+# PRODUCTION: Use proper certificates from a trusted CA in production
 tls_cert: "/etc/apt-cacher-go/cert.pem"
 tls_key: "/etc/apt-cacher-go/key.pem"
+# PRODUCTION: In production, use a path that's rotated/managed by logrotate
 log_file: "/var/log/apt-cacher-go.log"
+# PRODUCTION: Use "error" or "warn" in production to reduce log size
 log_level: "info"
 
 # Cache configuration
+# PRODUCTION: Use a dedicated disk/partition with fast I/O for cache
 cache_dir: "/mnt/bigdata/apt-cache-go"
+# PRODUCTION: 100G-1TB recommended for large deployments
 cache_size: "40G"
+# PRODUCTION: 1h is good for most cases; increase for very busy servers
 cleanup_freq: "1h"
 
 # Cache TTLs
+# PRODUCTION: Adjust based on repository update frequency
 cache_ttls:
+  # PRODUCTION: 15m-1h recommended; shorter values ensure fresher metadata
   index: "1h" # Release files expire quickly
+  # PRODUCTION: 7d-30d recommended; longer values reduce bandwidth
   package: "30d" # Packages can be cached longer
 
 # Security
+# PRODUCTION: Restrict to specific subnets in production!
 allowed_ips:
   - "0.0.0.0/0" # Allow all IPv4
   - "::/0" # Allow all IPv6
+# PRODUCTION: 20-50 for small deployments, 100+ for larger ones
 rate_limit: 100 # Requests per minute per IP
+# PRODUCTION: Enable auth for public-facing instances
 auth_enabled: false
+# PRODUCTION: Enable admin auth in ALL production environments
 admin_auth: false
+# PRODUCTION: Use strong, unique password in production
 admin_user: "admin"
 admin_password: "password"
 
 # Metrics
+# PRODUCTION: Enable for monitoring system health
 metrics_enabled: true
 
 # Download queue
+# PRODUCTION: 10-30 for 100Mbps links, 30-50 for gigabit
 max_concurrent_downloads: 10
 
 # Prefetching configuration
-prefetch_enabled: true
-max_prefetches: 10
-# Add architecture filtering to reduce 404 errors
-architectures:
-  - amd64 # x86_64 architecture (most common)
-  # - i386 # 32-bit x86 architecture
-  # Comment out architectures you don't need
-  # - armhf   # ARM hard float (Raspberry Pi, etc.)
-  - arm64 # 64-bit ARM
-  # - ppc64el # PowerPC 64-bit little endian
-  # - s390x   # IBM System z
-  # - riscv64 # RISC-V 64-bit
+# PRODUCTION: Enable prefetching to improve client performance
+prefetch:
+  enabled: true
+  # PRODUCTION: 5-10 for most environments, up to 20 for high-bandwidth servers
+  max_concurrent: 5 # Reduced from 10 to avoid resource contention
+  # PRODUCTION: Enable for better performance after restarts
+  warmup_on_startup: true # New option to warm cache on startup
+  # PRODUCTION: Include only architectures actually used in your environment
+  architectures:
+    - amd64 # x86_64 architecture (most common)
+    - arm64 # 64-bit ARM
+    # Uncomment architectures you need
+    # - i386   # 32-bit x86 architecture (legacy systems)
+    # - armhf  # ARM hard float (Raspberry Pi, etc.)
+    # - ppc64el # PowerPC 64-bit little endian (POWER servers)
+    # - s390x   # IBM System z (mainframes)
+    # - riscv64 # RISC-V 64-bit (emerging hardware)
 
-# Key management (new section)
+# Key management
+# PRODUCTION: Enable to automatically retrieve repository keys
 key_management:
   enabled: true
+  # PRODUCTION: Enable to fix missing key errors automatically
   auto_retrieve: true
+  # PRODUCTION: 30d-365d recommended
   key_ttl: "365d"
+  # PRODUCTION: Include multiple keyservers for redundancy
   keyservers:
     - "hkp://keyserver.ubuntu.com:80"
     - "hkp://keys.gnupg.net:80"
     - "hkp://pool.sks-keyservers.net:80"
-  key_dir: "keys"
+  # PRODUCTION: Use a relative path inside cache_dir to avoid permission issues
+  key_dir: "keys" # Will be created as /mnt/bigdata/apt-cache-go/keys
 
 # Repository configuration
-disable_default_repos: false # Set to true to disable built-in repository definitions
+# PRODUCTION: Set to true if you're manually configuring all repositories
+disable_default_repos: false
 
 # Repository backends
+# PRODUCTION: Add all repositories used by your clients
 backends:
   # Third-party repositories with explicit HTTP URLs
   - name: "docker"
@@ -91,7 +125,8 @@ backends:
     url: "http://hwraid.le-vert.net/ubuntu"
     priority: 40
 
-# Advanced mapping rules (optional)
+# Advanced mapping rules
+# PRODUCTION: Define explicit mappings for special repositories
 mapping_rules:
   # Docker rules
   - type: "prefix"
