@@ -3,6 +3,7 @@ package server
 import (
 	"log"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -17,14 +18,15 @@ type MemoryMonitor struct {
 	checkInterval        time.Duration
 	stopCh               chan struct{}
 	memoryPressureAction func(pressure int)
+	stopOnce             sync.Once
 }
 
-// NewMemoryMonitor creates a new memory monitor
+// NewMemoryMonitor creates a new monitor
 func NewMemoryMonitor(highWatermarkMB, criticalWatermarkMB int, action func(pressure int)) *MemoryMonitor {
 	return &MemoryMonitor{
 		highWatermarkMB:      int64(highWatermarkMB),
 		criticalWatermarkMB:  int64(criticalWatermarkMB),
-		checkInterval:        5 * time.Second,
+		checkInterval:        30 * time.Second,
 		stopCh:               make(chan struct{}),
 		memoryPressureAction: action,
 	}
@@ -32,18 +34,21 @@ func NewMemoryMonitor(highWatermarkMB, criticalWatermarkMB int, action func(pres
 
 // Start begins monitoring memory usage
 func (m *MemoryMonitor) Start() {
-	ticker := time.NewTicker(m.checkInterval)
-	go func() {
-		for {
-			select {
-			case <-ticker.C:
-				m.checkMemoryUsage()
-			case <-m.stopCh:
-				ticker.Stop()
-				return
+	m.stopOnce.Do(func() {
+		m.stopCh = make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(m.checkInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					m.checkMemoryUsage()
+				case <-m.stopCh:
+					return
+				}
 			}
-		}
-	}()
+		}()
+	})
 }
 
 // Stop stops monitoring
