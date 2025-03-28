@@ -67,7 +67,7 @@ key_management:
     - "hkp://keyserver.ubuntu.com:80"
     - "hkp://keys.gnupg.net:80"
     - "hkp://pool.sks-keyservers.net:80"
-  key_dir: "/var/lib/apt-cacher-go/keys"
+  key_dir: "keys"
 
 # Repository configuration
 disable_default_repos: false # Set to true to disable built-in repository definitions

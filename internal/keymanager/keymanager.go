@@ -24,14 +24,34 @@ type KeyManager struct {
 }
 
 // New creates a new key manager
-func New(cfg *config.KeyManagementConfig) (*KeyManager, error) {
+func New(cfg *config.KeyManagementConfig, cacheDir string) (*KeyManager, error) {
 	if !cfg.Enabled {
 		return nil, nil
 	}
 
-	// Create key directory if it doesn't exist
-	if err := os.MkdirAll(cfg.KeyDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create key directory: %w", err)
+	// Get the specified key directory
+	keyDir := cfg.KeyDir
+
+	// Try to create key directory
+	err := os.MkdirAll(keyDir, 0755)
+	if err != nil {
+		// If permission denied, fallback to a subdirectory in the cache
+		if os.IsPermission(err) {
+			log.Printf("Warning: Permission denied to create key directory at %s, falling back to cache directory", keyDir)
+			keyDir = filepath.Join(cacheDir, "keys")
+
+			// Try to create fallback directory
+			err = os.MkdirAll(keyDir, 0755)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create fallback key directory: %w", err)
+			}
+
+			// Update config with new directory
+			cfg.KeyDir = keyDir
+			log.Printf("Using fallback key directory: %s", keyDir)
+		} else {
+			return nil, fmt.Errorf("failed to create key directory: %w", err)
+		}
 	}
 
 	manager := &KeyManager{
@@ -40,7 +60,7 @@ func New(cfg *config.KeyManagementConfig) (*KeyManager, error) {
 	}
 
 	// Initialize key cache with existing keys
-	files, err := os.ReadDir(cfg.KeyDir)
+	files, err := os.ReadDir(keyDir)
 	if err != nil {
 		log.Printf("Warning: couldn't read key directory: %v", err)
 	} else {

@@ -76,8 +76,8 @@ func New(cfg *config.Config, cache *cachelib.Cache, mapper *mapper.PathMapper, p
 		cacheDir:       cfg.CacheDir,
 	}
 
-	// Initialize key manager
-	km, err := keymanager.New(&cfg.KeyManagement)
+	// Initialize key manager with cache directory for fallback
+	km, err := keymanager.New(&cfg.KeyManagement, cfg.CacheDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize key manager: %w", err)
 	}
