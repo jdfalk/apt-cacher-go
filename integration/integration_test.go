@@ -200,7 +200,25 @@ func readAndDiscardBody(t *testing.T, resp *http.Response) {
 	}
 }
 
+// Add timeout handling to integration test
 func TestBasicFunctionality(t *testing.T) {
+	// Set up test with cleanup and timeout handling
+	_, cleanup := setupTestServer(t, "")
+	defer func() {
+		done := make(chan struct{})
+		go func() {
+			cleanup()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			// Clean shutdown
+		case <-time.After(2 * time.Second):
+			t.Log("Warning: Cleanup timed out")
+		}
+	}()
+
 	// Setup a mock upstream server first
 	mockUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
