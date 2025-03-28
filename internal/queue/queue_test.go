@@ -10,23 +10,23 @@ import (
 
 // Actual implementation of Queue for testing
 type localQueue struct {
-	data []interface{}
+	data []any
 }
 
 // NewQueue creates a new queue
 func NewQueue() *localQueue {
 	return &localQueue{
-		data: make([]interface{}, 0),
+		data: make([]any, 0),
 	}
 }
 
 // Enqueue adds an item to the queue
-func (q *localQueue) Enqueue(item interface{}) {
+func (q *localQueue) Enqueue(item any) {
 	q.data = append(q.data, item)
 }
 
 // Dequeue removes and returns the next item
-func (q *localQueue) Dequeue() (interface{}, bool) {
+func (q *localQueue) Dequeue() (any, bool) {
 	if len(q.data) == 0 {
 		return nil, false
 	}
@@ -79,7 +79,7 @@ func TestQueueShutdown(t *testing.T) {
 
 	// Start the queue
 	var processed int32
-	q.Start(func(task interface{}) error {
+	q.Start(func(task any) error {
 		// Simulate work
 		time.Sleep(10 * time.Millisecond)
 		atomic.AddInt32(&processed, 1)

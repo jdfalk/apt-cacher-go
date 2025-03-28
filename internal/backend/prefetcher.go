@@ -336,7 +336,7 @@ func (p *Prefetcher) cleanupStalePrefetches() {
 	toDelete := make([]string, 0)
 
 	// First pass - identify stale operations
-	p.active.Range(func(key, value interface{}) bool {
+	p.active.Range(func(key, value any) bool {
 		k := key.(string)
 		v := value.(time.Time)
 
@@ -387,7 +387,7 @@ func (p *Prefetcher) Shutdown() {
 // Can be called from admin endpoints to unstick a stuck prefetcher
 func (p *Prefetcher) ForceCleanup() int {
 	cleaned := 0
-	p.active.Range(func(key, _ interface{}) bool {
+	p.active.Range(func(key, _ any) bool {
 		p.active.Delete(key)
 		cleaned++
 		return true

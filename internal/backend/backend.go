@@ -91,20 +91,15 @@ func New(cfg *config.Config, cache *cachelib.Cache, mapper *mapper.PathMapper, p
 	m.prefetcher = NewPrefetcher(m, cfg.MaxConcurrentDownloads/2, cfg.Architectures)
 
 	// Start the download queue with the handler function
-	m.downloadQ.Start(func(task interface{}) error {
+	m.downloadQ.Start(func(task any) error {
 		url, ok := task.(string)
 		if !ok {
 			return fmt.Errorf("invalid task type: %T", task)
 		}
 
-		data, err := m.downloadFromURL(url)
-		if err != nil {
-			return err
-		}
-
-		// Store result somewhere
-		// This is a simplified implementation
-		return nil
+		// Download but don't store result since we're not using it
+		_, err := m.downloadFromURL(url)
+		return err
 	})
 
 	return m, nil
@@ -192,12 +187,6 @@ func (m *Manager) Fetch(requestPath string) ([]byte, error) {
 	}
 	u.Path = path.Join(u.Path, mappingResult.RemotePath)
 	fullURL := u.String()
-
-	// Use the download queue to fetch
-	priority := 1
-	if mappingResult.IsIndex || isSignatureFile {
-		priority = 10 // Higher priority for index/signature files
-	}
 
 	// Download directly for now instead of using queue
 	result, err := m.downloadFromURL(fullURL)

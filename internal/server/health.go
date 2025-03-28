@@ -19,8 +19,8 @@ type HealthStatus struct {
 	BackendStatus    string     `json:"backendStatus"`
 	SystemInfo       SystemInfo `json:"systemInfo"`
 	LatestRequests   int        `json:"latestRequests"`
-	CacheStats       any        `json:"cacheStats,omitempty"`   // Changed from interface{} to any
-	BackendStats     any        `json:"backendStats,omitempty"` // Changed from interface{} to any
+	CacheStats       any        `json:"cacheStats,omitempty"`   // Changed from any to any
+	BackendStats     any        `json:"backendStats,omitempty"` // Changed from any to any
 	HitRate          float64    `json:"hitRate"`
 	LastErrorMessage string     `json:"lastErrorMessage,omitempty"`
 }
@@ -80,7 +80,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// Include detailed stats if requested
 	if detailed {
 		status.CacheStats = cacheStats
-		status.BackendStats = map[string]any{ // Changed from interface{} to any
+		status.BackendStats = map[string]any{ // Changed from any to any
 			"recentRequests": metrics.RecentRequests,
 		}
 	}

@@ -95,6 +95,7 @@ func (c *LRUCache) GetLRUItems(n int) []lruItem {
 	result := make([]lruItem, 0, n)
 	element := c.evictList.Back()
 
+	// Iterate from back to front (least recently used to most recently used)
 	for i := 0; i < n && element != nil; i++ {
 		item := element.Value.(*lruItem)
 		result = append(result, *item)
@@ -142,15 +143,29 @@ func (c *LRUCache) Size() int {
 // evictIfNeeded removes the least recently used item if capacity is exceeded
 func (c *LRUCache) evictIfNeeded() {
 	// We should already hold the lock when this is called
-	if c.capacity <= 0 || c.evictList.Len() <= c.capacity {
+
+	// Special case for zero capacity: immediately evict the item we just added
+	if c.capacity == 0 {
+		if c.evictList.Len() > 0 {
+			element := c.evictList.Front() // Remove the most recently added item
+			if element != nil {
+				item := element.Value.(*lruItem)
+				delete(c.items, item.Key)
+				c.evictList.Remove(element)
+			}
+		}
 		return
 	}
 
-	// Remove the least recently used (back of the list)
-	element := c.evictList.Back()
-	if element != nil {
-		c.evictList.Remove(element)
-		item := element.Value.(*lruItem)
-		delete(c.items, item.Key)
+	// Normal case: evict least recently used items until we're at or under capacity
+	for c.evictList.Len() > c.capacity {
+		element := c.evictList.Back()
+		if element != nil {
+			item := element.Value.(*lruItem)
+			delete(c.items, item.Key)
+			c.evictList.Remove(element)
+		} else {
+			break // Shouldn't happen, but prevents infinite loop just in case
+		}
 	}
 }

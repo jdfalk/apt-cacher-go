@@ -57,14 +57,14 @@ func (m *MemoryMonitor) Stop() {
 }
 
 // GetMemoryUsage returns current memory statistics
-func (m *MemoryMonitor) GetMemoryUsage() map[string]interface{} {
+func (m *MemoryMonitor) GetMemoryUsage() map[string]any {
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
 
 	// Calculate memory pressure
 	pressure := atomic.LoadInt64(&m.memoryPressure)
 
-	return map[string]interface{}{
+	return map[string]any{
 		"allocated_mb":    float64(memStats.Alloc) / (1024 * 1024),
 		"system_mb":       float64(memStats.Sys) / (1024 * 1024),
 		"memory_pressure": float64(pressure) / 100.0,

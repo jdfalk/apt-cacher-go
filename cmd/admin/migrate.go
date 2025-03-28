@@ -84,7 +84,7 @@ func runMigration(acngCacheDir, acngConfFile, acgoCacheDir, acgoConfFile string)
 	}
 
 	// Build the config structure
-	config := map[string]interface{}{
+	config := map[string]any{
 		"listen_address":           bindAddress,
 		"port":                     port,
 		"cache_dir":                acgoCacheDir,
@@ -116,7 +116,7 @@ func runMigration(acngCacheDir, acngConfFile, acgoCacheDir, acgoConfFile string)
 	}
 
 	// Add repository backends
-	config["backends"] = []map[string]interface{}{
+	config["backends"] = []map[string]any{
 		{
 			"name":     "ubuntu-archive",
 			"url":      "http://archive.ubuntu.com/ubuntu",

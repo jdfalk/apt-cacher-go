@@ -150,22 +150,22 @@ func TestGetLRUItems(t *testing.T) {
 	cache.Add("key2", 200)
 	cache.Add("key3", 300)
 
-	// Get LRU items (should be in order key1, key2, key3)
+	// Get LRU items (should be in order key1, key2, key3 - where key1 is least recently used)
 	items := cache.GetLRUItems(3)
 	assert.Equal(t, 3, len(items))
-	assert.Equal(t, "key1", items[2].Key)
+	assert.Equal(t, "key1", items[0].Key) // Least recently used
 	assert.Equal(t, "key2", items[1].Key)
-	assert.Equal(t, "key3", items[0].Key)
+	assert.Equal(t, "key3", items[2].Key) // Most recently used
 
 	// Access key1 to make it most recently used
 	cache.Get("key1")
 
-	// Get LRU items again (should be in order key2, key3, key1)
+	// Get LRU items again (should be in order key2, key3, key1 - where key2 is now least recently used)
 	items = cache.GetLRUItems(3)
 	assert.Equal(t, 3, len(items))
-	assert.Equal(t, "key2", items[2].Key)
+	assert.Equal(t, "key2", items[0].Key) // Least recently used
 	assert.Equal(t, "key3", items[1].Key)
-	assert.Equal(t, "key1", items[0].Key)
+	assert.Equal(t, "key1", items[2].Key) // Now most recently used
 
 	// Test limit
 	items = cache.GetLRUItems(2)
@@ -207,6 +207,8 @@ func TestCapacityZero(t *testing.T) {
 
 	// Add an item - should still work, but be immediately evicted
 	cache.Add("key1", 100)
-	assert.False(t, cache.Get("key1"))
-	assert.Equal(t, 0, cache.Size())
+
+	// Both of these should be true since capacity is 0
+	assert.False(t, cache.Get("key1"), "Items in a zero-capacity cache should be immediately evicted")
+	assert.Equal(t, 0, cache.Size(), "A zero-capacity cache should always have size 0")
 }

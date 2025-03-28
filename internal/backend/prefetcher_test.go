@@ -199,7 +199,7 @@ func TestForceCleanup(t *testing.T) {
 
 	// Verify they're gone
 	var count int
-	prefetcher.active.Range(func(_, _ interface{}) bool {
+	prefetcher.active.Range(func(_, _ any) bool {
 		count++
 		return true
 	})

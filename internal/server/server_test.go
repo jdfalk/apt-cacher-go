@@ -122,7 +122,7 @@ func TestServerHandlers(t *testing.T) {
 		assert.Equal(t, "application/json", resp.Header.Get("Content-Type"))
 
 		// Verify JSON can be parsed
-		var healthData map[string]interface{}
+		var healthData map[string]any
 		err := json.Unmarshal(body, &healthData)
 		assert.NoError(t, err)
 
