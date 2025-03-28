@@ -71,7 +71,8 @@ max_concurrent_downloads: 10
 prefetch:
   enabled: true
   # PRODUCTION: 5-10 for most environments, up to 20 for high-bandwidth servers
-  max_concurrent: 20 # Increased from 5
+  max_concurrent: 20 # Reduced from previous value
+  batch_size: 10
   # PRODUCTION: Enable for better performance after restarts
   warmup_on_startup: true # New option to warm cache on startup
   # PRODUCTION: Include only architectures actually used in your environment
@@ -157,6 +158,9 @@ mapping_rules:
 memory_management:
   max_cache_size: 1G # Maximum memory to use for caching
   persistent_storage: true # Use disk-based storage for hash mappings
+  high_watermark_mb: 1024 # 1GB soft limit
+  critical_watermark_mb: 2048 # 2GB hard limit
+  monitor_interval: "5s"
 
 # Increase cache size while reducing memory footprint
 cache:

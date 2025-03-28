@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"runtime"
 	"time"
 )
 
@@ -95,45 +96,19 @@ func (s *Server) adminDashboard(w http.ResponseWriter, r *http.Request) {
         </div>
 
         <div class="stats">
-            <h2>Memory Statistics</h2>
-            <p>Allocated memory: %.2f MB</p>
-            <p>System memory: %.2f MB</p>
-            <p>Memory pressure: %.2f%%</p>
-            <p>GC cycles: %d</p>
-        </div>
-
-        <div class="actions">
-            <h2>Actions</h2>
-            <form method="post" action="/admin/clearcache" style="display:inline;">
-                <button type="submit">Clear Cache</button>
+            <h2>Memory Management</h2>
+            <div class="meter" style="height:20px; background-color:#eee; border-radius:3px; margin-bottom:10px;">
+                <div class="meter-bar" style="width: %.2f%%; height:100%%; background-color:%s; border-radius:3px;"></div>
+            </div>
+            <p>Memory Pressure: %.2f%% %s</p>
+            <p>Allocated: %.2f MB / %.2f MB</p>
+            <p>System Memory: %.2f MB</p>
+            <p>GC Cycles: %d</p>
+            <p>Heap Objects: %d</p>
+            <form method="post" action="/admin/cleanup-memory" style="margin-top:10px;">
+                <button type="submit">Force Memory Cleanup</button>
             </form>
-            <form method="post" action="/admin/flushexpired" style="display:inline;">
-                <button type="submit">Flush Expired Items</button>
-            </form>
-            <form method="post" action="/admin/cleanup-prefetcher" style="display:inline;">
-                <button type="submit">Cleanup Prefetcher</button>
-            </form>
-        </div>
-
-        <div>
-            <h2>Search Cache</h2>
-            <form method="get" action="/admin/search">
-                <input type="text" name="q" placeholder="Package name or pattern">
-                <button type="submit">Search</button>
-            </form>
-        </div>
-
-        <h2>Recent Requests</h2>
-        <table>
-            <tr>
-                <th>Path</th>
-                <th>Package Name</th>
-                <th>Client IP</th>
-                <th>Time (ms)</th>
-                <th>Result</th>
-                <th>Size</th>
-            </tr>
-    `,
+        </div>`,
 		time.Since(s.startTime).Round(time.Second),
 		s.version,
 		stats.TotalRequests,
@@ -144,10 +119,15 @@ func (s *Server) adminDashboard(w http.ResponseWriter, r *http.Request) {
 		cacheStats.Items,
 		float64(cacheStats.CurrentSize)/(1024*1024),
 		float64(cacheStats.MaxSize)/(1024*1024),
+		memStats["memory_pressure"].(float64)*100,
+		getColorForPressure(memStats["memory_pressure"].(float64)*100),
+		memStats["memory_pressure"].(float64)*100,
+		getStatusForPressure(memStats["memory_pressure"].(float64)*100),
 		memStats["allocated_mb"].(float64),
 		memStats["system_mb"].(float64),
-		memStats["memory_pressure"].(float64)*100,
-		memStats["gc_cycles"].(int))
+		memStats["system_mb"].(float64),
+		memStats["gc_cycles"].(int),
+		memStats["heap_objects"].(int))
 
 	for _, req := range stats.RecentRequests {
 		// Format request information with package name and client IP
@@ -468,5 +448,59 @@ func (s *Server) adminCleanupPrefetcher(w http.ResponseWriter, r *http.Request) 
 		"count":   count,
 	}); err != nil {
 		log.Printf("Error encoding JSON response: %v", err)
+	}
+}
+
+// Add this function to get a color based on memory pressure
+func getColorForPressure(pressure float64) string {
+	if pressure < 50 {
+		return "#4CAF50" // Green
+	} else if pressure < 75 {
+		return "#FFC107" // Yellow
+	} else if pressure < 90 {
+		return "#FF9800" // Orange
+	}
+	return "#F44336" // Red
+}
+
+// Add this function to get a status message based on memory pressure
+func getStatusForPressure(pressure float64) string {
+	if pressure < 50 {
+		return "(Normal)"
+	} else if pressure < 75 {
+		return "(Elevated)"
+	} else if pressure < 90 {
+		return "(High)"
+	}
+	return "(Critical)"
+}
+
+// Add this handler to force memory cleanup
+func (s *Server) adminForceMemoryCleanup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Force memory cleanup
+	runtime.GC()
+
+	// Call memory pressure handler with 100% to force all cleanup actions
+	s.handleHighMemoryPressure(100)
+
+	// Return success message
+	html := `
+        <html>
+        <body>
+            <h1>Memory Cleanup Completed</h1>
+            <p>Forced memory cleanup actions have been performed.</p>
+            <p><a href="/admin">Return to Admin Dashboard</a></p>
+        </body>
+        </html>
+    `
+
+	w.Header().Set("Content-Type", "text/html")
+	if _, err := w.Write([]byte(html)); err != nil {
+		log.Printf("Error writing memory cleanup response: %v", err)
 	}
 }

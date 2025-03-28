@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"reflect"
 	"runtime"
 	"strings"
 	"time"
@@ -174,6 +175,7 @@ func New(cfg *config.Config, bm *backend.Manager, cache *cachelib.Cache, package
 		adminMux.HandleFunc("/admin/stats", s.handleAdminAuth(s.adminGetStats))
 		adminMux.HandleFunc("/admin/search", s.handleAdminAuth(s.adminSearchCache))
 		adminMux.HandleFunc("/admin/cache", s.handleAdminAuth(s.adminCachePackage))
+		adminMux.HandleFunc("/admin/cleanup-memory", s.handleAdminAuth(s.adminForceMemoryCleanup))
 		http.HandleFunc("/admin/cleanup-prefetcher", s.handleAdminAuth(s.adminCleanupPrefetcher))
 
 		// Create admin server
@@ -193,6 +195,7 @@ func New(cfg *config.Config, bm *backend.Manager, cache *cachelib.Cache, package
 		mainMux.HandleFunc("/admin/flushexpired", s.handleAdminAuth(s.adminFlushExpired))
 		mainMux.HandleFunc("/admin/stats", s.handleAdminAuth(s.adminGetStats))
 		mainMux.HandleFunc("/admin/search", s.handleAdminAuth(s.adminSearchCache))
+		mainMux.HandleFunc("/admin/cleanup-memory", s.handleAdminAuth(s.adminForceMemoryCleanup))
 
 		log.Printf("Admin interface will be available at http://%s:%d/admin",
 			cfg.ListenAddress, cfg.Port)
@@ -218,6 +221,30 @@ func New(cfg *config.Config, bm *backend.Manager, cache *cachelib.Cache, package
 			TLSConfig: tlsConfig,
 		}
 	}
+
+	// Create memory monitor
+	memoryMonitor := NewMemoryMonitor(1024, 2048, func(pressure int) {
+		// Take action when memory pressure is high
+		if pressure > 95 {
+			// Clear caches to reduce memory pressure
+			log.Printf("Critical memory pressure (%d%%), clearing caches", pressure)
+			if packageMapper != nil {
+				packageMapper.ClearCache()
+			}
+
+			// Force prefetcher cleanup
+			if bm != nil {
+				bm.ForceCleanupPrefetcher()
+			}
+
+			// Force garbage collection
+			runtime.GC()
+		}
+	})
+	memoryMonitor.Start()
+
+	// Store in server instance
+	s.memoryMonitor = memoryMonitor
 
 	return s, nil
 }
@@ -733,6 +760,10 @@ func (s *Server) handleHighMemoryPressure(pressure float64) {
 	}
 
 	// 2. Reduce in-memory hash mapping cache
-	// Since we're using persistent storage, we can safely drop the in-memory cache
-	// without losing data - implementation would depend on your storage package
+	if s.packageMapper != nil {
+		if method, ok := reflect.TypeOf(s.packageMapper).MethodByName("ClearCache"); ok {
+			log.Printf("Clearing package mapper cache")
+			reflect.ValueOf(s.packageMapper).MethodByName("ClearCache").Call(nil)
+		}
+	}
 }

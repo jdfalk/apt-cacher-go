@@ -3,90 +3,112 @@ package server
 import (
 	"log"
 	"runtime"
+	"sync/atomic"
 	"time"
 )
 
 // MemoryMonitor tracks and manages memory usage
 type MemoryMonitor struct {
-	highWatermark float64 // Threshold as percentage of system memory
-	checkInterval time.Duration
-	stopCh        chan struct{}
-	callbacks     []func(float64)
+	highWatermarkMB      int64
+	criticalWatermarkMB  int64
+	memoryPressure       int64 // Atomic value 0-100
+	lastGCCount          uint32
+	gcCycles             int
+	checkInterval        time.Duration
+	stopCh               chan struct{}
+	memoryPressureAction func(pressure int)
 }
 
-// NewMemoryMonitor creates a memory monitor
-func NewMemoryMonitor(highWatermark float64, interval time.Duration) *MemoryMonitor {
+// NewMemoryMonitor creates a new memory monitor
+func NewMemoryMonitor(highWatermarkMB, criticalWatermarkMB int, action func(pressure int)) *MemoryMonitor {
 	return &MemoryMonitor{
-		highWatermark: highWatermark,
-		checkInterval: interval,
-		stopCh:        make(chan struct{}),
-		callbacks:     make([]func(float64), 0),
+		highWatermarkMB:      int64(highWatermarkMB),
+		criticalWatermarkMB:  int64(criticalWatermarkMB),
+		checkInterval:        5 * time.Second,
+		stopCh:               make(chan struct{}),
+		memoryPressureAction: action,
 	}
 }
 
-// RegisterCallback adds a function to call when memory pressure is high
-func (m *MemoryMonitor) RegisterCallback(cb func(float64)) {
-	m.callbacks = append(m.callbacks, cb)
-}
-
-// Start begins monitoring memory
+// Start begins monitoring memory usage
 func (m *MemoryMonitor) Start() {
-	go m.monitorLoop()
+	ticker := time.NewTicker(m.checkInterval)
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				m.checkMemoryUsage()
+			case <-m.stopCh:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
 }
 
-// Stop stops the monitor
+// Stop stops monitoring
 func (m *MemoryMonitor) Stop() {
 	close(m.stopCh)
 }
 
-// monitorLoop periodically checks memory usage
-func (m *MemoryMonitor) monitorLoop() {
-	ticker := time.NewTicker(m.checkInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-m.stopCh:
-			return
-		case <-ticker.C:
-			m.checkMemory()
-		}
-	}
-}
-
-// checkMemory checks current memory usage and triggers callbacks if needed
-func (m *MemoryMonitor) checkMemory() {
+// GetMemoryUsage returns current memory statistics
+func (m *MemoryMonitor) GetMemoryUsage() map[string]interface{} {
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
 
-	// Calculate memory pressure (0.0-1.0)
-	memoryPressure := float64(memStats.Alloc) / float64(memStats.Sys)
+	// Calculate memory pressure
+	pressure := atomic.LoadInt64(&m.memoryPressure)
 
-	// Log memory usage periodically
-	log.Printf("Memory usage: %.2f%% (%.2f MB / %.2f MB)",
-		memoryPressure*100,
-		float64(memStats.Alloc)/(1024*1024),
-		float64(memStats.Sys)/(1024*1024))
-
-	// If we're above high watermark, trigger callbacks
-	if memoryPressure > m.highWatermark {
-		log.Printf("HIGH MEMORY PRESSURE: %.2f%%", memoryPressure*100)
-		for _, cb := range m.callbacks {
-			cb(memoryPressure)
-		}
+	return map[string]interface{}{
+		"allocated_mb":    float64(memStats.Alloc) / (1024 * 1024),
+		"system_mb":       float64(memStats.Sys) / (1024 * 1024),
+		"memory_pressure": float64(pressure) / 100.0,
+		"gc_cycles":       m.gcCycles,
+		"heap_objects":    memStats.HeapObjects,
 	}
 }
 
-// GetMemoryUsage returns the current memory usage stats
-func (m *MemoryMonitor) GetMemoryUsage() map[string]any {
+// checkMemoryUsage checks memory usage and takes action if needed
+func (m *MemoryMonitor) checkMemoryUsage() {
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
 
-	return map[string]any{
-		"allocated_mb":       float64(memStats.Alloc) / (1024 * 1024),
-		"total_allocated_mb": float64(memStats.TotalAlloc) / (1024 * 1024),
-		"system_mb":          float64(memStats.Sys) / (1024 * 1024),
-		"gc_cycles":          memStats.NumGC,
-		"memory_pressure":    float64(memStats.Alloc) / float64(memStats.Sys),
+	allocatedMB := int64(memStats.Alloc) / (1024 * 1024)
+
+	// Calculate memory pressure as percentage of high watermark
+	var pressure int64
+	if allocatedMB >= m.highWatermarkMB {
+		pressure = 100
+	} else {
+		pressure = (allocatedMB * 100) / m.highWatermarkMB
+	}
+
+	// Update the atomic pressure value
+	atomic.StoreInt64(&m.memoryPressure, pressure)
+
+	// Track GC cycles
+	if memStats.NumGC > m.lastGCCount {
+		m.gcCycles += int(memStats.NumGC - m.lastGCCount)
+		m.lastGCCount = memStats.NumGC
+	}
+
+	// Take action based on memory pressure
+	if pressure > 90 {
+		log.Printf("Critical memory pressure: %d%% (%dMB used)", pressure, allocatedMB)
+
+		// Force garbage collection
+		runtime.GC()
+
+		// If we're above critical watermark, take drastic action
+		if allocatedMB > m.criticalWatermarkMB {
+			log.Printf("Memory usage critical: %dMB used, forcing cleanup", allocatedMB)
+			if m.memoryPressureAction != nil {
+				m.memoryPressureAction(int(pressure))
+			}
+		}
+	} else if pressure > 75 {
+		log.Printf("High memory pressure: %d%% (%dMB used)", pressure, allocatedMB)
+		// Suggest garbage collection
+		runtime.GC()
 	}
 }

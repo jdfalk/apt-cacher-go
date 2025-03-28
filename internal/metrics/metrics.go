@@ -277,9 +277,9 @@ func (c *Collector) GetTopClients(limit int) []TopClient {
 	return clients
 }
 
-// Add this to RegisterMetrics function
-func (m *Metrics) RegisterPrefetchMetrics() {
-	m.PrefetchMetrics = &PrefetchMetrics{
+// RegisterPrefetchMetrics registers prefetch-related metrics with Prometheus
+func RegisterPrefetchMetrics() *PrefetchMetrics {
+	return &PrefetchMetrics{
 		PrefetchAttempts: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "apt_cacher_prefetch_attempts_total",
@@ -316,13 +316,4 @@ func (m *Metrics) RegisterPrefetchMetrics() {
 			[]string{"repository"},
 		),
 	}
-
-	// Register the metrics
-	prometheus.MustRegister(
-		m.PrefetchMetrics.PrefetchAttempts,
-		m.PrefetchMetrics.PrefetchSuccesses,
-		m.PrefetchMetrics.PrefetchFailures,
-		m.PrefetchMetrics.ActivePrefetches,
-		m.PrefetchMetrics.PrefetchProcessingTime,
-	)
 }

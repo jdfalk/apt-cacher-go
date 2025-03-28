@@ -119,7 +119,7 @@ func LoadConfigFile(path string) (*Config, error) {
 	}
 
 	// First unmarshal into a map to handle string vs bool for admin_auth
-	var configMap map[string]interface{}
+	var configMap map[string]any
 	if err := yaml.Unmarshal(data, &configMap); err != nil {
 		return nil, err
 	}
