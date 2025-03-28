@@ -64,6 +64,9 @@ type Config struct {
 
 	// Prefetch configuration
 	Prefetch PrefetchConfig `yaml:"prefetch"`
+
+	// Metadata
+	Metadata map[string]any `yaml:"metadata,omitempty"`
 }
 
 // Backend represents a repository backend
@@ -299,4 +302,13 @@ func LoadConfigFileWithDebug(path string) (*Config, error) {
 	}
 
 	return config, nil
+}
+
+// GetMetadata returns the metadata value for the specified key
+func (c *Config) GetMetadata(key string) (any, bool) {
+	if c.Metadata == nil {
+		return nil, false
+	}
+	val, ok := c.Metadata[key]
+	return val, ok
 }

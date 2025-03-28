@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jdfalk/apt-cacher-go/internal/parser"
@@ -20,9 +21,12 @@ type Prefetcher struct {
 	cleanupTick    *time.Ticker
 	wg             sync.WaitGroup
 	stopCh         chan struct{}
-	architectures  map[string]bool
-	verboseLogging bool // Add this field to control 404 logging
-	startupDone    bool // Track whether startup prefetch has completed
+	architectures  map[string]bool // Filter by architecture
+	verboseLogging bool            // Control logging of 404s
+	inProgress     int32           // Atomic counter for tracking operations
+	startupDone    bool            // Track whether startup prefetch has completed
+	failureCount   map[string]int  // Track failures by URL
+	failureMutex   sync.RWMutex    // Mutex for failure map
 }
 
 // PrefetchOperation tracks a single prefetch operation
@@ -47,6 +51,7 @@ func NewPrefetcher(manager *Manager, maxActive int, architectures []string) *Pre
 		cleanupTick:   time.NewTicker(30 * time.Second),
 		stopCh:        make(chan struct{}),
 		architectures: archMap,
+		failureCount:  make(map[string]int),
 	}
 
 	// Start background cleanup goroutine
@@ -117,133 +122,136 @@ func (p *Prefetcher) ProcessIndexFile(repo string, path string, data []byte) {
 
 	// Skip if no URLs found
 	if len(urls) == 0 {
-		log.Printf("Prefetch operation completed: processed 0/0 URLs in %v", time.Duration(0))
+		log.Printf("No URLs found in index file: %s", path)
 		return
 	}
 
 	// Filter URLs by architecture
-	urls = p.filterByArchitecture(urls)
+	filteredURLs := p.filterByArchitecture(urls)
 
 	// Skip if no URLs after filtering
-	if len(urls) == 0 {
-		log.Printf("No URLs left after architecture filtering")
+	if len(filteredURLs) == 0 {
+		log.Printf("No URLs matching configured architectures in: %s", path)
 		return
 	}
 
-	// Limit to most popular packages
-	if len(urls) > 20 {
-		urls = urls[:20]
-	}
-
 	// Check if we're over the limit of active operations
-	activeCount := 0
-	p.active.Range(func(_, _ interface{}) bool {
-		activeCount++
-		return true
-	})
-
+	activeCount := int(atomic.LoadInt32(&p.inProgress))
 	if activeCount >= p.maxActive {
 		log.Printf("Skipping prefetch, too many active operations: %d", activeCount)
 		return
 	}
 
-	// Use a WaitGroup to track all URL fetches
-	var wg sync.WaitGroup
-	resultsCh := make(chan string, len(urls))
-	fetchTime := time.Now()
-
-	// Use sync.Once to ensure the channel is only closed once
-	var closeOnce sync.Once
+	// Start timer for metrics
+	startTime := time.Now()
 
 	// Create a context with cancellation
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel() // Ensure context is cancelled when we return
-
-	// Create an operation ID
-	opID := fmt.Sprintf("%s:%d", path, time.Now().UnixNano())
-
-	// Register this operation
-	p.active.Store(opID, fetchTime)
-
-	// Start a goroutine to track completion and cleanup
-	go func() {
-		// Wait for all fetches to complete
-		wg.Wait()
-
-		// Get elapsed time
-		elapsed := time.Since(fetchTime)
-
-		// Clean up resources
-		p.active.Delete(opID)
-
-		// Close the results channel safely
-		closeOnce.Do(func() {
-			close(resultsCh)
-		})
-
-		// Log completion
-		successCount := 0
-		p.active.Range(func(k, v interface{}) bool {
-			if strings.HasPrefix(k.(string), opID+":") {
-				successCount++
-			}
-			return true
-		})
-
-		log.Printf("Prefetch operation completed: processed %d/%d URLs in %v", successCount, len(urls), elapsed)
-	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
 	// Process each URL
-	for i, u := range urls {
-		wg.Add(1)
+	go func() {
+		processed := 0
+		skipped := 0
 
-		// Create unique ID for this URL fetch
-		urlID := fmt.Sprintf("%s:%d", opID, i)
-
-		// Store it in active map
-		p.active.Store(urlID, time.Now())
-
-		// Launch goroutine to fetch
-		go func(url string, id string) {
-			defer wg.Done()
-			defer p.active.Delete(id)
-
-			// Skip if context is already cancelled
+		for _, url := range filteredURLs {
+			// Check if we should stop
 			select {
 			case <-ctx.Done():
+				return
+			case <-p.stopCh:
 				return
 			default:
 				// Continue processing
 			}
 
-			// Fetch the file
-			_, err := p.manager.Fetch(url)
+			// Don't exceed max concurrent operations
+			if atomic.LoadInt32(&p.inProgress) >= int32(p.maxActive) {
+				skipped++
+				continue
+			}
 
-			// Handle result with improved error handling
-			if err != nil {
-				if strings.Contains(err.Error(), "404") {
-					// Lower log level for 404 errors - they're expected
-					if p.verboseLogging {
-						log.Printf("Debug: Prefetch 404 for %s", url)
+			// Create a unique ID for this operation
+			urlID := fmt.Sprintf("%s-%d", url, time.Now().UnixNano())
+
+			// Mark as in progress and increment counter
+			if _, loaded := p.active.LoadOrStore(urlID, time.Now()); loaded {
+				// Someone else is already prefetching this URL
+				skipped++
+				continue
+			}
+
+			atomic.AddInt32(&p.inProgress, 1)
+
+			// Process in a separate goroutine
+			p.wg.Add(1)
+			go func(u string, id string) {
+				defer p.wg.Done()
+				defer p.active.Delete(id)
+				defer atomic.AddInt32(&p.inProgress, -1)
+
+				// Fetch the file
+				_, err := p.manager.Fetch(u)
+
+				// Handle result with improved error handling
+				if err != nil {
+					if strings.Contains(err.Error(), "404") {
+						if p.verboseLogging {
+							log.Printf("Debug: Prefetch 404 for %s", u)
+							p.failureMutex.Lock()
+							p.failureCount[u]++
+							p.failureMutex.Unlock()
+						}
+					} else {
+						log.Printf("Failed to prefetch %s: %v", u, err)
 					}
-				} else {
-					// Log other errors normally
-					log.Printf("Failed to prefetch %s: %v", url, err)
+					return
 				}
-				return
-			}
 
-			// Send success - safely handle channel send
-			select {
-			case resultsCh <- url:
-				// Successfully sent result
-			case <-ctx.Done():
-				// Context cancelled, don't try to send
-			default:
-				// Channel full or closed, don't block
-			}
-		}(u, urlID)
+				// Success case
+				processed++
+			}(url, urlID)
+		}
+
+		// Report stats for this batch
+		duration := time.Since(startTime)
+		log.Printf("Prefetch operation completed: processed %d/%d URLs in %v",
+			processed, len(filteredURLs), duration)
+	}()
+}
+
+// Filter URLs by configured architectures
+func (p *Prefetcher) filterURLsByArchitecture(urls []string) []string {
+	// If no architectures specified, allow all
+	if len(p.architectures) == 0 {
+		return urls
 	}
+
+	result := make([]string, 0, len(urls))
+	for _, url := range urls {
+		// Simple architecture detection, could be improved
+		for arch := range p.architectures {
+			if strings.Contains(url, "/binary-"+arch+"/") ||
+				strings.Contains(url, "_"+arch+".deb") ||
+				!containsAnyArch(url) { // URLs without arch specifier should pass
+				result = append(result, url)
+				break
+			}
+		}
+	}
+
+	return result
+}
+
+// Helper to check if a URL contains any architecture specifier
+func containsAnyArch(url string) bool {
+	commonArchs := []string{"amd64", "i386", "arm64", "armhf", "ppc64el", "s390x", "riscv64"}
+	for _, arch := range commonArchs {
+		if strings.Contains(url, "/binary-"+arch+"/") || strings.Contains(url, "_"+arch+".deb") {
+			return true
+		}
+	}
+	return false
 }
 
 // cleanupStalePrefetches removes prefetch operations that have been running too long

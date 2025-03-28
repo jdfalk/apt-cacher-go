@@ -4,6 +4,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // RequestInfo tracks information about a single request
@@ -76,6 +78,16 @@ type Collector struct {
 	clients        map[string]ClientStats
 	lastClientIP   string // New field to track last client IP
 	lastFileSize   int64  // New field to track last file size
+}
+
+// PrefetchMetrics tracks prefetch operations
+type PrefetchMetrics struct {
+	PrefetchAttempts       *prometheus.CounterVec
+	PrefetchSuccesses      *prometheus.CounterVec
+	PrefetchFailures       *prometheus.CounterVec
+	PrefetchErrors404      *prometheus.CounterVec
+	ActivePrefetches       prometheus.Gauge
+	PrefetchProcessingTime *prometheus.HistogramVec
 }
 
 // New creates a new metrics collector
@@ -263,4 +275,54 @@ func (c *Collector) GetTopClients(limit int) []TopClient {
 	}
 
 	return clients
+}
+
+// Add this to RegisterMetrics function
+func (m *Metrics) RegisterPrefetchMetrics() {
+	m.PrefetchMetrics = &PrefetchMetrics{
+		PrefetchAttempts: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "apt_cacher_prefetch_attempts_total",
+				Help: "Total number of prefetch attempts",
+			},
+			[]string{"repository"},
+		),
+		PrefetchSuccesses: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "apt_cacher_prefetch_successes_total",
+				Help: "Total number of successful prefetches",
+			},
+			[]string{"repository"},
+		),
+		PrefetchFailures: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "apt_cacher_prefetch_failures_total",
+				Help: "Total number of failed prefetches",
+			},
+			[]string{"repository", "reason"},
+		),
+		ActivePrefetches: prometheus.NewGauge(
+			prometheus.GaugeOpts{
+				Name: "apt_cacher_active_prefetches",
+				Help: "Number of currently active prefetch operations",
+			},
+		),
+		PrefetchProcessingTime: prometheus.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name:    "apt_cacher_prefetch_processing_seconds",
+				Help:    "Time spent processing prefetch operations",
+				Buckets: prometheus.DefBuckets,
+			},
+			[]string{"repository"},
+		),
+	}
+
+	// Register the metrics
+	prometheus.MustRegister(
+		m.PrefetchMetrics.PrefetchAttempts,
+		m.PrefetchMetrics.PrefetchSuccesses,
+		m.PrefetchMetrics.PrefetchFailures,
+		m.PrefetchMetrics.ActivePrefetches,
+		m.PrefetchMetrics.PrefetchProcessingTime,
+	)
 }

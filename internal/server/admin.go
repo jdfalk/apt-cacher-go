@@ -57,6 +57,9 @@ func (s *Server) adminDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get memory statistics
+	memStats := s.memoryMonitor.GetMemoryUsage()
+
 	html := fmt.Sprintf(`
     <!DOCTYPE html>
     <html>
@@ -89,6 +92,14 @@ func (s *Server) adminDashboard(w http.ResponseWriter, r *http.Request) {
             <p>Cache entries: %d</p>
             <p>Cache size: %.2f MB</p>
             <p>Cache max size: %.2f MB</p>
+        </div>
+
+        <div class="stats">
+            <h2>Memory Statistics</h2>
+            <p>Allocated memory: %.2f MB</p>
+            <p>System memory: %.2f MB</p>
+            <p>Memory pressure: %.2f%%</p>
+            <p>GC cycles: %d</p>
         </div>
 
         <div class="actions">
@@ -132,7 +143,11 @@ func (s *Server) adminDashboard(w http.ResponseWriter, r *http.Request) {
 		stats.BytesServed,
 		cacheStats.Items,
 		float64(cacheStats.CurrentSize)/(1024*1024),
-		float64(cacheStats.MaxSize)/(1024*1024))
+		float64(cacheStats.MaxSize)/(1024*1024),
+		memStats["allocated_mb"].(float64),
+		memStats["system_mb"].(float64),
+		memStats["memory_pressure"].(float64)*100,
+		memStats["gc_cycles"].(int))
 
 	for _, req := range stats.RecentRequests {
 		// Format request information with package name and client IP

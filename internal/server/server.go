@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"runtime"
 	"strings"
 	"time"
 
@@ -35,6 +36,7 @@ type Server struct {
 	startTime     time.Time
 	version       string
 	logger        *log.Logger // Add logger field
+	memoryMonitor *MemoryMonitor
 }
 
 // New creates a new Server instance
@@ -253,6 +255,11 @@ func (s *Server) Start() error {
 	// Warm up the cache in the background
 	go s.backend.PrefetchOnStartup(context.Background())
 
+	// Start memory monitoring
+	s.memoryMonitor = NewMemoryMonitor(0.85, 30*time.Second) // 85% threshold, check every 30s
+	s.memoryMonitor.RegisterCallback(s.handleHighMemoryPressure)
+	s.memoryMonitor.Start()
+
 	return nil
 }
 
@@ -279,7 +286,16 @@ func (s *Server) Shutdown() error {
 	}
 
 	// Shutdown HTTP server
-	return s.httpServer.Shutdown(ctx)
+	if err := s.httpServer.Shutdown(ctx); err != nil {
+		return err
+	}
+
+	// Stop memory monitoring
+	if s.memoryMonitor != nil {
+		s.memoryMonitor.Stop()
+	}
+
+	return nil
 }
 
 // wrapWithMetrics wraps a handler with metrics collection
@@ -314,7 +330,7 @@ func (s *Server) wrapWithMetrics(next http.HandlerFunc) http.HandlerFunc {
 			status = "error"
 		} else if rw.statusCode == 307 || rw.statusCode == 302 {
 			status = "redirect"
-		} else if rw.statusCode == 200 && strings.Contains(r.Header.Get("X-Cache"), "MISS") {
+		} else if rw.statusCode == 200 && strings.contains(r.Header.Get("X-Cache"), "MISS") {
 			status = "miss"
 		}
 
@@ -700,4 +716,23 @@ func (s *Server) ServeKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.ServeFile(w, r, keyPath)
+}
+
+// Add this method to Server
+func (s *Server) handleHighMemoryPressure(pressure float64) {
+	log.Printf("High memory pressure detected (%.2f%%), taking action", pressure*100)
+
+	// Force garbage collection
+	runtime.GC()
+
+	// Clear unnecessary caches
+	// 1. Force clean up prefetcher operations
+	if s.backend != nil {
+		cleaned := s.backend.ForceCleanupPrefetcher()
+		log.Printf("Cleaned up %d prefetch operations", cleaned)
+	}
+
+	// 2. Reduce in-memory hash mapping cache
+	// Since we're using persistent storage, we can safely drop the in-memory cache
+	// without losing data - implementation would depend on your storage package
 }

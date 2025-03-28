@@ -71,19 +71,14 @@ max_concurrent_downloads: 10
 prefetch:
   enabled: true
   # PRODUCTION: 5-10 for most environments, up to 20 for high-bandwidth servers
-  max_concurrent: 5 # Reduced from 10 to avoid resource contention
+  max_concurrent: 20 # Increased from 5
   # PRODUCTION: Enable for better performance after restarts
   warmup_on_startup: true # New option to warm cache on startup
   # PRODUCTION: Include only architectures actually used in your environment
   architectures:
     - amd64 # x86_64 architecture (most common)
-    - arm64 # 64-bit ARM
-    # Uncomment architectures you need
-    # - i386   # 32-bit x86 architecture (legacy systems)
-    # - armhf  # ARM hard float (Raspberry Pi, etc.)
-    # - ppc64el # PowerPC 64-bit little endian (POWER servers)
-    # - s390x   # IBM System z (mainframes)
-    # - riscv64 # RISC-V 64-bit (emerging hardware)
+    - i386 # 32-bit x86 architecture (legacy systems)
+  verbose_logging: false # Don't log 404 errors
 
 # Key management
 # PRODUCTION: Enable to automatically retrieve repository keys
@@ -157,3 +152,15 @@ mapping_rules:
     pattern: "hwraid/ubuntu"
     repository: "hwraid"
     priority: 40
+
+# Memory and performance tuning
+memory_management:
+  max_cache_size: 1G # Maximum memory to use for caching
+  persistent_storage: true # Use disk-based storage for hash mappings
+
+# Increase cache size while reducing memory footprint
+cache:
+  directory: "/mnt/bigdata/apt-cache-go"
+  max_size: "40G"
+  cleanup_interval: "1h"
+  flush_interval: "5m" # Periodically flush data to disk
