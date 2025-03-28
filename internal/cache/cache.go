@@ -41,7 +41,7 @@ type Cache struct {
 	currentSize int64
 	items       map[string]*cacheEntry
 	mutex       sync.RWMutex // Added for thread safety
-	lruCache    *lru.LRUCache
+	lruCache    *LRUCache    // Changed from lru.LRUCache to LRUCache
 	hitCount    int64
 	missCount   int64
 	statsMutex  sync.RWMutex // Separate mutex for statistics
@@ -74,7 +74,7 @@ func New(rootDir string, maxSize int64) (*Cache, error) {
 		maxSize:     maxSize,
 		currentSize: 0,
 		items:       make(map[string]*cacheEntry),
-		lruCache:    lru.NewLRUCache(10000), // Track up to 10k items
+		lruCache:    NewLRUCache(10000), // Track up to 10k items
 	}
 
 	// Load cache state if available
@@ -98,6 +98,10 @@ func New(rootDir string, maxSize int64) (*Cache, error) {
 
 // Get retrieves a file from the cache
 func (c *Cache) Get(path string) ([]byte, error) {
+	if !c.pathIsAllowed(path) {
+		return nil, fmt.Errorf("path not allowed: %s", path)
+	}
+
 	c.mutex.RLock() // Read lock for checking
 	entry, exists := c.items[path]
 	c.mutex.RUnlock()
@@ -149,6 +153,10 @@ func (c *Cache) getFromCache(entry *cacheEntry, path string) ([]byte, error) {
 
 // Add adds a file to the cache
 func (c *Cache) Add(path string, data []byte) error {
+	if !c.pathIsAllowed(path) {
+		return fmt.Errorf("path not allowed: %s", path)
+	}
+
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
@@ -229,6 +237,10 @@ func (c *Cache) Add(path string, data []byte) error {
 
 // Remove removes a file from the cache
 func (c *Cache) Remove(path string) error {
+	if !c.pathIsAllowed(path) {
+		return fmt.Errorf("path not allowed: %s", path)
+	}
+
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
@@ -254,6 +266,10 @@ func (c *Cache) Remove(path string) error {
 
 // Exists checks if a file exists in the cache
 func (c *Cache) Exists(path string) bool {
+	if !c.pathIsAllowed(path) {
+		return false
+	}
+
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
 
@@ -275,6 +291,40 @@ func (c *Cache) Stats() (int64, int64, int64, int64) {
 	c.statsMutex.RUnlock()
 
 	return itemCount, currentSize, hitCount, missCount
+}
+
+// GetStats returns detailed cache statistics
+func (c *Cache) GetStats() (*CacheStats, error) {
+	c.mutex.RLock()
+	itemCount := len(c.items)
+	currentSize := c.currentSize
+	c.mutex.RUnlock()
+
+	c.statsMutex.RLock()
+	hitCount := c.hitCount
+	missCount := c.missCount
+	c.statsMutex.RUnlock()
+
+	// Calculate hit/miss rates
+	totalRequests := hitCount + missCount
+	hitRate := 0.0
+	missRate := 0.0
+	if totalRequests > 0 {
+		hitRate = float64(hitCount) / float64(totalRequests)
+		missRate = float64(missCount) / float64(totalRequests)
+	}
+
+	stats := &CacheStats{
+		CurrentSize: currentSize,
+		MaxSize:     c.maxSize,
+		Items:       itemCount,
+		HitRate:     hitRate,
+		MissRate:    missRate,
+		Hits:        hitCount,
+		Misses:      missCount,
+	}
+
+	return stats, nil
 }
 
 // Size returns the current cache size
@@ -487,7 +537,7 @@ func getDirSize(path string) (int64, error) {
 }
 
 // pathIsAllowed checks if a path is allowed to be stored in the cache
-func pathIsAllowed(path string) bool {
+func (c *Cache) pathIsAllowed(path string) bool {
 	// Prevent path traversal attacks
 	if strings.Contains(path, "..") {
 		return false
@@ -558,6 +608,10 @@ func (c *Cache) ListRepos() []string {
 
 // GetLastModified returns the last modified time for a cached file
 func (c *Cache) GetLastModified(path string) time.Time {
+	if !c.pathIsAllowed(path) {
+		return time.Time{} // Return zero time for invalid paths
+	}
+
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
 
@@ -576,6 +630,10 @@ func (c *Cache) Put(path string, data []byte) error {
 
 // PutWithExpiration adds a file to the cache with an expiration time
 func (c *Cache) PutWithExpiration(path string, data []byte, expiration time.Duration) error {
+	if !c.pathIsAllowed(path) {
+		return fmt.Errorf("path not allowed: %s", path)
+	}
+
 	// First add the file
 	if err := c.Add(path, data); err != nil {
 		return err
@@ -596,6 +654,10 @@ func (c *Cache) PutWithExpiration(path string, data []byte, expiration time.Dura
 
 // IsFresh checks if a cached item is still fresh (not expired)
 func (c *Cache) IsFresh(path string) bool {
+	if !c.pathIsAllowed(path) {
+		return false
+	}
+
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
 
