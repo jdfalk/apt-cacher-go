@@ -133,7 +133,7 @@ func TestServerHandlers(t *testing.T) {
 	t.Run("ready endpoint", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/ready", nil)
 		w := httptest.NewRecorder()
-		server.handleReady(w, req)
+		server.HandleReady(w, req) // Use exported version
 
 		resp := w.Result()
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -143,7 +143,7 @@ func TestServerHandlers(t *testing.T) {
 	t.Run("report endpoint", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/acng-report.html", nil)
 		w := httptest.NewRecorder()
-		server.handleReportRequest(w, req)
+		server.HandleReportRequest(w, req) // Use exported version
 
 		resp := w.Result()
 		body, _ := io.ReadAll(resp.Body)
@@ -164,7 +164,7 @@ func TestAdminAuthentication(t *testing.T) {
 		w := httptest.NewRecorder()
 
 		// Wrap a simple handler
-		handler := server.handleAdminAuth(func(w http.ResponseWriter, r *http.Request) {
+		handler := server.HandleAdminAuth(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			_, err := w.Write([]byte("Admin access granted"))
 			if err != nil {
@@ -188,7 +188,7 @@ func TestAdminAuthentication(t *testing.T) {
 		req := httptest.NewRequest("GET", "/admin", nil)
 		w := httptest.NewRecorder()
 
-		handler := server.handleAdminAuth(func(w http.ResponseWriter, r *http.Request) {
+		handler := server.HandleAdminAuth(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			_, err := w.Write([]byte("Admin access granted"))
 			if err != nil {
@@ -262,15 +262,15 @@ func TestPackageRequest(t *testing.T) {
 		// For a unit test, we'd need to mock the backend.Fetch behavior
 
 		// Instead, test the content type helper with updated expectations
-		assert.Equal(t, "application/vnd.debian.binary-package", getContentType("/test/file.deb"))
-		assert.Equal(t, "application/octet-stream", getContentType("/test/Release"))
-		assert.Equal(t, "application/octet-stream", getContentType("/test/Release.gpg"))
+		assert.Equal(t, "application/vnd.debian.binary-package", GetContentType("/test/file.deb"))
+		assert.Equal(t, "application/octet-stream", GetContentType("/test/Release"))
+		assert.Equal(t, "application/octet-stream", GetContentType("/test/Release.gpg"))
 	})
 
 	t.Run("isIndexFile detection", func(t *testing.T) {
-		assert.True(t, isIndexFile("/debian/dists/stable/Release"))
-		assert.True(t, isIndexFile("/ubuntu/dists/jammy/main/binary-amd64/Packages"))
-		assert.False(t, isIndexFile("/debian/pool/main/p/package/test_1.0_amd64.deb"))
+		assert.True(t, IsIndexFile("/debian/dists/stable/Release"))
+		assert.True(t, IsIndexFile("/ubuntu/dists/jammy/main/binary-amd64/Packages"))
+		assert.False(t, IsIndexFile("/debian/pool/main/p/package/test_1.0_amd64.deb"))
 	})
 }
 

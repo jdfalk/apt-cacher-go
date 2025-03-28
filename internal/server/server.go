@@ -41,6 +41,7 @@ type Server struct {
 	mutex         sync.Mutex
 	startOnce     sync.Once
 	shutdownOnce  sync.Once
+	shutdownCh    chan struct{} // Add shutdown channel
 }
 
 // New creates a new Server instance
@@ -79,6 +80,7 @@ func New(cfg *config.Config, backendManager *backend.Manager, cache *cachelib.Ca
 		startTime:     time.Now(),
 		version:       "1.0.0",
 		logger:        log.New(os.Stdout, "apt-cacher-go: ", log.LstdFlags),
+		shutdownCh:    make(chan struct{}), // Initialize shutdown channel
 	}
 
 	// Output configuration being used
@@ -305,46 +307,61 @@ func (s *Server) Start() error {
 
 // Shutdown gracefully stops the server
 func (s *Server) Shutdown() error {
-	var shutdownErr error
-
+	var err error
 	s.shutdownOnce.Do(func() {
-		// Acquire lock to prevent races with Start method
-		s.mutex.Lock()
-		defer s.mutex.Unlock()
+		// Signal we're shutting down
+		close(s.shutdownCh)
 
-		if s.memoryMonitor != nil {
-			s.memoryMonitor.Stop()
-		}
+		// First shut down HTTP server with a timeout
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 
 		if s.httpServer != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-
-			shutdownErr = s.httpServer.Shutdown(ctx)
-		}
-
-		if s.adminServer != nil && s.cfg.AdminPort != s.cfg.Port {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-
-			if err := s.adminServer.Shutdown(ctx); err != nil {
-				log.Printf("Error shutting down admin server: %v", err)
+			if err2 := s.httpServer.Shutdown(ctx); err2 != nil {
+				log.Printf("Error shutting down HTTP server: %v", err2)
+				err = err2
 			}
 		}
 
-		if s.backend != nil {
-			s.backend.Shutdown()
-		}
-
-		if s.cache != nil {
-			err := s.cache.Close()
-			if err != nil {
-				log.Printf("Error closing cache: %v", err)
+		// Then shut down admin server if it exists
+		if s.adminServer != nil {
+			if err2 := s.adminServer.Shutdown(ctx); err2 != nil {
+				log.Printf("Error shutting down admin server: %v", err2)
+				if err == nil {
+					err = err2
+				}
 			}
 		}
+
+		// Close the backend and cache in a separate goroutine with timeout
+		// to prevent deadlocks
+		closeDone := make(chan struct{})
+		go func() {
+			// Close backend
+			if s.backend != nil {
+				s.backend.Shutdown()
+			}
+
+			// Close cache
+			if s.cache != nil {
+				if err2 := s.cache.Close(); err2 != nil {
+					log.Printf("Error closing cache: %v", err2)
+				}
+			}
+			close(closeDone)
+		}()
+
+		// Wait for cleanup with timeout
+		select {
+		case <-closeDone:
+			// Normal shutdown
+		case <-time.After(5 * time.Second):
+			log.Printf("WARNING: Backend/cache shutdown timed out")
+		}
+
+		log.Println("Server shutdown complete")
 	})
-
-	return shutdownErr
+	return err
 }
 
 // wrapWithMetrics wraps a handler with metrics collection
@@ -362,7 +379,10 @@ func (s *Server) wrapWithMetrics(next http.HandlerFunc) http.HandlerFunc {
 		// Get associated package name if available
 		packageName := ""
 		if s.packageMapper != nil {
+			s.mutex.Lock()
 			packageName = s.packageMapper.GetPackageNameForHash(r.URL.Path)
+			s.mutex.Unlock()
+
 			// Add debug logging
 			if packageName != "" {
 				log.Printf("Found package name for %s: %s", r.URL.Path, packageName)
@@ -395,9 +415,8 @@ func (s *Server) wrapWithMetrics(next http.HandlerFunc) http.HandlerFunc {
 			byteCountSI(rw.bytesWritten))
 
 		// Record metrics with full information including client IP and package name
+		s.mutex.Lock()
 		s.metrics.RecordRequest(r.URL.Path, duration, clientIP, packageName)
-
-		// Track bytes separately
 		s.metrics.RecordBytesServed(rw.bytesWritten)
 
 		// Update hit/miss stats based on status
@@ -408,6 +427,7 @@ func (s *Server) wrapWithMetrics(next http.HandlerFunc) http.HandlerFunc {
 		} else if status == "error" {
 			s.metrics.RecordError(r.URL.Path)
 		}
+		s.mutex.Unlock()
 	}
 }
 
@@ -417,20 +437,14 @@ func byteCountSI(b int64) string {
 	if b < unit {
 		return fmt.Sprintf("%d B", b)
 	}
-	div, exp := int64(unit), 0
+
+	div := int64(1)
+	exp := 0
 	for n := b / unit; n >= unit; n /= unit {
 		div *= unit
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "kMGTPE"[exp])
-}
-
-// handleReady serves the readiness check endpoint
-func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	if _, err := w.Write([]byte(`{"status":"ready"}`)); err != nil {
-		log.Printf("Error writing ready response: %v", err)
-	}
 }
 
 // responseWriter wraps http.ResponseWriter to capture status code and bytes written
@@ -474,12 +488,20 @@ func (s *Server) handlePackageRequest(w http.ResponseWriter, r *http.Request) {
 	// Start timing the request
 	start := time.Now()
 	clientIP := extractClientIP(r)
+
+	// Use mutex when accessing packageMapper
+	s.mutex.Lock()
 	packageName := ""
 	if s.packageMapper != nil {
 		packageName = s.packageMapper.GetPackageNameForHash(requestPath)
 	}
+	s.mutex.Unlock()
+
 	defer func() {
+		// Use mutex when updating metrics
+		s.mutex.Lock()
 		s.metrics.RecordRequest(requestPath, time.Since(start), clientIP, packageName)
+		s.mutex.Unlock()
 	}()
 
 	log.Printf("Request: %s %s", r.Method, requestPath)
@@ -511,8 +533,10 @@ func (s *Server) handlePackageRequest(w http.ResponseWriter, r *http.Request) {
 		clientIP = clientIP[:idx] // Strip port number if present
 	}
 
-	// Update last client IP
+	// Update last client IP with mutex protection
+	s.mutex.Lock()
 	s.metrics.SetLastClientIP(clientIP)
+	s.mutex.Unlock()
 
 	// Fetch the package
 	data, err := s.backend.Fetch(requestPath)
@@ -522,8 +546,10 @@ func (s *Server) handlePackageRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update last file size
+	// Update last file size with mutex protection
+	s.mutex.Lock()
 	s.metrics.SetLastFileSize(int64(len(data)))
+	s.mutex.Unlock()
 
 	// Determine content type
 	contentType := getContentType(requestPath)
@@ -753,12 +779,19 @@ func (s *Server) ServeKey(w http.ResponseWriter, r *http.Request) {
 	keyID := path.Base(r.URL.Path)
 	keyID = strings.TrimSuffix(keyID, ".gpg")
 
-	if s.backend.KeyManager() == nil || !s.backend.KeyManager().HasKey(keyID) {
+	s.mutex.Lock()
+	hasKey := s.backend.KeyManager() == nil || !s.backend.KeyManager().HasKey(keyID)
+	s.mutex.Unlock()
+
+	if hasKey {
 		http.Error(w, "Key not found", http.StatusNotFound)
 		return
 	}
 
+	s.mutex.Lock()
 	keyPath := s.backend.KeyManager().GetKeyPath(keyID)
+	s.mutex.Unlock()
+
 	if keyPath == "" {
 		http.Error(w, "Key not available", http.StatusNotFound)
 		return
@@ -787,3 +820,28 @@ func (s *Server) handleHighMemoryPressure(pressure float64) {
 		log.Printf("Cleared package mapper cache due to memory pressure")
 	}
 }
+
+// HandlePackageRequest is the exported version of handlePackageRequest
+// Exported for testing and for use in https.go
+func (s *Server) HandlePackageRequest(w http.ResponseWriter, r *http.Request) {
+	s.handlePackageRequest(w, r)
+}
+
+// GetContentType is the exported version of getContentType
+// Exported for testing
+func GetContentType(path string) string {
+	return getContentType(path)
+}
+
+// IsIndexFile is the exported version of isIndexFile
+// Exported for testing
+func IsIndexFile(path string) bool {
+	return isIndexFile(path)
+}
+
+// HandleReportRequest is the exported version of handleReportRequest
+// Exported for testing
+func (s *Server) HandleReportRequest(w http.ResponseWriter, r *http.Request) {
+	s.handleReportRequest(w, r)
+}
+
