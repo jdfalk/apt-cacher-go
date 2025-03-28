@@ -10,6 +10,7 @@ import (
 	"path"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jdfalk/apt-cacher-go/internal/backend"
@@ -37,6 +38,9 @@ type Server struct {
 	version       string
 	logger        *log.Logger // Add logger field
 	memoryMonitor *MemoryMonitor
+	mutex         sync.Mutex
+	startOnce     sync.Once
+	shutdownOnce  sync.Once
 }
 
 // New creates a new Server instance
@@ -250,81 +254,97 @@ func New(cfg *config.Config, backendManager *backend.Manager, cache *cachelib.Ca
 
 // Start begins listening for HTTP requests
 func (s *Server) Start() error {
-	// Start the HTTP server
-	go func() {
-		log.Printf("Starting HTTP server on %s", s.httpServer.Addr)
-		if err := s.httpServer.ListenAndServe(); err != http.ErrServerClosed {
-			log.Fatalf("HTTP server error: %v", err)
+	var startErr error
+
+	s.startOnce.Do(func() {
+		// Initialize components in the main thread before starting server
+		if s.memoryMonitor == nil {
+			s.memoryMonitor = NewMemoryMonitor(1024, 2048, func(pressure int) {
+				s.handleHighMemoryPressure(float64(pressure) / 100)
+			})
+			s.memoryMonitor.Start()
 		}
-	}()
 
-	// Start the HTTPS server if configured
-	if s.httpsServer != nil {
+		// Now start HTTP servers in goroutines
 		go func() {
-			log.Printf("Starting HTTPS server on %s", s.httpsServer.Addr)
-			if err := s.httpsServer.ListenAndServe(); err != http.ErrServerClosed {
-				log.Fatalf("HTTPS server error: %v", err)
+			log.Printf("Starting HTTP server on %s", s.httpServer.Addr)
+			if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("HTTP server error: %v", err)
+				startErr = err
 			}
 		}()
-	}
 
-	// Start the admin server if configured separately
-	if s.adminServer != nil {
-		go func() {
-			log.Printf("Admin interface will be available at http://%s/admin", s.adminServer.Addr)
-			if err := s.adminServer.ListenAndServe(); err != http.ErrServerClosed {
-				log.Fatalf("Admin server error: %v", err)
-			}
-		}()
-	}
+		// Start HTTPS server if configured
+		if s.httpsServer != nil {
+			go func() {
+				log.Printf("Starting HTTPS server on %s", s.httpsServer.Addr)
+				if err := s.httpsServer.ListenAndServe(); err != http.ErrServerClosed {
+					log.Fatalf("HTTPS server error: %v", err)
+				}
+			}()
+		}
 
-	// Warm up the cache in the background
-	go s.backend.PrefetchOnStartup(context.Background())
+		// Start the admin server if configured separately
+		if s.adminServer != nil {
+			go func() {
+				log.Printf("Admin interface will be available at http://%s/admin", s.adminServer.Addr)
+				if err := s.adminServer.ListenAndServe(); err != http.ErrServerClosed {
+					log.Fatalf("Admin server error: %v", err)
+				}
+			}()
+		}
 
-	// Start memory monitoring
-	memoryLimitMB := 1024   // 1GB high watermark
-	criticalLimitMB := 2048 // 2GB critical watermark
-	s.memoryMonitor = NewMemoryMonitor(memoryLimitMB, criticalLimitMB, func(pressure int) {
-		s.handleHighMemoryPressure(float64(pressure) / 100.0)
+		// Warm up the cache in the background
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel() // Make sure to call cancel to avoid context leak
+		s.backend.PrefetchOnStartup(ctx)
 	})
-	s.memoryMonitor.Start()
 
-	return nil
+	return startErr
 }
 
 // Shutdown gracefully stops the server
 func (s *Server) Shutdown() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	var shutdownErr error
 
-	// Shutdown the backend
-	s.backend.Shutdown()
+	s.shutdownOnce.Do(func() {
+		// Acquire lock to prevent races with Start method
+		s.mutex.Lock()
+		defer s.mutex.Unlock()
 
-	// Shutdown admin server if it exists
-	if s.adminServer != nil {
-		if err := s.adminServer.Shutdown(ctx); err != nil {
-			log.Printf("Error shutting down admin server: %v", err)
+		if s.memoryMonitor != nil {
+			s.memoryMonitor.Stop()
 		}
-	}
 
-	// Shutdown HTTPS server if it exists
-	if s.httpsServer != nil {
-		if err := s.httpsServer.Shutdown(ctx); err != nil {
-			return err
+		if s.httpServer != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			shutdownErr = s.httpServer.Shutdown(ctx)
 		}
-	}
 
-	// Shutdown HTTP server
-	if err := s.httpServer.Shutdown(ctx); err != nil {
-		return err
-	}
+		if s.adminServer != nil && s.cfg.AdminPort != s.cfg.Port {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
 
-	// Stop memory monitoring
-	if s.memoryMonitor != nil {
-		s.memoryMonitor.Stop()
-	}
+			if err := s.adminServer.Shutdown(ctx); err != nil {
+				log.Printf("Error shutting down admin server: %v", err)
+			}
+		}
 
-	return nil
+		if s.backend != nil {
+			s.backend.Shutdown()
+		}
+
+		if s.cache != nil {
+			err := s.cache.Close()
+			if err != nil {
+				log.Printf("Error closing cache: %v", err)
+			}
+		}
+	})
+
+	return shutdownErr
 }
 
 // wrapWithMetrics wraps a handler with metrics collection
@@ -466,17 +486,17 @@ func (s *Server) handlePackageRequest(w http.ResponseWriter, r *http.Request) {
 
 	// Check for special APT-specific request headers
 	if r.Header.Get("If-Modified-Since") != "" {
-		// We need to use the appropriate methods to handle conditional requests
-
-		// First check if the file is in cache - use the actual API of cache.Get
-		filePath, found, err := s.cache.Get(requestPath)
-		if err == nil && found {
-			// Parse the If-Modified-Since header
+		// Fixed: Use correct Cache.Get() method parameters and return values
+		data, err := s.cache.Get(requestPath)
+		if err == nil && len(data) > 0 {
+			// We have the file in cache, parse the If-Modified-Since header
 			modTime, err := time.Parse(http.TimeFormat, r.Header.Get("If-Modified-Since"))
 			if err == nil {
-				// Compare with cached file's last modified time
-				fileInfo, err := os.Stat(string(filePath))
-				if err == nil && !fileInfo.ModTime().After(modTime) {
+				// Get metadata information about the cached file
+				// Fixed: Don't use os.Stat directly on cache data
+				fileModTime := s.cache.GetLastModified(requestPath)
+				if !fileModTime.IsZero() && !fileModTime.After(modTime) {
+					// File hasn't been modified since the specified time
 					w.WriteHeader(http.StatusNotModified)
 					return
 				}

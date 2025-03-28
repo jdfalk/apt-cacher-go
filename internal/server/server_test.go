@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -274,23 +275,61 @@ func TestPackageRequest(t *testing.T) {
 }
 
 func TestServerStartAndShutdown(t *testing.T) {
-	server, tempDir, _ := createTestServer(t) // Don't use cleanup function
+	// Create a temporary cache directory
+	tempDir, err := os.MkdirTemp("", "apt-cacher-test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir) // Clean up temp dir regardless of test outcome
+
+	// Create minimal config
+	cfg := &config.Config{
+		CacheDir:      tempDir,
+		ListenAddress: "127.0.0.1",
+		Port:          8080,
+		AdminPort:     9191,
+		Backends: []config.Backend{
+			{
+				Name: "test-repo",
+				URL:  "http://example.com/debian",
+			},
+		},
+	}
+
+	// Create a cache
+	cache, err := cachelib.New(tempDir, 1024*1024*10) // 10MB
+	require.NoError(t, err)
+
+	// Create mapper
+	pathMapper := mapper.New()
+	packageMapper := mapper.NewPackageMapper()
+
+	// Create backend manager
+	backendManager, err := backend.New(cfg, cache, pathMapper, packageMapper)
+	require.NoError(t, err)
+
+	// Create server with direct components
+	server, err := New(cfg, backendManager, cache, packageMapper)
+	require.NoError(t, err)
+
+	// Use wait group to properly synchronize
+	var wg sync.WaitGroup
+	wg.Add(1)
 
 	// Start the server
 	go func() {
+		defer wg.Done()
 		err := server.Start()
 		if err != nil && err != http.ErrServerClosed {
-			t.Logf("Unexpected server error: %v", err)
+			t.Logf("Server unexpected error: %v", err)
 		}
 	}()
 
-	// Wait for server to start
-	time.Sleep(100 * time.Millisecond)
+	// Give it time to initialize
+	time.Sleep(200 * time.Millisecond)
 
-	// Test shutdown
-	err := server.Shutdown()
+	// Shutdown the server - ONLY ONCE
+	err = server.Shutdown()
 	assert.NoError(t, err)
 
-	// Only clean up the temp directory, not shutdown again
-	os.RemoveAll(tempDir)
+	// Wait for server to finish shutting down
+	wg.Wait()
 }
