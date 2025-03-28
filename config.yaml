@@ -156,10 +156,10 @@ mapping_rules:
 
 # Memory and performance tuning
 memory_management:
-  max_cache_size: 1G # Maximum memory to use for caching
+  max_cache_size: 8G # Maximum memory to use for caching
   persistent_storage: true # Use disk-based storage for hash mappings
-  high_watermark_mb: 1024 # 1GB soft limit
-  critical_watermark_mb: 2048 # 2GB hard limit
+  high_watermark_mb: 6144 # 1GB soft limit
+  critical_watermark_mb: 8096 # 2GB hard limit
   monitor_interval: "5s"
 
 # Increase cache size while reducing memory footprint
