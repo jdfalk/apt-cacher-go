@@ -12,10 +12,16 @@ import (
 	"github.com/jdfalk/apt-cacher-go/internal/metrics"
 )
 
+// PrefetcherManager defines the interface needed by the prefetcher
+type PrefetcherManager interface {
+	Fetch(url string) ([]byte, error)
+	GetAllBackends() []*Backend
+}
+
 // Prefetcher manages background prefetching of packages
 type Prefetcher struct {
-	manager        *Manager
-	active         sync.Map // Track active prefetch operations
+	manager        PrefetcherManager // Changed from *Manager to interface
+	active         sync.Map          // Track active prefetch operations
 	maxActive      int
 	cleanupTick    *time.Ticker
 	wg             sync.WaitGroup
@@ -39,7 +45,7 @@ type PrefetchOperation struct {
 }
 
 // NewPrefetcher creates a new prefetcher
-func NewPrefetcher(manager *Manager, maxActive int, architectures []string) *Prefetcher {
+func NewPrefetcher(manager PrefetcherManager, maxActive int, architectures []string) *Prefetcher {
 	// Create map for fast lookup
 	archMap := make(map[string]bool)
 	for _, arch := range architectures {
