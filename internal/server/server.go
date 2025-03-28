@@ -278,18 +278,18 @@ func (s *Server) Start() error {
 		if s.httpsServer != nil {
 			go func() {
 				log.Printf("Starting HTTPS server on %s", s.httpsServer.Addr)
-				if err := s.httpsServer.ListenAndServe(); err != http.ErrServerClosed {
-					log.Fatalf("HTTPS server error: %v", err)
+				if err := s.httpsServer.ListenAndServeTLS(s.cfg.TLSCert, s.cfg.TLSKey); err != nil && err != http.ErrServerClosed {
+					log.Printf("HTTPS server error: %v", err)
 				}
 			}()
 		}
 
 		// Start the admin server if configured separately
-		if s.adminServer != nil {
+		if s.adminServer != nil && s.cfg.AdminPort != s.cfg.Port {
 			go func() {
 				log.Printf("Admin interface will be available at http://%s/admin", s.adminServer.Addr)
-				if err := s.adminServer.ListenAndServe(); err != http.ErrServerClosed {
-					log.Fatalf("Admin server error: %v", err)
+				if err := s.adminServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+					log.Printf("Admin server error: %v", err)
 				}
 			}()
 		}

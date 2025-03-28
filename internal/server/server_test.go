@@ -275,10 +275,10 @@ func TestPackageRequest(t *testing.T) {
 }
 
 func TestServerStartAndShutdown(t *testing.T) {
-	// Create a temporary cache directory
+	// Create a test server
 	tempDir, err := os.MkdirTemp("", "apt-cacher-test")
 	require.NoError(t, err)
-	defer os.RemoveAll(tempDir) // Clean up temp dir regardless of test outcome
+	defer os.RemoveAll(tempDir)
 
 	// Create minimal config
 	cfg := &config.Config{
@@ -294,39 +294,36 @@ func TestServerStartAndShutdown(t *testing.T) {
 		},
 	}
 
-	// Create a cache
+	// Create all components directly
 	cache, err := cachelib.New(tempDir, 1024*1024*10) // 10MB
 	require.NoError(t, err)
 
-	// Create mapper
-	pathMapper := mapper.New()
 	packageMapper := mapper.NewPackageMapper()
+	pathMapper := mapper.New()
 
-	// Create backend manager
 	backendManager, err := backend.New(cfg, cache, pathMapper, packageMapper)
 	require.NoError(t, err)
 
-	// Create server with direct components
 	server, err := New(cfg, backendManager, cache, packageMapper)
 	require.NoError(t, err)
 
-	// Use wait group to properly synchronize
+	// Use a waitgroup to coordinate
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	// Start the server
+	// Start the server in its own goroutine
 	go func() {
 		defer wg.Done()
 		err := server.Start()
 		if err != nil && err != http.ErrServerClosed {
-			t.Logf("Server unexpected error: %v", err)
+			t.Logf("Server error: %v", err)
 		}
 	}()
 
-	// Give it time to initialize
+	// Wait for server to initialize
 	time.Sleep(200 * time.Millisecond)
 
-	// Shutdown the server - ONLY ONCE
+	// Shutdown the server - explicitly, not via cleanup
 	err = server.Shutdown()
 	assert.NoError(t, err)
 
