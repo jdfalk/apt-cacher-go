@@ -222,31 +222,38 @@ func New(cfg *config.Config, bm *backend.Manager, cache *cachelib.Cache, package
 
 // Start begins listening for HTTP requests
 func (s *Server) Start() error {
-	// Start admin server if configured
-	if s.adminServer != nil {
-		go func() {
-			log.Printf("Starting admin server on %s", s.adminServer.Addr)
-			if err := s.adminServer.ListenAndServe(); err != http.ErrServerClosed {
-				log.Printf("Admin server error: %v", err)
-			}
-		}()
-	}
+	// Start the HTTP server
+	go func() {
+		log.Printf("Starting HTTP server on %s", s.httpServer.Addr)
+		if err := s.httpServer.ListenAndServe(); err != http.ErrServerClosed {
+			log.Fatalf("HTTP server error: %v", err)
+		}
+	}()
 
-	// Start HTTPS server if configured
+	// Start the HTTPS server if configured
 	if s.httpsServer != nil {
 		go func() {
 			log.Printf("Starting HTTPS server on %s", s.httpsServer.Addr)
-			if err := s.httpsServer.ListenAndServeTLS(
-				s.cfg.TLSCert, s.cfg.TLSKey,
-			); err != http.ErrServerClosed {
+			if err := s.httpsServer.ListenAndServe(); err != http.ErrServerClosed {
 				log.Fatalf("HTTPS server error: %v", err)
 			}
 		}()
 	}
 
-	// Start HTTP server
-	log.Printf("Starting HTTP server on %s", s.httpServer.Addr)
-	return s.httpServer.ListenAndServe()
+	// Start the admin server if configured separately
+	if s.adminServer != nil {
+		go func() {
+			log.Printf("Admin interface will be available at http://%s/admin", s.adminServer.Addr)
+			if err := s.adminServer.ListenAndServe(); err != http.ErrServerClosed {
+				log.Fatalf("Admin server error: %v", err)
+			}
+		}()
+	}
+
+	// Warm up the cache in the background
+	go s.backend.PrefetchOnStartup(context.Background())
+
+	return nil
 }
 
 // Shutdown gracefully stops the server

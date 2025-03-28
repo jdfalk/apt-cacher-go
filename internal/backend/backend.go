@@ -474,3 +474,17 @@ func (m *Manager) ForceCleanupPrefetcher() int {
 func (m *Manager) KeyManager() *keymanager.KeyManager {
 	return m.keyManager
 }
+
+// GetAllBackends returns all configured backends
+func (m *Manager) GetAllBackends() []*Backend {
+	return m.backends
+}
+
+// PrefetchOnStartup warms the cache by prefetching common files
+func (m *Manager) PrefetchOnStartup(ctx context.Context) {
+	if m.prefetcher != nil {
+		m.prefetcher.PrefetchOnStartup(ctx)
+	} else {
+		log.Printf("Prefetcher not initialized, skipping startup prefetch")
+	}
+}

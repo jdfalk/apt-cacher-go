@@ -61,6 +61,9 @@ type Config struct {
 
 	// Key management configuration
 	KeyManagement KeyManagementConfig `yaml:"key_management"`
+
+	// Prefetch configuration
+	Prefetch PrefetchConfig `yaml:"prefetch"`
 }
 
 // Backend represents a repository backend
@@ -95,6 +98,14 @@ type KeyManagementConfig struct {
 
 	// Directory to store keys
 	KeyDir string `yaml:"key_dir"`
+}
+
+// PrefetchConfig holds settings for prefetching
+type PrefetchConfig struct {
+	Enabled         bool     `yaml:"enabled"`
+	MaxConcurrent   int      `yaml:"max_concurrent"`
+	Architectures   []string `yaml:"architectures"`
+	WarmupOnStartup bool     `yaml:"warmup_on_startup"`
 }
 
 // LoadConfigFile loads configuration from a YAML file

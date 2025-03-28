@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"path/filepath"
 	"strings"
@@ -13,13 +14,15 @@ import (
 
 // Prefetcher manages background prefetching of packages
 type Prefetcher struct {
-	manager       *Manager
-	active        sync.Map // Track active prefetch operations
-	maxActive     int
-	cleanupTick   *time.Ticker
-	wg            sync.WaitGroup
-	stopCh        chan struct{}
-	architectures map[string]bool // Add this field
+	manager        *Manager
+	active         sync.Map // Track active prefetch operations
+	maxActive      int
+	cleanupTick    *time.Ticker
+	wg             sync.WaitGroup
+	stopCh         chan struct{}
+	architectures  map[string]bool
+	verboseLogging bool // Add this field to control 404 logging
+	startupDone    bool // Track whether startup prefetch has completed
 }
 
 // PrefetchOperation tracks a single prefetch operation
@@ -54,16 +57,12 @@ func NewPrefetcher(manager *Manager, maxActive int, architectures []string) *Pre
 
 // cleanupRoutine periodically checks for stale operations
 func (p *Prefetcher) cleanupRoutine() {
-	p.wg.Add(1)
-	defer p.wg.Done()
-
 	for {
 		select {
-		case <-p.cleanupTick.C:
-			p.cleanupStalePrefetches(2 * time.Minute)
 		case <-p.stopCh:
-			p.cleanupTick.Stop()
 			return
+		case <-p.cleanupTick.C:
+			p.cleanupStalePrefetches()
 		}
 	}
 }
@@ -102,7 +101,7 @@ func (p *Prefetcher) filterByArchitecture(urls []string) []string {
 	return filtered
 }
 
-// ProcessIndexFile analyzes an index file and prefetches popular packages
+// ProcessIndexFile processes package index files and prefetches packages
 func (p *Prefetcher) ProcessIndexFile(repo string, path string, data []byte) {
 	// Don't process if not a Packages file
 	if !strings.HasPrefix(filepath.Base(path), "Packages") {
@@ -136,163 +135,147 @@ func (p *Prefetcher) ProcessIndexFile(repo string, path string, data []byte) {
 		urls = urls[:20]
 	}
 
-	// Count active prefetch operations
+	// Check if we're over the limit of active operations
 	activeCount := 0
 	p.active.Range(func(_, _ interface{}) bool {
 		activeCount++
 		return true
 	})
 
-	// Skip if too many active prefetch operations
 	if activeCount >= p.maxActive {
 		log.Printf("Skipping prefetch, too many active operations: %d", activeCount)
 		return
 	}
 
-	// Set a timeout for the entire prefetch operation
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	// Use a WaitGroup to track all URL fetches
+	var wg sync.WaitGroup
+	resultsCh := make(chan string, len(urls))
+	fetchTime := time.Now()
 
-	// Prefetch packages in background
-	p.wg.Add(1)
+	// Use sync.Once to ensure the channel is only closed once
+	var closeOnce sync.Once
+
+	// Create a context with cancellation
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // Ensure context is cancelled when we return
+
+	// Create an operation ID
+	opID := fmt.Sprintf("%s:%d", path, time.Now().UnixNano())
+
+	// Register this operation
+	p.active.Store(opID, fetchTime)
+
+	// Start a goroutine to track completion and cleanup
 	go func() {
-		defer p.wg.Done()
-		defer cancel()
+		// Wait for all fetches to complete
+		wg.Wait()
 
-		startTime := time.Now()
-		prefetchCount := 0
-		completedCount := 0
+		// Get elapsed time
+		elapsed := time.Since(fetchTime)
 
-		for _, url := range urls {
-			// Check if context is done
-			if ctx.Err() != nil {
-				break
-			}
+		// Clean up resources
+		p.active.Delete(opID)
 
-			// Check if we have too many active operations now
-			currentActiveCount := 0
-			p.active.Range(func(_, _ interface{}) bool {
-				currentActiveCount++
-				return true
-			})
+		// Close the results channel safely
+		closeOnce.Do(func() {
+			close(resultsCh)
+		})
 
-			if currentActiveCount >= p.maxActive {
-				log.Printf("Reached max active operations during prefetch: %d", currentActiveCount)
-				break
-			}
-
-			// Create operation tracking
-			op := &PrefetchOperation{
-				URL:       url,
-				StartTime: time.Now(),
-				Done:      make(chan struct{}),
-			}
-
-			// Check if already being prefetched
-			if _, exists := p.active.LoadOrStore(url, op); exists {
-				continue
-			}
-
-			prefetchCount++
-			log.Printf("Prefetching %s", url)
-
-			// Fetch with timeout
-			go func(operation *PrefetchOperation, u string) {
-				_, fetchCancel := context.WithTimeout(ctx, 30*time.Second)
-				defer fetchCancel()
-				defer close(operation.Done)
-				defer p.active.Delete(u)
-
-				// Fetch the file
-				_, err := p.manager.Fetch(u)
-				if err != nil {
-					if strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "not found") {
-						// 404 errors are expected for some files - not a real error
-						operation.Result = "not_found"
-						log.Printf("Failed to prefetch %s: backend returned non-OK status: 404", u)
-					} else {
-						operation.Result = "error"
-						log.Printf("Error prefetching %s: %v", u, err)
-					}
-				} else {
-					operation.Result = "success"
-				}
-
-				// Clean up this operation
-				p.active.Delete(u)
-				completedCount++
-			}(op, url)
-
-			// Avoid hammering the backend
-			select {
-			case <-time.After(100 * time.Millisecond):
-				// Rate limiting
-			case <-ctx.Done():
-				break
-			}
-		}
-
-		// Wait for all operations to complete or time out
-		waitCtx, waitCancel := context.WithTimeout(context.Background(), 45*time.Second)
-		defer waitCancel()
-
-		activeOps := make([]*PrefetchOperation, 0)
+		// Log completion
+		successCount := 0
 		p.active.Range(func(k, v interface{}) bool {
-			if op, ok := v.(*PrefetchOperation); ok {
-				activeOps = append(activeOps, op)
+			if strings.HasPrefix(k.(string), opID+":") {
+				successCount++
 			}
 			return true
 		})
 
-		// Wait for each operation
-		for _, op := range activeOps {
-			select {
-			case <-op.Done:
-				// Operation completed
-			case <-waitCtx.Done():
-				// Timeout waiting for operations
-				log.Printf("Timed out waiting for prefetch operations to complete")
-				break
-			}
-		}
-
-		// Final cleanup
-		p.cleanupStalePrefetches(10 * time.Second)
-
-		log.Printf("Prefetch operation completed: processed %d/%d URLs in %v",
-			completedCount, prefetchCount, time.Since(startTime))
+		log.Printf("Prefetch operation completed: processed %d/%d URLs in %v", successCount, len(urls), elapsed)
 	}()
+
+	// Process each URL
+	for i, u := range urls {
+		wg.Add(1)
+
+		// Create unique ID for this URL fetch
+		urlID := fmt.Sprintf("%s:%d", opID, i)
+
+		// Store it in active map
+		p.active.Store(urlID, time.Now())
+
+		// Launch goroutine to fetch
+		go func(url string, id string) {
+			defer wg.Done()
+			defer p.active.Delete(id)
+
+			// Skip if context is already cancelled
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				// Continue processing
+			}
+
+			// Fetch the file
+			_, err := p.manager.Fetch(url)
+
+			// Handle result with improved error handling
+			if err != nil {
+				if strings.Contains(err.Error(), "404") {
+					// Lower log level for 404 errors - they're expected
+					if p.verboseLogging {
+						log.Printf("Debug: Prefetch 404 for %s", url)
+					}
+				} else {
+					// Log other errors normally
+					log.Printf("Failed to prefetch %s: %v", url, err)
+				}
+				return
+			}
+
+			// Send success - safely handle channel send
+			select {
+			case resultsCh <- url:
+				// Successfully sent result
+			case <-ctx.Done():
+				// Context cancelled, don't try to send
+			default:
+				// Channel full or closed, don't block
+			}
+		}(u, urlID)
+	}
 }
 
 // cleanupStalePrefetches removes prefetch operations that have been running too long
-func (p *Prefetcher) cleanupStalePrefetches(maxAge time.Duration) {
+func (p *Prefetcher) cleanupStalePrefetches() {
 	now := time.Now()
-	cleaned := 0
+	toDelete := make([]string, 0)
 
+	// First pass - identify stale operations
 	p.active.Range(func(key, value interface{}) bool {
-		if op, ok := value.(*PrefetchOperation); ok {
-			if now.Sub(op.StartTime) > maxAge {
-				p.active.Delete(key)
-				cleaned++
-				log.Printf("Cleaned up stale prefetch: %v (age: %v)", key, now.Sub(op.StartTime))
+		k := key.(string)
+		v := value.(time.Time)
 
-				// Close the done channel if it hasn't been closed yet
-				select {
-				case <-op.Done:
-					// Already closed
-				default:
-					close(op.Done)
-				}
-			}
-		} else {
-			// Old format data in the map, just clean it up
-			p.active.Delete(key)
-			cleaned++
+		age := now.Sub(v)
+		if age > 15*time.Second {
+			toDelete = append(toDelete, k)
 		}
 		return true
 	})
 
-	if cleaned > 0 {
-		log.Printf("Cleaned up %d stale prefetch operations", cleaned)
+	// Second pass - delete them
+	for _, key := range toDelete {
+		if val, ok := p.active.Load(key); ok {
+			startTime := val.(time.Time)
+			p.active.Delete(key)
+			log.Printf("Cleaned up stale prefetch: %s (age: %v)", key, now.Sub(startTime))
+		} else {
+			p.active.Delete(key)
+		}
+	}
+
+	if len(toDelete) > 0 {
+		log.Printf("Cleaned up %d stale prefetch operations", len(toDelete))
 	}
 }
 
@@ -327,4 +310,110 @@ func (p *Prefetcher) ForceCleanup() int {
 	})
 	log.Printf("Force-cleaned %d prefetch operations", cleaned)
 	return cleaned
+}
+
+// AddToConfig adds a set of architectures to filter
+func (p *Prefetcher) AddArchitecture(architectures ...string) {
+	for _, arch := range architectures {
+		p.architectures[arch] = true
+	}
+}
+
+// IsArchitectureEnabled checks if a specific architecture is enabled
+func (p *Prefetcher) IsArchitectureEnabled(arch string) bool {
+	// If no architectures specified, all are enabled
+	if len(p.architectures) == 0 {
+		return true
+	}
+	return p.architectures[arch]
+}
+
+// SetVerboseLogging controls whether to log 404 errors
+func (p *Prefetcher) SetVerboseLogging(verbose bool) {
+	p.verboseLogging = verbose
+}
+
+// PrefetchOnStartup warms the cache by fetching common index files
+func (p *Prefetcher) PrefetchOnStartup(ctx context.Context) {
+	if p.startupDone {
+		return
+	}
+
+	log.Printf("Starting initial cache warm-up...")
+	startTime := time.Now()
+
+	// Get all configured backends
+	backends := p.manager.GetAllBackends()
+	var wg sync.WaitGroup
+
+	// Common index file patterns to fetch for each repository
+	indexPaths := []string{
+		"dists/%s/InRelease",
+		"dists/%s/Release",
+		"dists/%s/Release.gpg",
+	}
+
+	// For each enabled architecture, add architecture-specific indexes
+	archPaths := []string{
+		"dists/%s/main/binary-%s/Packages",
+		"dists/%s/main/binary-%s/Packages.gz",
+		"dists/%s/main/binary-%s/Packages.xz",
+		"dists/%s/universe/binary-%s/Packages",
+		"dists/%s/universe/binary-%s/Packages.gz",
+		"dists/%s/universe/binary-%s/Packages.xz",
+		"dists/%s/restricted/binary-%s/Packages",
+		"dists/%s/multiverse/binary-%s/Packages",
+	}
+
+	// Common releases to try (this can be made configurable)
+	releases := []string{"stable", "testing", "unstable", "jammy", "focal", "noble", "oracular"}
+
+	for _, backend := range backends {
+		wg.Add(1)
+		go func(b *Backend) {
+			defer wg.Done()
+
+			for _, release := range releases {
+				// Fetch distribution-independent indexes
+				for _, pathPattern := range indexPaths {
+					path := fmt.Sprintf(pathPattern, release)
+					fullPath := fmt.Sprintf("/%s/%s", b.Name, path)
+
+					// Don't log 404s during startup
+					oldVerbose := p.verboseLogging
+					p.verboseLogging = false
+					_, _ = p.manager.Fetch(fullPath) // Ignore errors
+					p.verboseLogging = oldVerbose
+				}
+
+				// Fetch architecture-specific indexes
+				for arch := range p.architectures {
+					for _, pathPattern := range archPaths {
+						path := fmt.Sprintf(pathPattern, release, arch)
+						fullPath := fmt.Sprintf("/%s/%s", b.Name, path)
+						_, _ = p.manager.Fetch(fullPath) // Ignore errors
+					}
+				}
+			}
+		}(backend)
+	}
+
+	// Wait for all prefetch operations with timeout
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		elapsed := time.Since(startTime)
+		log.Printf("Initial cache warm-up completed in %v", elapsed)
+	case <-time.After(60 * time.Second):
+		log.Printf("Initial cache warm-up timed out after 60s")
+	case <-ctx.Done():
+		log.Printf("Initial cache warm-up cancelled")
+	}
+
+	p.startupDone = true
 }
