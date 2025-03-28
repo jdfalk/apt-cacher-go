@@ -40,9 +40,9 @@ type Server struct {
 }
 
 // New creates a new Server instance
-func New(cfg *config.Config, bm *backend.Manager, cache *cachelib.Cache, packageMapper *mapper.PackageMapper) (*Server, error) {
+func New(cfg *config.Config, backendManager *backend.Manager, cache *cachelib.Cache, packageMapper *mapper.PackageMapper) (*Server, error) {
 	// If we only received the config, initialize the other components
-	if bm == nil && cache == nil {
+	if backendManager == nil && cache == nil {
 		// Create a new cache - using the imported package, not the parameter
 		cacheInstance, err := cachelib.New(cfg.CacheDir, 10*1024) // 10GB default
 		if err != nil {
@@ -68,7 +68,7 @@ func New(cfg *config.Config, bm *backend.Manager, cache *cachelib.Cache, package
 	// Create the server with the provided components
 	s := &Server{
 		cfg:           cfg,
-		backend:       bm,
+		backend:       backendManager,
 		cache:         cache,
 		metrics:       metrics.New(), // Using the correct constructor
 		packageMapper: packageMapper, // Add this line
@@ -117,7 +117,7 @@ func New(cfg *config.Config, bm *backend.Manager, cache *cachelib.Cache, package
 		}
 	}
 	// Create backend
-	backendManager, err := backend.New(cfg, s.cache, m, s.packageMapper)
+	backendManager, err = backend.New(cfg, s.cache, m, s.packageMapper)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create backend manager: %w", err)
 	}
@@ -175,7 +175,7 @@ func New(cfg *config.Config, bm *backend.Manager, cache *cachelib.Cache, package
 		adminMux.HandleFunc("/admin/search", s.handleAdminAuth(s.adminSearchCache))
 		adminMux.HandleFunc("/admin/cache", s.handleAdminAuth(s.adminCachePackage))
 		adminMux.HandleFunc("/admin/cleanup-memory", s.handleAdminAuth(s.adminForceMemoryCleanup))
-		http.HandleFunc("/admin/cleanup-prefetcher", s.handleAdminAuth(s.adminCleanupPrefetcher))
+		adminMux.HandleFunc("/admin/cleanup-prefetcher", s.handleAdminAuth(s.adminCleanupPrefetcher))
 
 		// Create admin server
 		s.adminServer = &http.Server{
@@ -232,8 +232,8 @@ func New(cfg *config.Config, bm *backend.Manager, cache *cachelib.Cache, package
 			}
 
 			// Force prefetcher cleanup
-			if bm != nil {
-				bm.ForceCleanupPrefetcher()
+			if s.backend != nil {
+				s.backend.ForceCleanupPrefetcher()
 			}
 
 			// Force garbage collection
