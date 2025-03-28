@@ -444,8 +444,14 @@ func (c *Cache) evictItems(requiredSpace int64) error {
 
 // saveState persists the cache state to disk
 func (c *Cache) saveState() error {
+	// Use a local copy of data to avoid holding locks during file operations
 	c.mutex.RLock()
-	defer c.mutex.RUnlock()
+	localItems := make(map[string]*cacheEntry, len(c.items))
+	for k, v := range c.items {
+		copiedEntry := *v // Make a copy
+		localItems[k] = &copiedEntry
+	}
+	c.mutex.RUnlock()
 
 	statePath := filepath.Join(c.rootDir, "cache_state.json")
 	file, err := os.Create(statePath)
@@ -455,7 +461,7 @@ func (c *Cache) saveState() error {
 	defer file.Close()
 
 	encoder := json.NewEncoder(file)
-	err = encoder.Encode(c.items)
+	err = encoder.Encode(localItems)
 	if err != nil {
 		return fmt.Errorf("failed to encode cache state: %w", err)
 	}
