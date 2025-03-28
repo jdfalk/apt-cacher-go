@@ -3,6 +3,7 @@ package backend
 import (
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +24,54 @@ type TestCache struct {
 // GetPackageMapper returns the package mapper - adding this method silences the unused field warning
 func (tc *TestCache) GetPackageMapper() *mapper.PackageMapper {
 	return tc.PackageMapper
+}
+
+// GetPackageIndex returns a package index - stub implementation for tests
+func (tc *TestCache) GetPackageIndex() *packageIndex {
+	// Return a simple in-memory package index for testing
+	return &packageIndex{
+		packages: make(map[string]parser.PackageInfo),
+	}
+}
+
+// Define a package index type for the test
+type packageIndex struct {
+	packages map[string]parser.PackageInfo
+	mutex    sync.Mutex
+}
+
+// AddPackage adds a package to the index
+func (pi *packageIndex) AddPackage(pkg parser.PackageInfo) {
+	pi.mutex.Lock()
+	defer pi.mutex.Unlock()
+	pi.packages[pkg.Package] = pkg
+}
+
+// SearchByPackageName searches for packages by name
+func (tc *TestCache) SearchByPackageName(name string) ([]cache.CacheSearchResult, error) {
+	results := []cache.CacheSearchResult{}
+
+	// Check if GetPackageIndex returns nil
+	index := tc.GetPackageIndex()
+	if index == nil {
+		return results, nil
+	}
+
+	// Search through packages
+	for pkgName, pkg := range index.packages {
+		if strings.Contains(pkgName, name) {
+			results = append(results, cache.CacheSearchResult{
+				Path:        pkg.Filename,
+				PackageName: pkg.Package,
+				Version:     pkg.Version,
+				Size:        pkg.Size,
+				LastAccess:  time.Now(),
+				IsCached:    true,
+			})
+		}
+	}
+
+	return results, nil
 }
 
 // UpdatePackageIndex is our test implementation that adds packages to the index
