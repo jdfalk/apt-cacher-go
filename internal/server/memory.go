@@ -117,3 +117,8 @@ func (m *MemoryMonitor) checkMemoryUsage() {
 		runtime.GC()
 	}
 }
+
+// HandleHighMemoryPressure is the exported version of handleHighMemoryPressure
+func (s *Server) HandleHighMemoryPressure(pressure float64) {
+	s.handleHighMemoryPressure(pressure)
+}
