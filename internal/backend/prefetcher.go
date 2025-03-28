@@ -567,9 +567,7 @@ func extractURLsFromIndexEfficient(data []byte) []string {
 	urls := make([]string, 0, 100) // Pre-allocate for efficiency
 
 	// Convert to string but process line by line to avoid large memory allocation
-	lines := strings.Split(string(data), "\n")
-
-	for _, line := range lines {
+	for _, line := range strings.Split(string(data), "\n") {
 		// Look for Filename: entries in Packages files
 		if strings.HasPrefix(line, "Filename: ") {
 			path := strings.TrimPrefix(line, "Filename: ")

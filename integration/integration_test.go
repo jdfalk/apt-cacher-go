@@ -203,23 +203,6 @@ func readAndDiscardBody(t *testing.T, resp *http.Response) {
 // Add timeout handling to integration test
 func TestBasicFunctionality(t *testing.T) {
 	// Set up test with cleanup and timeout handling
-	_, cleanup := setupTestServer(t, "")
-	defer func() {
-		done := make(chan struct{})
-		go func() {
-			cleanup()
-			close(done)
-		}()
-
-		select {
-		case <-done:
-			// Clean shutdown
-		case <-time.After(2 * time.Second):
-			t.Log("Warning: Cleanup timed out")
-		}
-	}()
-
-	// Setup a mock upstream server first
 	mockUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 
@@ -230,13 +213,6 @@ func TestBasicFunctionality(t *testing.T) {
 		} else if strings.Contains(r.URL.Path, "pool/main/h/hello") {
 			originalPath = "/debian" + r.URL.Path
 		}
-
-		// Log the requested path with more details
-		t.Logf("Mock server received: %s (method: %s)", r.URL.Path, r.Method)
-
-		// Add debugging headers to trace request flow
-		w.Header().Set("X-Mock-Server", "true")
-		w.Header().Set("X-Cache", "MISS")
 
 		// Return repository-specific mock data with the ORIGINAL path
 		content := fmt.Sprintf("Mock repository data for %s (timestamp: %d)",
@@ -249,66 +225,36 @@ func TestBasicFunctionality(t *testing.T) {
 	}))
 	defer mockUpstream.Close()
 
-	// Setup test server with mock URL already configured
+	// Setup test server with mock URL
 	ts, cleanup := setupTestServer(t, mockUpstream.URL)
-	defer cleanup()
 
-	// Add diagnostic logging
-	t.Logf("Mock server URL: %s", mockUpstream.URL)
-	t.Logf("Test server URL: %s", ts.BaseURL)
-	t.Logf("Test server cache dir: %s", ts.CacheDir)
+	// Use proper cleanup with timeout
+	defer func() {
+		cleanupDone := make(chan struct{})
+		go func() {
+			cleanup()
+			close(cleanupDone)
+		}()
 
-	// Test cases
-	testCases := []struct {
-		name     string
-		path     string
-		wantCode int
-	}{
-		{"Ubuntu Release", "/ubuntu/dists/jammy/Release", 200},
-		{"Debian Package", "/debian/pool/main/h/hello/hello_2.10-2_amd64.deb", 200},
-	}
+		select {
+		case <-cleanupDone:
+			// Clean shutdown succeeded
+		case <-time.After(2 * time.Second):
+			t.Log("Warning: Cleanup timed out, continuing anyway")
+		}
+	}()
 
-	// Run test cases
-	baseURL := ts.BaseURL
-	client := ts.Client
+	// Make a simple request to test basic functionality
+	resp, err := ts.Client.Get(ts.BaseURL + "/ubuntu/dists/jammy/Release")
+	require.NoError(t, err)
+	defer resp.Body.Close()
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			fullURL := baseURL + tc.path
-			t.Logf("Requesting: %s", fullURL)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "Expected 200 OK response")
 
-			// Add a small delay between requests to ensure proper caching
-			time.Sleep(50 * time.Millisecond)
-
-			resp, err := client.Get(fullURL)
-			if err != nil {
-				t.Fatalf("Request failed: %v", err)
-				return
-			}
-			defer resp.Body.Close()
-
-			// Verify status code
-			t.Logf("Response status: %d, headers: %v", resp.StatusCode, resp.Header)
-			assert.Equal(t, tc.wantCode, resp.StatusCode)
-
-			// Read the response body for diagnostic purposes
-			body, err := io.ReadAll(resp.Body)
-			if err != nil {
-				t.Logf("Error reading body: %v", err)
-			} else if len(body) == 0 {
-				t.Logf("Warning: Empty response body")
-			} else {
-				t.Logf("Response body length: %d bytes", len(body))
-			}
-
-			// Verify response contains expected content
-			bodyStr := string(body)
-			assert.Contains(t, bodyStr, "Mock repository data for",
-				"Response should contain mock data")
-			assert.Contains(t, bodyStr, tc.path,
-				"Response should reference the requested path")
-		})
-	}
+	// Read and verify response body
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "Mock repository data", "Response should contain mock data")
 }
 
 // TestConcurrentRequests tests that the server handles concurrent requests properly

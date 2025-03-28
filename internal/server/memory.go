@@ -19,6 +19,7 @@ type MemoryMonitor struct {
 	stopCh               chan struct{}
 	memoryPressureAction func(pressure int)
 	stopOnce             sync.Once
+	mutex                sync.Mutex
 }
 
 // NewMemoryMonitor creates a new monitor
@@ -53,11 +54,18 @@ func (m *MemoryMonitor) Start() {
 
 // Stop stops monitoring
 func (m *MemoryMonitor) Stop() {
-	close(m.stopCh)
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	if m.stopCh != nil {
+		close(m.stopCh)
+		m.stopCh = nil
+	}
 }
 
 // GetMemoryUsage returns current memory statistics
 func (m *MemoryMonitor) GetMemoryUsage() map[string]any {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
 

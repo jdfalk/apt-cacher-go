@@ -308,59 +308,59 @@ func (s *Server) Start() error {
 // Shutdown gracefully stops the server
 func (s *Server) Shutdown() error {
 	var err error
-	s.shutdownOnce.Do(func() {
-		// Signal we're shutting down
-		close(s.shutdownCh)
 
-		// First shut down HTTP server with a timeout
+	// Use shutdownOnce with a timeout to avoid deadlocks
+	s.shutdownOnce.Do(func() {
+		log.Printf("Shutting down server...")
+
+		// Create context with timeout for shutdown
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
+		// Close the shutdown channel first to signal other goroutines
+		close(s.shutdownCh)
+
+		// Shutdown HTTP server with timeout
 		if s.httpServer != nil {
-			if err2 := s.httpServer.Shutdown(ctx); err2 != nil {
-				log.Printf("Error shutting down HTTP server: %v", err2)
-				err = err2
+			if err := s.httpServer.Shutdown(ctx); err != nil {
+				log.Printf("HTTP server shutdown error: %v", err)
 			}
 		}
 
-		// Then shut down admin server if it exists
+		// Shutdown HTTPS server with timeout
+		if s.httpsServer != nil {
+			if err := s.httpsServer.Shutdown(ctx); err != nil {
+				log.Printf("HTTPS server shutdown error: %v", err)
+			}
+		}
+
+		// Shutdown admin server with timeout
 		if s.adminServer != nil {
-			if err2 := s.adminServer.Shutdown(ctx); err2 != nil {
-				log.Printf("Error shutting down admin server: %v", err2)
-				if err == nil {
-					err = err2
-				}
+			if err := s.adminServer.Shutdown(ctx); err != nil {
+				log.Printf("Admin server shutdown error: %v", err)
 			}
 		}
 
-		// Close the backend and cache in a separate goroutine with timeout
-		// to prevent deadlocks
-		closeDone := make(chan struct{})
-		go func() {
-			// Close backend
-			if s.backend != nil {
-				s.backend.Shutdown()
-			}
+		// Shutdown the cache with timeout
+		if s.cache != nil {
+			// Use a timeout for cache close to avoid deadlocks
+			cacheDone := make(chan struct{})
+			go func() {
+				s.cache.Close()
+				close(cacheDone)
+			}()
 
-			// Close cache
-			if s.cache != nil {
-				if err2 := s.cache.Close(); err2 != nil {
-					log.Printf("Error closing cache: %v", err2)
-				}
+			select {
+			case <-cacheDone:
+				// Cache closed successfully
+			case <-time.After(2 * time.Second):
+				log.Printf("Warning: Cache close timed out")
 			}
-			close(closeDone)
-		}()
-
-		// Wait for cleanup with timeout
-		select {
-		case <-closeDone:
-			// Normal shutdown
-		case <-time.After(5 * time.Second):
-			log.Printf("WARNING: Backend/cache shutdown timed out")
 		}
 
-		log.Println("Server shutdown complete")
+		log.Printf("Server shutdown complete")
 	})
+
 	return err
 }
 
@@ -844,4 +844,3 @@ func IsIndexFile(path string) bool {
 func (s *Server) HandleReportRequest(w http.ResponseWriter, r *http.Request) {
 	s.handleReportRequest(w, r)
 }
-

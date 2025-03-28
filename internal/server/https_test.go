@@ -29,17 +29,17 @@ func TestHTTPSConnection(t *testing.T) {
 func TestShouldRemapHost(t *testing.T) {
 	server, _, cleanup := createTestServer(t)
 	defer func() {
-		done := make(chan struct{})
+		cleanupDone := make(chan struct{})
 		go func() {
 			cleanup()
-			close(done)
+			close(cleanupDone)
 		}()
 
 		select {
-		case <-done:
-			// Clean shutdown
+		case <-cleanupDone:
+			// Clean shutdown succeeded
 		case <-time.After(2 * time.Second):
-			t.Log("Warning: Test cleanup timed out")
+			t.Log("Warning: Cleanup timed out, continuing anyway")
 		}
 	}()
 
