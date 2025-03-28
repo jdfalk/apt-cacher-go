@@ -38,12 +38,14 @@ func (c *LRUCache) Add(key string, size int64) {
 
 	// Check if the item already exists
 	if element, exists := c.items[key]; exists {
-		// Move to front (most recently used)
-		c.lruList.MoveToFront(element)
+		// Update the item
 		item := element.Value.(*cacheItem)
+		item.size = size // Update size in case it changed
+
+		// Make it the most recently used (standard LRU behavior)
+		c.lruList.MoveToFront(element)
 		item.lastAccessed = time.Now()
 		item.accessCount++
-		item.size = size // Update size in case it changed
 		return
 	}
 

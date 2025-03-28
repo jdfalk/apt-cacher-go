@@ -7,8 +7,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// This original test is incompatible with the current LRUCache implementation
-// Replacing with a better implementation using string keys and boolean returns
 func TestLRUCacheBasic(t *testing.T) {
 	cache := NewLRUCache(2)
 
@@ -62,6 +60,36 @@ func TestLRUCacheAdd(t *testing.T) {
 	assert.True(t, cache.Get("key3"))
 }
 
+func TestLRUCacheUpdateItem(t *testing.T) {
+    cache := NewLRUCache(2)
+
+    // Add two items
+    cache.Add("key1", 100)
+    cache.Add("key2", 200)
+
+    // Get key2 to make it most recently used
+    cache.Get("key2")
+
+    // Update key1 - this DOES make it the most recently used item
+    // according to the current implementation
+    cache.Add("key1", 150)
+
+    // Both should still be present after update
+    assert.True(t, cache.Get("key1"), "key1 should exist after update")
+    assert.True(t, cache.Get("key2"), "key2 should exist after update")
+
+    // Add a third item - this will evict the least recently used (key2)
+    cache.Add("key3", 300)
+
+    // Based on implementation behavior:
+    // key2 was accessed, making it most recent
+    // Then key1 was updated, making IT most recent
+    // So key2 becomes least recently used, then key1, then key3
+    assert.True(t, cache.Get("key1"), "key1 should still exist")
+    assert.False(t, cache.Get("key2"), "key2 should be evicted")
+    assert.True(t, cache.Get("key3"), "key3 should exist")
+}
+
 func TestLRUCacheGet(t *testing.T) {
 	cache := NewLRUCache(3)
 
@@ -106,29 +134,6 @@ func TestLRUCacheRemove(t *testing.T) {
 	// Remove a non-existent key (should do nothing)
 	cache.Remove("key4")
 	assert.Equal(t, 2, cache.Size())
-}
-
-func TestLRUCacheUpdateItem(t *testing.T) {
-	cache := NewLRUCache(2)
-
-	// Add two items
-	cache.Add("key1", 100)
-	cache.Add("key2", 200)
-
-	// Update the first item
-	cache.Add("key1", 150)
-
-	// Both should still be present
-	assert.True(t, cache.Get("key1"))
-	assert.True(t, cache.Get("key2"))
-
-	// Add a third item
-	cache.Add("key3", 300)
-
-	// key2 should be evicted (key1 was more recently used due to the update)
-	assert.True(t, cache.Get("key1"))
-	assert.False(t, cache.Get("key2"))
-	assert.True(t, cache.Get("key3"))
 }
 
 func TestGetLRUItems(t *testing.T) {
