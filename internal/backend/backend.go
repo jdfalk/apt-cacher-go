@@ -15,6 +15,7 @@ import (
 
 	cachelib "github.com/jdfalk/apt-cacher-go/internal/cache"
 	"github.com/jdfalk/apt-cacher-go/internal/config"
+	"github.com/jdfalk/apt-cacher-go/internal/keymanager"
 	"github.com/jdfalk/apt-cacher-go/internal/mapper"
 	"github.com/jdfalk/apt-cacher-go/internal/parser"
 	"github.com/jdfalk/apt-cacher-go/internal/queue"
@@ -32,6 +33,7 @@ type Manager struct {
 	downloadQ      *queue.Queue
 	prefetcher     *Prefetcher
 	cacheDir       string
+	keyManager     *keymanager.KeyManager
 }
 
 // Backend represents a single upstream repository
@@ -43,7 +45,7 @@ type Backend struct {
 }
 
 // New creates a new backend manager
-func New(cfg *config.Config, cache *cachelib.Cache, mapper *mapper.PathMapper, packageMapper *mapper.PackageMapper) *Manager {
+func New(cfg *config.Config, cache *cachelib.Cache, mapper *mapper.PathMapper, packageMapper *mapper.PackageMapper) (*Manager, error) {
 	// Create HTTP client for backends
 	client := &http.Client{
 		Timeout: 30 * time.Second,
@@ -74,6 +76,14 @@ func New(cfg *config.Config, cache *cachelib.Cache, mapper *mapper.PathMapper, p
 		cacheDir:       cfg.CacheDir,
 	}
 
+	// Initialize key manager
+	km, err := keymanager.New(&cfg.KeyManagement)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize key manager: %w", err)
+	}
+
+	m.keyManager = km
+
 	// Create the download queue with a downloader function
 	m.downloadQ = queue.New(cfg.MaxConcurrentDownloads, func(url string) ([]byte, error) {
 		return m.downloadFromURL(url)
@@ -85,7 +95,7 @@ func New(cfg *config.Config, cache *cachelib.Cache, mapper *mapper.PathMapper, p
 	// Start the download queue
 	m.downloadQ.Start(downloadCtx)
 
-	return m
+	return m, nil
 }
 
 // Shutdown cleans up resources
@@ -212,6 +222,21 @@ func (m *Manager) Fetch(requestPath string) ([]byte, error) {
 	if mappingResult.IsIndex && (strings.HasSuffix(mappingResult.RemotePath, "Release") ||
 		strings.HasSuffix(mappingResult.RemotePath, "InRelease")) {
 		go m.processReleaseFile(mappingResult.Repository, mappingResult.RemotePath, result.Data)
+	}
+
+	// Check response for key errors
+	if m.keyManager != nil && result.Error != nil {
+		keyID, isKeyError := m.keyManager.DetectKeyError(result.Data)
+		if isKeyError {
+			log.Printf("Detected missing key: %s, attempting to fetch", keyID)
+			if err := m.keyManager.FetchKey(keyID); err != nil {
+				log.Printf("Failed to fetch key %s: %v", keyID, err)
+			} else {
+				// Key fetched successfully, try request again
+				log.Printf("Key %s fetched successfully, retrying request", keyID)
+				return m.Fetch(requestPath) // Recursive call with newly fetched key
+			}
+		}
 	}
 
 	return result.Data, nil
@@ -443,4 +468,9 @@ func (m *Manager) ForceCleanupPrefetcher() int {
 		return m.prefetcher.ForceCleanup()
 	}
 	return 0
+}
+
+// KeyManager returns the key manager instance
+func (m *Manager) KeyManager() *keymanager.KeyManager {
+	return m.keyManager
 }

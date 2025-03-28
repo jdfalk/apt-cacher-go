@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -53,7 +54,10 @@ func New(cfg *config.Config, bm *backend.Manager, cache *cachelib.Cache, package
 		pathMapper := mapper.New()
 
 		// Create the backend manager
-		manager := backend.New(cfg, cacheInstance, pathMapper, pm)
+		manager, err := backend.New(cfg, cacheInstance, pathMapper, pm)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create backend manager: %w", err)
+		}
 
 		// Now call ourselves with all components
 		return New(cfg, manager, cacheInstance, pm)
@@ -111,7 +115,12 @@ func New(cfg *config.Config, bm *backend.Manager, cache *cachelib.Cache, package
 		}
 	}
 	// Create backend
-	b := backend.New(cfg, s.cache, m, s.packageMapper) // Add packageMapper parameter
+	backendManager, err := backend.New(cfg, s.cache, m, s.packageMapper)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create backend manager: %w", err)
+	}
+	s.backend = backendManager
+
 	metricsCollector := metrics.New()
 	prometheusCollector := metrics.NewPrometheusCollector()
 
@@ -128,7 +137,6 @@ func New(cfg *config.Config, bm *backend.Manager, cache *cachelib.Cache, package
 	adminMux := http.NewServeMux()
 
 	// Set server properties
-	s.backend = b
 	s.mapper = m
 	s.metrics = metricsCollector
 	s.prometheus = prometheusCollector
@@ -149,6 +157,9 @@ func New(cfg *config.Config, bm *backend.Manager, cache *cachelib.Cache, package
 
 	// Add HTTPS handler for CONNECT method
 	mainMux.HandleFunc("/https/", s.wrapWithMetrics(s.handleHTTPSRequest))
+
+	// Add GPG key handler
+	mainMux.HandleFunc("/gpg/", s.ServeKey)
 
 	// Create and set up admin server if port is different from main port
 	if cfg.AdminPort > 0 && cfg.AdminPort != cfg.Port {
@@ -663,4 +674,23 @@ func extractClientIP(r *http.Request) string {
 		ip = ip[:idx]
 	}
 	return ip
+}
+
+// ServeKey serves GPG keys from the key directory
+func (s *Server) ServeKey(w http.ResponseWriter, r *http.Request) {
+	keyID := path.Base(r.URL.Path)
+	keyID = strings.TrimSuffix(keyID, ".gpg")
+
+	if s.backend.KeyManager() == nil || !s.backend.KeyManager().HasKey(keyID) {
+		http.Error(w, "Key not found", http.StatusNotFound)
+		return
+	}
+
+	keyPath := s.backend.KeyManager().GetKeyPath(keyID)
+	if keyPath == "" {
+		http.Error(w, "Key not available", http.StatusNotFound)
+		return
+	}
+
+	http.ServeFile(w, r, keyPath)
 }

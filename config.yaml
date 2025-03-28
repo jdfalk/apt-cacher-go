@@ -58,6 +58,17 @@ architectures:
   # - s390x   # IBM System z
   # - riscv64 # RISC-V 64-bit
 
+# Key management (new section)
+key_management:
+  enabled: true
+  auto_retrieve: true
+  key_ttl: "365d"
+  keyservers:
+    - "hkp://keyserver.ubuntu.com:80"
+    - "hkp://keys.gnupg.net:80"
+    - "hkp://pool.sks-keyservers.net:80"
+  key_dir: "/var/lib/apt-cacher-go/keys"
+
 # Repository configuration
 disable_default_repos: false # Set to true to disable built-in repository definitions
 

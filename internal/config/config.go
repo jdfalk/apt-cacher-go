@@ -58,6 +58,9 @@ type Config struct {
 
 	// Default repositories
 	DisableDefaultRepos bool `yaml:"disable_default_repos"`
+
+	// Key management configuration
+	KeyManagement KeyManagementConfig `yaml:"key_management"`
 }
 
 // Backend represents a repository backend
@@ -74,6 +77,24 @@ type MappingRule struct {
 	Repository  string `yaml:"repository"`
 	Priority    int    `yaml:"priority"`
 	RewriteRule string `yaml:"rewrite_rule,omitempty"`
+}
+
+// KeyManagementConfig holds settings for GPG key management
+type KeyManagementConfig struct {
+	// Whether key management is enabled
+	Enabled bool `yaml:"enabled"`
+
+	// Whether to automatically retrieve missing keys
+	AutoRetrieve bool `yaml:"auto_retrieve"`
+
+	// Time-to-live for cached keys
+	KeyTTL string `yaml:"key_ttl"`
+
+	// List of keyservers to fetch from
+	Keyservers []string `yaml:"keyservers"`
+
+	// Directory to store keys
+	KeyDir string `yaml:"key_dir"`
 }
 
 // LoadConfigFile loads configuration from a YAML file

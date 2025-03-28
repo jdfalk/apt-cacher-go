@@ -111,7 +111,8 @@ func TestProcessPackagesFile(t *testing.T) {
 	}
 
 	pathMapper := mapper.New()
-	manager := New(cfg, testCache.Cache, pathMapper, packageMapper)
+	manager, err := New(cfg, testCache.Cache, pathMapper, packageMapper)
+	require.NoError(t, err)
 
 	// Test processing packages file
 	repo := "test-repo"
