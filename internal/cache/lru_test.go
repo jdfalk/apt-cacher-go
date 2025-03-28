@@ -61,33 +61,54 @@ func TestLRUCacheAdd(t *testing.T) {
 }
 
 func TestLRUCacheUpdateItem(t *testing.T) {
-    cache := NewLRUCache(2)
+	cache := NewLRUCache(2)
 
-    // Add two items
-    cache.Add("key1", 100)
-    cache.Add("key2", 200)
+	// Add two items
+	cache.Add("key1", 100)
+	cache.Add("key2", 200)
 
-    // Get key2 to make it most recently used
-    cache.Get("key2")
+	// Get key2 to make it most recently used
+	cache.Get("key2")
+	t.Logf("After Get(key2): %v", getLRUOrder(cache))
 
-    // Update key1 - this DOES make it the most recently used item
-    // according to the current implementation
-    cache.Add("key1", 150)
+	// Update key1 - this makes it the most recently used item
+	cache.Add("key1", 150)
+	t.Logf("After Add(key1, 150): %v", getLRUOrder(cache))
 
-    // Both should still be present after update
-    assert.True(t, cache.Get("key1"), "key1 should exist after update")
-    assert.True(t, cache.Get("key2"), "key2 should exist after update")
+	// CHECK without changing order
+	// Just check they exist without updating LRU status
+	hasKey1 := cache.Get("key1")
+	hasKey2 := cache.Get("key2")
+	assert.True(t, hasKey1, "key1 should exist after update")
+	assert.True(t, hasKey2, "key2 should exist after update")
 
-    // Add a third item - this will evict the least recently used (key2)
-    cache.Add("key3", 300)
+	// Now key2 is most recent and key1 is least recent
+	t.Logf("After Get checks: %v", getLRUOrder(cache))
 
-    // Based on implementation behavior:
-    // key2 was accessed, making it most recent
-    // Then key1 was updated, making IT most recent
-    // So key2 becomes least recently used, then key1, then key3
-    assert.True(t, cache.Get("key1"), "key1 should still exist")
-    assert.False(t, cache.Get("key2"), "key2 should be evicted")
-    assert.True(t, cache.Get("key3"), "key3 should exist")
+	// Add a third item - this will evict the least recently used
+	cache.Add("key3", 300)
+
+	t.Logf("Final state: %v", getLRUOrder(cache))
+
+	// After the assertions above, key2 is most recent, key1 is least recent
+	// So when key3 is added, key1 is evicted
+	assert.False(t, cache.Get("key1"), "key1 should be evicted")
+	assert.True(t, cache.Get("key2"), "key2 should still exist")
+	assert.True(t, cache.Get("key3"), "key3 should exist")
+}
+
+// Helper function to get LRU order
+func getLRUOrder(cache *LRUCache) []string {
+	cache.mutex.Lock()
+	defer cache.mutex.Unlock()
+
+	var keys []string
+	// Front to back (most recent to least recent)
+	for e := cache.lruList.Front(); e != nil; e = e.Next() {
+		item := e.Value.(*cacheItem)
+		keys = append(keys, item.key)
+	}
+	return keys
 }
 
 func TestLRUCacheGet(t *testing.T) {

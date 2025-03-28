@@ -43,34 +43,42 @@ func (c *LRUCache) Add(key string, size int64) {
 		item.size = size // Update size in case it changed
 
 		// Make it the most recently used (standard LRU behavior)
-		c.lruList.MoveToFront(element)
+		c.lruList.MoveToFront(element) // This line is crucial
 		item.lastAccessed = time.Now()
 		item.accessCount++
 		return
 	}
 
-	// Create new item
+	// If capacity is 0, don't add new items
+	if c.capacity == 0 {
+		return
+	}
+
+	// If we're at capacity, remove the least recently used item
+	if c.capacity > 0 && c.lruList.Len() >= c.capacity {
+		element := c.lruList.Back()
+		if element != nil {
+			c.lruList.Remove(element)
+			item := element.Value.(*cacheItem)
+			delete(c.items, item.key)
+		}
+	}
+
+	// Add the new item
 	item := &cacheItem{
 		key:          key,
 		size:         size,
 		lastAccessed: time.Now(),
 		accessCount:  1,
 	}
-
-	// Add to front of list and store in map
 	element := c.lruList.PushFront(item)
 	c.items[key] = element
-
-	// If over capacity, remove least recently used
-	if c.lruList.Len() > c.capacity {
-		c.removeLRU()
-	}
 }
 
 // Get returns whether an item exists in the cache and updates its position
 func (c *LRUCache) Get(key string) bool {
-	c.mutex.RLock()
-	defer c.mutex.RUnlock()
+	c.mutex.Lock() // Change from RLock to Lock since we modify the list
+	defer c.mutex.Unlock()
 
 	element, exists := c.items[key]
 	if !exists {
@@ -82,7 +90,7 @@ func (c *LRUCache) Get(key string) bool {
 	item.lastAccessed = time.Now()
 	item.accessCount++
 
-	// Move to front
+	// Move to front (requires a write lock)
 	c.lruList.MoveToFront(element)
 
 	return true
