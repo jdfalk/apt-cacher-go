@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"path"
-	"reflect"
 	"runtime"
 	"strings"
 	"time"
@@ -283,8 +282,11 @@ func (s *Server) Start() error {
 	go s.backend.PrefetchOnStartup(context.Background())
 
 	// Start memory monitoring
-	s.memoryMonitor = NewMemoryMonitor(0.85, 30*time.Second) // 85% threshold, check every 30s
-	s.memoryMonitor.RegisterCallback(s.handleHighMemoryPressure)
+	memoryLimitMB := 1024   // 1GB high watermark
+	criticalLimitMB := 2048 // 2GB critical watermark
+	s.memoryMonitor = NewMemoryMonitor(memoryLimitMB, criticalLimitMB, func(pressure int) {
+		s.handleHighMemoryPressure(float64(pressure) / 100.0)
+	})
 	s.memoryMonitor.Start()
 
 	return nil
@@ -357,7 +359,7 @@ func (s *Server) wrapWithMetrics(next http.HandlerFunc) http.HandlerFunc {
 			status = "error"
 		} else if rw.statusCode == 307 || rw.statusCode == 302 {
 			status = "redirect"
-		} else if rw.statusCode == 200 && strings.contains(r.Header.Get("X-Cache"), "MISS") {
+		} else if rw.statusCode == 200 && strings.Contains(r.Header.Get("X-Cache"), "MISS") {
 			status = "miss"
 		}
 
@@ -745,7 +747,7 @@ func (s *Server) ServeKey(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, keyPath)
 }
 
-// Add this method to Server
+// handleHighMemoryPressure is called when memory usage is high
 func (s *Server) handleHighMemoryPressure(pressure float64) {
 	log.Printf("High memory pressure detected (%.2f%%), taking action", pressure*100)
 
@@ -753,17 +755,15 @@ func (s *Server) handleHighMemoryPressure(pressure float64) {
 	runtime.GC()
 
 	// Clear unnecessary caches
-	// 1. Force clean up prefetcher operations
 	if s.backend != nil {
 		cleaned := s.backend.ForceCleanupPrefetcher()
 		log.Printf("Cleaned up %d prefetch operations", cleaned)
 	}
 
-	// 2. Reduce in-memory hash mapping cache
+	// Package mapper cache clearing
 	if s.packageMapper != nil {
-		if method, ok := reflect.TypeOf(s.packageMapper).MethodByName("ClearCache"); ok {
-			log.Printf("Clearing package mapper cache")
-			reflect.ValueOf(s.packageMapper).MethodByName("ClearCache").Call(nil)
-		}
+		// Just call ClearCache directly since we know it exists
+		s.packageMapper.ClearCache()
+		log.Printf("Cleared package mapper cache due to memory pressure")
 	}
 }

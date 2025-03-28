@@ -1,4 +1,4 @@
-package mapper
+package storage
 
 import (
 	"fmt"
@@ -48,10 +48,11 @@ func NewPersistentPackageMapper(cacheDir string) (*PersistentPackageMapper, erro
 		// Optimize for read-heavy workload
 		Cache: pebble.NewCache(int64(64 * 1024 * 1024)), // 64MB cache
 		// Memory budget (adjust based on system memory)
-		MemTableSize: memLimit / 8, // 1/8 of our memory budget
+		MemTableSize: uint64(memLimit / 8), // FIX: Type conversion to uint64
 		// Set reasonable limits
-		MaxOpenFiles:             256,
-		MaxConcurrentCompactions: runtime.GOMAXPROCS(0),
+		MaxOpenFiles: 256,
+		// FIX: Provide a function instead of a direct value
+		MaxConcurrentCompactions: func() int { return runtime.GOMAXPROCS(0) },
 		L0CompactionThreshold:    2,
 	}
 
@@ -93,7 +94,8 @@ func (pm *PersistentPackageMapper) AddHashMapping(hash, packageName string) erro
 	}
 
 	// Commit batch periodically
-	if pm.batch.Count() >= uint64(pm.batchSize) || time.Since(pm.lastFlush) > 5*time.Second {
+	// FIX: Match types for the comparison
+	if uint32(pm.batch.Count()) >= uint32(pm.batchSize) || time.Since(pm.lastFlush) > 5*time.Second {
 		if err := pm.db.Apply(pm.batch, nil); err != nil {
 			return err
 		}
@@ -161,4 +163,12 @@ func (pm *PersistentPackageMapper) Close() error {
 	pm.batchMutex.Unlock()
 
 	return pm.db.Close()
+}
+
+// ClearCache clears the in-memory cache to reduce memory pressure
+func (pm *PersistentPackageMapper) ClearCache() {
+	pm.cacheMutex.Lock()
+	pm.cache = make(map[string]string, pm.maxCacheSize/2) // Allocate at half capacity to save memory
+	pm.cacheMutex.Unlock()
+	log.Printf("Hash mapper cache cleared due to memory pressure")
 }

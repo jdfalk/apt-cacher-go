@@ -79,6 +79,16 @@ func (pm *PackageMapper) GetPackageNameForHash(path string) string {
 	return pm.hashToPackage[hash]
 }
 
+// ClearCache clears the internal package hash cache to free memory
+func (pm *PackageMapper) ClearCache() {
+	pm.mutex.Lock()
+	defer pm.mutex.Unlock()
+	// Create a new map with some initial capacity to avoid
+	// immediate reallocations when new items are added
+	pm.hashToPackage = make(map[string]string, 100)
+	log.Printf("Package mapper cache cleared")
+}
+
 // New creates a new path mapper with predefined rules (using advanced implementation)
 func New() *PathMapper {
 	m := &PathMapper{
