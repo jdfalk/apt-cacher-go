@@ -1,7 +1,9 @@
 package queue
 
 import (
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -68,4 +70,36 @@ func TestQueueOperations(t *testing.T) {
 	// Dequeue from empty queue
 	_, ok = q.Dequeue()
 	assert.False(t, ok)
+}
+
+// Add this test to verify queue shutdown behavior
+
+func TestQueueShutdown(t *testing.T) {
+	q := New(2)
+
+	// Start the queue
+	var processed int32
+	q.Start(func(task interface{}) error {
+		// Simulate work
+		time.Sleep(10 * time.Millisecond)
+		atomic.AddInt32(&processed, 1)
+		return nil
+	})
+
+	// Submit some tasks
+	for i := 0; i < 5; i++ {
+		err := q.Submit(i, 1)
+		assert.NoError(t, err)
+	}
+
+	// Stop the queue
+	q.Stop()
+
+	// Verify that submitting after stop returns an error
+	err := q.Submit("post-stop", 1)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "stopping")
+
+	// Should not panic when stopping twice
+	q.Stop()
 }
