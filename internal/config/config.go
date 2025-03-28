@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -311,4 +312,40 @@ func (c *Config) GetMetadata(key string) (any, bool) {
 	}
 	val, ok := c.Metadata[key]
 	return val, ok
+}
+
+// ParseMemorySize parses a memory size string like "8G" or "1024M" into bytes
+func (c *Config) ParseMemorySize(sizeStr string) (int64, error) {
+	var multiplier int64 = 1
+
+	sizeStr = strings.TrimSpace(sizeStr)
+	if len(sizeStr) == 0 {
+		return 0, fmt.Errorf("empty size string")
+	}
+
+	// Handle unit suffix
+	lastChar := strings.ToUpper(sizeStr[len(sizeStr)-1:])
+	numPart := sizeStr[:len(sizeStr)-1]
+
+	switch lastChar {
+	case "K":
+		multiplier = 1024
+	case "M":
+		multiplier = 1024 * 1024
+	case "G":
+		multiplier = 1024 * 1024 * 1024
+	case "T":
+		multiplier = 1024 * 1024 * 1024 * 1024
+	default:
+		// If no unit specified, assume the whole string is numeric
+		numPart = sizeStr
+	}
+
+	// Parse numeric part
+	size, err := strconv.ParseInt(numPart, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid size format: %s", sizeStr)
+	}
+
+	return size * multiplier, nil
 }
