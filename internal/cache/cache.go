@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jdfalk/apt-cacher-go/internal/parser"
+	"github.com/jdfalk/apt-cacher-go/internal/cache/lru"
 )
 
 // CacheStats contains cache statistics
@@ -34,537 +34,593 @@ type CacheSearchResult struct {
 	IsCached    bool
 }
 
-// Cache manages the package cache
+// Cache represents a file cache for apt packages
 type Cache struct {
-	baseDir            string
-	maxSize            int64
-	currentSize        int64
-	mutex              sync.RWMutex
-	expiration         map[string]time.Time // Tracks expiration times
-	lru                *LRUCache            // Tracks LRU order
-	hits               int64
-	misses             int64
-	packageIndex       *parser.PackageIndex
-	indexPath          string
-	inProgressRequests sync.Map // Track in-progress requests to prevent duplicates
+	rootDir     string
+	maxSize     int64
+	currentSize int64
+	items       map[string]*cacheEntry
+	mutex       sync.RWMutex // Added for thread safety
+	lruCache    *lru.LRUCache
+	hitCount    int64
+	missCount   int64
+	statsMutex  sync.RWMutex // Separate mutex for statistics
+}
+
+// cacheEntry represents a single file in the cache
+type cacheEntry struct {
+	Path         string    `json:"path"`
+	Size         int64     `json:"size"`
+	LastAccessed time.Time `json:"last_accessed"`
+	LastModified time.Time `json:"last_modified"`
+	HitCount     int       `json:"hit_count"`
 }
 
 // New creates a new Cache instance
-func New(baseDir string, maxSizeMB int64) (*Cache, error) {
-	log.Printf("Initializing cache in directory: %s", baseDir)
-
-	// Create cache directory if it doesn't exist using robust directory creation
-	if err := ensureDirectoryExists(baseDir); err != nil {
-		return nil, fmt.Errorf("failed to create/access cache directory: %w", err)
-	}
-
-	c := &Cache{
-		baseDir:      baseDir,
-		maxSize:      maxSizeMB * 1024 * 1024, // Convert MB to bytes
-		expiration:   make(map[string]time.Time),
-		lru:          NewLRUCache(100000), // Track up to 100K files
-		packageIndex: parser.NewPackageIndex(),
-		indexPath:    filepath.Join(baseDir, "package_index.json"),
-	}
-
-	// Load existing index if available
-	if data, err := os.ReadFile(c.indexPath); err == nil {
-		var idx parser.PackageIndex
-		if err := json.Unmarshal(data, &idx); err == nil {
-			c.packageIndex = &idx
+func New(rootDir string, maxSize int64) (*Cache, error) {
+	// Create root directory if it doesn't exist
+	if _, err := os.Stat(rootDir); os.IsNotExist(err) {
+		log.Printf("Initializing cache in directory: %s", rootDir)
+		err = os.MkdirAll(rootDir, 0755)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create cache directory: %w", err)
 		}
+	} else {
+		log.Printf("Cache directory already exists: %s", rootDir)
 	}
 
-	// Calculate initial cache size
-	if err := c.updateCacheSize(); err != nil {
-		return nil, err
+	cache := &Cache{
+		rootDir:     rootDir,
+		maxSize:     maxSize,
+		currentSize: 0,
+		items:       make(map[string]*cacheEntry),
+		lruCache:    lru.NewLRUCache(10000), // Track up to 10k items
+	}
+
+	// Load cache state if available
+	err := cache.loadState()
+	if err != nil {
+		log.Printf("Failed to load cache state: %v", err)
+		// Calculate current cache size from disk
+		size, err := getDirSize(rootDir)
+		if err != nil {
+			log.Printf("Failed to calculate cache size: %v", err)
+		} else {
+			cache.currentSize = size
+		}
 	}
 
 	log.Printf("Cache initialized successfully: %s (current size: %d bytes, max: %d bytes)",
-		baseDir, c.currentSize, c.maxSize)
+		rootDir, cache.currentSize, maxSize)
 
-	// Start background cleanup goroutine
-	go c.backgroundCleanup()
-
-	return c, nil
+	return cache, nil
 }
 
-// Get attempts to retrieve a file from the cache
-func (c *Cache) Get(key string) ([]byte, bool, error) {
-	// First check if there's already a request in progress for this key
-	{
-		if pending, exists := c.inProgressRequests.LoadOrStore(key, make(chan struct{})); exists {
-			// Wait for the other request to complete
-			ch := pending.(chan struct{})
-			<-ch
+// Get retrieves a file from the cache
+func (c *Cache) Get(path string) ([]byte, error) {
+	c.mutex.RLock() // Read lock for checking
+	entry, exists := c.items[path]
+	c.mutex.RUnlock()
 
-			// Now try to get from cache
-			return c.getFromCache(key)
-		}
-
-		// This is the first request for this key
-		defer func() {
-			// Signal that the request is complete and remove from the map
-			if ch, ok := c.inProgressRequests.Load(key); ok {
-				close(ch.(chan struct{}))
-				c.inProgressRequests.Delete(key)
-			}
-		}()
-	}
-
-	// Original cache lookup logic follows
-	return c.getFromCache(key)
-}
-
-// Helper method to get from cache (actual implementation)
-func (c *Cache) getFromCache(key string) ([]byte, bool, error) {
-	c.mutex.RLock()
-	defer c.mutex.RUnlock()
-
-	path := c.pathForKey(key)
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		c.misses++
-		return nil, false, nil
-	}
-
-	// Update access tracking
-	fileInfo, err := os.Stat(path)
-	if err != nil {
-		return nil, false, err
-	}
-
-	c.lru.Add(key, fileInfo.Size())
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, false, err
-	}
-
-	c.hits++
-	return data, true, nil
-}
-
-// IsFresh checks if a cached item is still fresh based on its expiration time
-func (c *Cache) IsFresh(key string) bool {
-	c.mutex.RLock()
-	defer c.mutex.RUnlock()
-
-	expTime, exists := c.expiration[key]
 	if !exists {
-		return false // No expiration info, consider stale
+		c.statsMutex.Lock()
+		c.missCount++
+		c.statsMutex.Unlock()
+		return nil, fmt.Errorf("item not found in cache: %s", path)
 	}
 
-	return time.Now().Before(expTime)
-}
-
-// Put stores data in the cache with default expiration
-func (c *Cache) Put(key string, data []byte) error {
-	// Default expiration is 30 days
-	return c.PutWithExpiration(key, data, 30*24*time.Hour)
-}
-
-// PutWithExpiration stores data in the cache with a specific expiration
-func (c *Cache) PutWithExpiration(key string, data []byte, expiration time.Duration) error {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-
-	path := c.pathForKey(key)
-
-	// Create directories if needed
-	dir := filepath.Dir(path)
-	if err := ensureDirectoryExists(dir); err != nil {
-		return fmt.Errorf("failed to ensure directory for cache file: %w", err)
-	}
-
-	// Write file
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("failed to write cache file: %w", err)
-	}
-
-	fileSize := int64(len(data))
-
-	// Update cache size
-	c.currentSize += fileSize
-
-	// Set expiration
-	c.expiration[key] = time.Now().Add(expiration)
-
-	// Update LRU
-	c.lru.Add(key, fileSize)
-
-	// Check if cleanup is needed
-	if c.currentSize > c.maxSize {
-		if err := c.cleanup(); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// GetStats returns statistics about the cache
-func (c *Cache) GetStats() (*CacheStats, error) {
-	c.mutex.RLock()
-	defer c.mutex.RUnlock()
-
-	// Count files
-	var itemCount int
-	err := filepath.Walk(c.baseDir, func(_ string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() {
-			itemCount++
-		}
-		return nil
-	})
-
+	// Get the data
+	data, err := c.getFromCache(entry, path)
 	if err != nil {
 		return nil, err
 	}
 
-	// Calculate hit rate
-	total := c.hits + c.misses
-	hitRate := float64(0)
-	missRate := float64(0)
-	if total > 0 {
-		hitRate = float64(c.hits) / float64(total)
-		missRate = float64(c.misses) / float64(total)
-	}
-
-	return &CacheStats{
-		CurrentSize: c.currentSize,
-		MaxSize:     c.maxSize,
-		Items:       itemCount,
-		HitRate:     hitRate,
-		MissRate:    missRate,
-		Hits:        c.hits,
-		Misses:      c.misses,
-	}, nil
+	return data, nil
 }
 
-// Clear removes all items from the cache
-func (c *Cache) Clear() error {
+// getFromCache retrieves a file from the cache filesystem
+func (c *Cache) getFromCache(entry *cacheEntry, path string) ([]byte, error) {
+	c.mutex.Lock()         // Lock for update
+	defer c.mutex.Unlock() // Ensure unlock even on error
+
+	// Update last accessed time and hit count
+	entry.LastAccessed = time.Now()
+	entry.HitCount++
+
+	// Update LRU status
+	c.lruCache.Add(path, entry.Size)
+
+	// Update stats
+	c.statsMutex.Lock()
+	c.hitCount++
+	c.statsMutex.Unlock()
+
+	// Read the file
+	absPath := filepath.Join(c.rootDir, entry.Path)
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		// File might have been deleted externally
+		delete(c.items, path)
+		return nil, fmt.Errorf("failed to read file from cache: %w", err)
+	}
+
+	return data, nil
+}
+
+// Add adds a file to the cache
+func (c *Cache) Add(path string, data []byte) error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	// Remove all files
-	entries, err := os.ReadDir(c.baseDir)
-	if err != nil {
-		return err
+	// Check if already exists
+	if entry, exists := c.items[path]; exists {
+		// Update the existing entry
+		entry.LastAccessed = time.Now()
+		entry.LastModified = time.Now()
+		entry.HitCount++
+
+		// Save the file
+		absPath := filepath.Join(c.rootDir, entry.Path)
+		err := os.WriteFile(absPath, data, 0644)
+		if err != nil {
+			return fmt.Errorf("failed to write file to cache: %w", err)
+		}
+
+		// Update size if changed
+		newSize := int64(len(data))
+		c.currentSize = c.currentSize - entry.Size + newSize
+		entry.Size = newSize
+
+		// Update LRU cache
+		c.lruCache.Add(path, entry.Size)
+
+		return nil
 	}
 
-	for _, entry := range entries {
-		path := filepath.Join(c.baseDir, entry.Name())
-		if err := os.RemoveAll(path); err != nil {
-			return err
+	// Ensure size stays within limits
+	if c.currentSize+int64(len(data)) > c.maxSize {
+		err := c.evictItems(int64(len(data)))
+		if err != nil {
+			return fmt.Errorf("failed to make space in cache: %w", err)
 		}
 	}
 
-	// Reset state
-	c.currentSize = 0
-	c.expiration = make(map[string]time.Time)
-	c.lru = NewLRUCache(100000)
+	// Create directory structure if needed
+	dir := filepath.Dir(path)
+	if dir != "" {
+		absDir := filepath.Join(c.rootDir, dir)
+		if _, err := os.Stat(absDir); os.IsNotExist(err) {
+			log.Printf("Creating cache directory: %s", absDir)
+			err = os.MkdirAll(absDir, 0755)
+			if err != nil {
+				return fmt.Errorf("failed to create cache directory: %w", err)
+			}
+			log.Printf("Created cache directory successfully: %s", absDir)
+		} else if err == nil {
+			log.Printf("Cache directory already exists: %s", absDir)
+		} else {
+			return fmt.Errorf("failed to check cache directory: %w", err)
+		}
+	}
+
+	// Save the file
+	absPath := filepath.Join(c.rootDir, path)
+	err := os.WriteFile(absPath, data, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to write file to cache: %w", err)
+	}
+
+	// Add to cache
+	entry := &cacheEntry{
+		Path:         path,
+		Size:         int64(len(data)),
+		LastAccessed: time.Now(),
+		LastModified: time.Now(),
+		HitCount:     1,
+	}
+	c.items[path] = entry
+	c.currentSize += entry.Size
+
+	// Update LRU cache
+	c.lruCache.Add(path, entry.Size)
 
 	return nil
 }
 
-// FlushExpired removes expired items from the cache
-func (c *Cache) FlushExpired() (int, error) {
+// Remove removes a file from the cache
+func (c *Cache) Remove(path string) error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	count := 0
-	now := time.Now()
-
-	// Find expired items
-	expired := make([]string, 0)
-	for key, expTime := range c.expiration {
-		if now.After(expTime) {
-			expired = append(expired, key)
-		}
+	entry, exists := c.items[path]
+	if !exists {
+		return fmt.Errorf("item not found in cache: %s", path)
 	}
 
-	// Remove expired items
-	for _, key := range expired {
-		path := c.pathForKey(key)
-		info, err := os.Stat(path)
-		if err == nil {
-			if err := os.Remove(path); err == nil {
-				c.currentSize -= info.Size()
-				delete(c.expiration, key)
-				c.lru.Remove(key)
-				count++
-			}
-		}
+	// Remove from filesystem
+	absPath := filepath.Join(c.rootDir, entry.Path)
+	err := os.Remove(absPath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove file from cache: %w", err)
 	}
 
-	return count, nil
+	// Update cache state
+	c.currentSize -= entry.Size
+	delete(c.items, path)
+	c.lruCache.Remove(path)
+
+	return nil
 }
 
-// Search finds cache items matching a pattern
-func (c *Cache) Search(pattern string) ([]string, error) {
+// Exists checks if a file exists in the cache
+func (c *Cache) Exists(path string) bool {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
 
-	var matches []string
-
-	err := filepath.Walk(c.baseDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		if !info.IsDir() && filepath.Base(path) != "" {
-			// Convert to cache key
-			relPath, err := filepath.Rel(c.baseDir, path)
-			if err != nil {
-				return nil // Skip this file
-			}
-
-			// Simple substring match for now
-			if pattern == "" || containsIgnoreCase(relPath, pattern) {
-				matches = append(matches, relPath)
-			}
-		}
-		return nil
-	})
-
-	return matches, err
+	_, exists := c.items[path]
+	return exists
 }
 
-// SearchByPackageName searches for packages by name
-func (c *Cache) SearchByPackageName(query string) ([]CacheSearchResult, error) {
-	if c.packageIndex == nil {
-		return nil, nil
-	}
+// Stats returns cache statistics
+// Deprecated: Use GetStats() instead which returns a structured CacheStats object
+func (c *Cache) Stats() (int64, int64, int64, int64) {
+	c.mutex.RLock()
+	itemCount := int64(len(c.items))
+	currentSize := c.currentSize
+	c.mutex.RUnlock()
 
-	results := []CacheSearchResult{}
+	c.statsMutex.RLock()
+	hitCount := c.hitCount
+	missCount := c.missCount
+	c.statsMutex.RUnlock()
 
-	packages := c.packageIndex.Search(query)
-	for _, pkg := range packages {
-		cachePath := filepath.Join(c.baseDir, pkg.Filename)
-
-		// Check if package is cached
-		info, err := os.Stat(cachePath)
-		isCached := err == nil
-
-		size := int64(0)
-		lastAccess := time.Time{}
-		if isCached {
-			size = info.Size()
-			lastAccess = info.ModTime()
-		}
-
-		results = append(results, CacheSearchResult{
-			Path:        pkg.Filename,
-			PackageName: pkg.Package,
-			Version:     pkg.Version,
-			Size:        size,
-			LastAccess:  lastAccess,
-			IsCached:    isCached,
-		})
-	}
-
-	return results, nil
+	return itemCount, currentSize, hitCount, missCount
 }
 
-// cleanup removes least recently used files when cache is too large
-func (c *Cache) cleanup() error {
-	// If we're not over the limit, no need to clean
-	if c.currentSize <= c.maxSize {
-		return nil
-	}
+// Size returns the current cache size
+func (c *Cache) Size() int64 {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+	return c.currentSize
+}
 
-	// Calculate how much we need to remove
-	toRemove := c.currentSize - (c.maxSize * 9 / 10) // Remove enough to get to 90% of max
+// MaxSize returns the maximum cache size
+func (c *Cache) MaxSize() int64 {
+	// No need for mutex as this is immutable
+	return c.maxSize
+}
 
-	// Get LRU items
-	count := 1000 // Try to remove up to 1000 items at once
-	lruItems := c.lru.GetLRUItems(count)
+// RootDir returns the cache root directory
+func (c *Cache) RootDir() string {
+	// No need for mutex as this is immutable
+	return c.rootDir
+}
 
-	var removed int64
+// GetLRUItems returns the least recently used items
+func (c *Cache) GetLRUItems(count int) []cacheEntry {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+
+	lruItems := c.lruCache.GetLRUItems(count)
+	result := make([]cacheEntry, 0, len(lruItems))
+
 	for _, item := range lruItems {
-		path := c.pathForKey(item.key)
-
-		// Skip files that don't exist or are in use
-		info, err := os.Stat(path)
-		if err != nil {
-			c.lru.Remove(item.key)
-			continue
+		if entry, exists := c.items[item.Key]; exists {
+			result = append(result, *entry)
 		}
+	}
 
-		// Skip files that are still fresh (not expired)
-		if expTime, exists := c.expiration[item.key]; exists && time.Now().Before(expTime) {
-			continue
-		}
+	return result
+}
 
-		// Remove the file
-		if err := os.Remove(path); err == nil {
-			fileSize := info.Size()
-			removed += fileSize
-			c.currentSize -= fileSize
-			delete(c.expiration, item.key)
-			c.lru.Remove(item.key)
+// GetMostPopularItems returns the most frequently accessed items
+func (c *Cache) GetMostPopularItems(count int) []cacheEntry {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
 
-			// Check if we've removed enough
-			if removed >= toRemove {
-				break
+	// Sort by hit count
+	type itemPair struct {
+		path  string
+		entry *cacheEntry
+	}
+
+	items := make([]itemPair, 0, len(c.items))
+	for path, entry := range c.items {
+		items = append(items, itemPair{path, entry})
+	}
+
+	// Sort items by hit count descending
+	// Simple bubble sort for clarity (in production, use a more efficient sort)
+	for i := 0; i < len(items)-1; i++ {
+		for j := i + 1; j < len(items); j++ {
+			if items[i].entry.HitCount < items[j].entry.HitCount {
+				items[i], items[j] = items[j], items[i]
 			}
 		}
+	}
+
+	// Take top N items
+	result := make([]cacheEntry, 0, count)
+	for i := 0; i < count && i < len(items); i++ {
+		result = append(result, *items[i].entry)
+	}
+
+	return result
+}
+
+// evictItems removes items from the cache to free up the specified amount of space
+func (c *Cache) evictItems(requiredSpace int64) error {
+	// No need to re-lock, caller already holds the mutex
+
+	// If the required space is larger than the max cache size, we can't cache it
+	if requiredSpace > c.maxSize {
+		return fmt.Errorf("required space (%d) exceeds maximum cache size (%d)",
+			requiredSpace, c.maxSize)
+	}
+
+	// Get list of LRU items
+	lruItems := c.lruCache.GetLRUItems(100)
+	freedSpace := int64(0)
+
+	for _, item := range lruItems {
+		if entry, exists := c.items[item.Key]; exists {
+			// Remove the file
+			absPath := filepath.Join(c.rootDir, entry.Path)
+			err := os.Remove(absPath)
+			if err != nil && !os.IsNotExist(err) {
+				log.Printf("Failed to remove file during eviction: %v", err)
+				continue
+			}
+
+			// Update cache state
+			freedSpace += entry.Size
+			c.currentSize -= entry.Size
+			delete(c.items, item.Key)
+
+			// Check if we've freed enough space
+			if c.currentSize+requiredSpace <= c.maxSize {
+				return nil
+			}
+		}
+	}
+
+	// If we've gone through all LRU items and still don't have enough space
+	if c.currentSize+requiredSpace > c.maxSize {
+		return fmt.Errorf("failed to free enough space in cache")
 	}
 
 	return nil
 }
 
-// backgroundCleanup periodically cleans up the cache
-func (c *Cache) backgroundCleanup() {
-	ticker := time.NewTicker(1 * time.Hour)
-	defer ticker.Stop()
+// saveState persists the cache state to disk
+func (c *Cache) saveState() error {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
 
-	for range ticker.C {
-		if _, err := c.FlushExpired(); err != nil {
-			log.Printf("Error flushing expired cache entries: %v", err)
-		}
-
-		c.mutex.Lock()
-		if c.currentSize > c.maxSize {
-			if err := c.cleanup(); err != nil {
-				log.Printf("Error cleaning up cache: %v", err)
-			}
-		}
-		c.mutex.Unlock()
+	statePath := filepath.Join(c.rootDir, "cache_state.json")
+	file, err := os.Create(statePath)
+	if err != nil {
+		return fmt.Errorf("failed to create state file: %w", err)
 	}
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	err = encoder.Encode(c.items)
+	if err != nil {
+		return fmt.Errorf("failed to encode cache state: %w", err)
+	}
+
+	return nil
 }
 
-// updateCacheSize recalculates the total size of the cache directory
-func (c *Cache) updateCacheSize() error {
+// loadState loads the cache state from disk
+func (c *Cache) loadState() error {
+	statePath := filepath.Join(c.rootDir, "cache_state.json")
+	file, err := os.Open(statePath)
+	if err != nil {
+		return fmt.Errorf("failed to open state file: %w", err)
+	}
+	defer file.Close()
+
+	decoder := json.NewDecoder(file)
+	err = decoder.Decode(&c.items)
+	if err != nil {
+		return fmt.Errorf("failed to decode cache state: %w", err)
+	}
+
+	// Calculate current size and update LRU cache
+	var totalSize int64
+	for path, entry := range c.items {
+		// Validate that files actually exist
+		absPath := filepath.Join(c.rootDir, entry.Path)
+		info, err := os.Stat(absPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				// File has been deleted externally
+				delete(c.items, path)
+				continue
+			}
+			return fmt.Errorf("failed to stat cache file: %w", err)
+		}
+
+		// Update size if it has changed
+		if info.Size() != entry.Size {
+			entry.Size = info.Size()
+		}
+
+		totalSize += entry.Size
+		c.lruCache.Add(path, entry.Size)
+	}
+
+	c.currentSize = totalSize
+	return nil
+}
+
+// Close safely shuts down the cache
+func (c *Cache) Close() error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	// Save state to disk
+	err := c.saveState()
+	if err != nil {
+		log.Printf("Failed to save cache state: %v", err)
+	}
+
+	// Perform any other cleanup needed
+	return nil
+}
+
+// getDirSize calculates the total size of all files in a directory recursively
+func getDirSize(path string) (int64, error) {
 	var size int64
-	err := filepath.Walk(c.baseDir, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 		if !info.IsDir() {
 			size += info.Size()
-
-			// Also add to LRU tracking
-			relPath, err := filepath.Rel(c.baseDir, path)
-			if err == nil {
-				c.lru.Add(relPath, info.Size())
-			}
 		}
-		return nil
-	})
-
-	if err != nil {
 		return err
-	}
-
-	c.currentSize = size
-	return nil
+	})
+	return size, err
 }
 
-// pathForKey converts a cache key to a filesystem path
-func (c *Cache) pathForKey(key string) string {
-	return filepath.Join(c.baseDir, key)
+// pathIsAllowed checks if a path is allowed to be stored in the cache
+func pathIsAllowed(path string) bool {
+	// Prevent path traversal attacks
+	if strings.Contains(path, "..") {
+		return false
+	}
+
+	// Prevent storing files in the root directory
+	if !strings.Contains(path, "/") {
+		return false
+	}
+
+	return true
 }
 
-// containsIgnoreCase checks if a string contains a substring (case insensitive)
-func containsIgnoreCase(s, substr string) bool {
-	s, substr = strings.ToLower(s), strings.ToLower(substr)
-	return strings.Contains(s, substr)
+// SyncToDisk ensures all cache state is written to disk
+func (c *Cache) SyncToDisk() error {
+	return c.saveState()
 }
 
-// ensureDirectoryExists ensures a directory exists for cached files
-func ensureDirectoryExists(path string) error {
-	// First check if directory already exists
-	info, err := os.Stat(path)
-
-	// If directory exists and is a directory, we're good
-	if err == nil && info.IsDir() {
-		log.Printf("Cache directory already exists: %s", path)
-		return nil
-	}
-
-	// If error is something other than "not exists", report it
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("cannot access path %s: %w", path, err)
-	}
-
-	// If path exists but is not a directory, that's an error
-	if err == nil && !info.IsDir() {
-		return fmt.Errorf("path exists but is not a directory: %s", path)
-	}
-
-	// At this point we know the directory doesn't exist - create it with full permissions
-	log.Printf("Creating cache directory: %s", path)
-	if err := os.MkdirAll(path, 0755); err != nil {
-		// One last check in case of race condition where another process created it
-		if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {
-			log.Printf("Directory created by another process: %s", path)
-			return nil
-		}
-		return fmt.Errorf("failed to create directory %s: %w", path, err)
-	}
-
-	log.Printf("Created cache directory successfully: %s", path)
-	return nil
-}
-
-// UpdateExpiration updates the expiration time for an existing cache entry
-func (c *Cache) UpdateExpiration(key string, expiration time.Duration) error {
+// PruneStaleItems removes items that haven't been accessed in a while
+func (c *Cache) PruneStaleItems(olderThan time.Duration) error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	// Check if entry exists in the expiration map
-	_, exists := c.expiration[key]
-	if !exists {
-		// Check if the file actually exists on disk before reporting an error
-		path := c.pathForKey(key)
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			return fmt.Errorf("cannot update expiration for non-existent cache entry: %s", key)
+	cutoff := time.Now().Add(-olderThan)
+	prunedCount := 0
+
+	for path, entry := range c.items {
+		if entry.LastAccessed.Before(cutoff) {
+			// Remove the file
+			absPath := filepath.Join(c.rootDir, entry.Path)
+			err := os.Remove(absPath)
+			if err != nil && !os.IsNotExist(err) {
+				log.Printf("Failed to remove stale file: %v", err)
+				continue
+			}
+
+			// Update cache state
+			c.currentSize -= entry.Size
+			delete(c.items, path)
+			c.lruCache.Remove(path)
+			prunedCount++
 		}
-		// File exists but wasn't in our expiration map - add it
-		log.Printf("Adding missing expiration entry for existing file: %s", key)
 	}
 
-	// Update expiration time
-	c.expiration[key] = time.Now().Add(expiration)
+	log.Printf("Pruned %d stale items from cache", prunedCount)
 	return nil
 }
 
-// SavePackageIndex saves the package index to disk
-func (c *Cache) SavePackageIndex() error {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-	return c.savePackageIndexLocked()
-}
-
-// GetPackageIndex returns a reference to the package index
-func (c *Cache) GetPackageIndex() *parser.PackageIndex {
+// ListRepos lists all repositories in the cache
+func (c *Cache) ListRepos() []string {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
-	return c.packageIndex
-}
 
-// UpdatePackageIndex updates the package index with new package information
-func (c *Cache) UpdatePackageIndex(packages []parser.PackageInfo) error {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-
-	// Add each package to the index
-	for _, pkg := range packages {
-		c.packageIndex.AddPackage(pkg)
+	repos := make(map[string]bool)
+	for path := range c.items {
+		parts := strings.SplitN(path, "/", 2)
+		if len(parts) > 0 {
+			repos[parts[0]] = true
+		}
 	}
 
-	// Save the updated index
-	return c.savePackageIndexLocked()
+	result := make([]string, 0, len(repos))
+	for repo := range repos {
+		result = append(result, repo)
+	}
+	return result
 }
 
-// savePackageIndexLocked saves the package index to disk (assumes mutex is already locked)
-func (c *Cache) savePackageIndexLocked() error {
-	data, err := json.Marshal(c.packageIndex)
-	if err != nil {
-		return err
+// GetLastModified returns the last modified time for a cached file
+func (c *Cache) GetLastModified(path string) time.Time {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+
+	entry, exists := c.items[path]
+	if !exists {
+		return time.Time{} // Return zero time if not found
 	}
-	return os.WriteFile(c.indexPath, data, 0644)
+
+	return entry.LastModified
+}
+
+// GetStats returns cache statistics in a structured format
+func (c *Cache) GetStats() (CacheStats, error) {
+	c.mutex.RLock()
+	itemCount := len(c.items)
+	currentSize := c.currentSize
+	maxSize := c.maxSize
+	c.mutex.RUnlock()
+
+	c.statsMutex.RLock()
+	hitCount := c.hitCount
+	missCount := c.missCount
+	c.statsMutex.RUnlock()
+
+	// Calculate hit and miss rates
+	var hitRate, missRate float64
+	totalReqs := hitCount + missCount
+	if totalReqs > 0 {
+		hitRate = float64(hitCount) / float64(totalReqs)
+		missRate = float64(missCount) / float64(totalReqs)
+	}
+
+	// Build the stats struct
+	stats := CacheStats{
+		CurrentSize: currentSize,
+		MaxSize:     maxSize,
+		Items:       itemCount,
+		HitRate:     hitRate,
+		MissRate:    missRate,
+		Hits:        hitCount,
+		Misses:      missCount,
+	}
+
+	return stats, nil
+}
+
+// CreateCacheStats creates a CacheStats struct from raw statistics
+func (c *Cache) CreateCacheStats(items int, currentSize, maxSize, hits, misses int64) CacheStats {
+	// Calculate hit and miss rates
+	var hitRate, missRate float64
+	totalReqs := hits + misses
+	if totalReqs > 0 {
+		hitRate = float64(hits) / float64(totalReqs)
+		missRate = float64(misses) / float64(totalReqs)
+	}
+
+	return CacheStats{
+		CurrentSize: currentSize,
+		MaxSize:     maxSize,
+		Items:       items,
+		HitRate:     hitRate,
+		MissRate:    missRate,
+		Hits:        hits,
+		Misses:      misses,
+	}
 }
