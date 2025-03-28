@@ -7,6 +7,7 @@ import (
 	"time"
 )
 
+// TestCacheOperations test
 func TestCacheOperations(t *testing.T) {
 	// Create a temporary directory for testing
 	tempDir, err := os.MkdirTemp("", "cache-test")
@@ -16,7 +17,7 @@ func TestCacheOperations(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	// Create a cache with 10MB max size
-	cache, err := New(tempDir, 10)
+	cache, err := New(tempDir, 10*1024*1024) // 10MB
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
 	}
@@ -30,12 +31,9 @@ func TestCacheOperations(t *testing.T) {
 	}
 
 	// Test getting data from the cache
-	data, found, err := cache.Get(testKey)
+	data, err := cache.Get(testKey)
 	if err != nil {
 		t.Fatalf("Failed to get data from cache: %v", err)
-	}
-	if !found {
-		t.Fatalf("Data not found in cache")
 	}
 	if string(data) != string(testData) {
 		t.Fatalf("Data mismatch: got %s, want %s", string(data), string(testData))
@@ -54,8 +52,8 @@ func TestCacheOperations(t *testing.T) {
 	}
 
 	// Verify it exists initially
-	_, found, _ = cache.Get(shortKey)
-	if !found {
+	_, err = cache.Get(shortKey)
+	if err != nil {
 		t.Fatalf("Short-lived data not found immediately after put")
 	}
 
