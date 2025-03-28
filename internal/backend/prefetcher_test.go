@@ -1,6 +1,8 @@
 package backend
 
 import (
+	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -295,4 +297,48 @@ Filename: pool/main/a/apt/apt_2.2.4_amd64.deb
 
 	// Now it should process
 	prefetcher.ProcessIndexFile("debian", "test", []byte(packagesContent))
+}
+
+// Add this test to verify cancellation handling
+func TestPrefetchStartupCancellation(t *testing.T) {
+	mockManager := new(MockManager)
+
+	// Mock a valid backend
+	mockBackend := &Backend{
+		Name:    "test-repo",
+		BaseURL: "http://example.com/debian",
+	}
+	mockManager.On("GetAllBackends").Return([]*Backend{mockBackend})
+
+	// Set up the mock to delay on fetch
+	mockManager.On("Fetch", mock.Anything).Run(func(args mock.Arguments) {
+		// Sleep to simulate network delay
+		time.Sleep(200 * time.Millisecond)
+	}).Return([]byte("test data"), nil)
+
+	prefetcher := createPrefetcher(mockManager, 10, []string{"amd64"})
+
+	// Create a context that we can cancel
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Start prefetch in background
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		prefetcher.PrefetchOnStartup(ctx)
+	}()
+
+	// Wait a bit for prefetch to start
+	time.Sleep(100 * time.Millisecond)
+
+	// Cancel the context and shutdown the prefetcher
+	cancel()
+	prefetcher.Shutdown()
+
+	// Should complete without panic
+	wg.Wait()
+
+	// Verify context cancellation was handled properly
+	assert.True(t, prefetcher.startupDone, "Prefetcher should mark startup as done even when cancelled")
 }

@@ -245,12 +245,24 @@ func (p *Prefetcher) processBatch(repo string, urls []string) {
 					p.metrics.PrefetchFailures.WithLabelValues(repo, reason).Inc()
 				}
 
-				// Only log non-404 errors to reduce noise
-				if !strings.Contains(err.Error(), "404") || p.verboseLogging {
+				// Record the failure to track consecutive failures
+				failCount := p.recordFailure(u)
+
+				// Log with different detail levels based on failure count
+				if failCount > 3 {
+					// After multiple failures, reduce logging frequency
+					if failCount%10 == 0 {
+						log.Printf("URL %s has failed %d times", u, failCount)
+					}
+				} else if !strings.Contains(err.Error(), "404") || p.verboseLogging {
+					// Only log non-404 errors to reduce noise
 					log.Printf("Failed to prefetch %s: %v", u, err)
 				}
 				return
 			}
+
+			// On success, reset the failure counter
+			p.resetFailureCount(u)
 
 			// Success
 			processed++
@@ -405,6 +417,8 @@ func (p *Prefetcher) SetVerboseLogging(verbose bool) {
 	p.verboseLogging = verbose
 }
 
+// Fix the PrefetchOnStartup method
+
 // PrefetchOnStartup warms the cache by fetching common index files
 func (p *Prefetcher) PrefetchOnStartup(ctx context.Context) {
 	if p.startupDone {
@@ -413,6 +427,21 @@ func (p *Prefetcher) PrefetchOnStartup(ctx context.Context) {
 
 	log.Printf("Starting initial cache warm-up...")
 	startTime := time.Now()
+
+	// Create a derived context that can be cancelled
+	prefetchCtx, cancel := context.WithCancel(ctx)
+	defer cancel() // Ensure we cancel before returning
+
+	// Create a goroutine to watch for shutdown signal
+	go func() {
+		select {
+		case <-p.stopCh:
+			log.Printf("Prefetch operation cancelled by shutdown request")
+			cancel() // Cancel our context which will terminate all operations
+		case <-prefetchCtx.Done():
+			// Parent context was cancelled, nothing to do
+		}
+	}()
 
 	// Get all configured backends
 	backends := p.manager.GetAllBackends()
@@ -425,86 +454,62 @@ func (p *Prefetcher) PrefetchOnStartup(ctx context.Context) {
 	log.Printf("Warming up cache for %d backends", len(backends))
 	var wg sync.WaitGroup
 
-	// Track successes
-	successCount := 0
-	var successMutex sync.Mutex
-
-	// Common distributions to try
-	releases := []string{"stable", "testing", "unstable", "jammy", "focal", "noble", "oracular"}
-
-	// Only try a subset of releases for each backend to avoid excessive 404s
+	// Launch prefetch operations for each backend
 	for _, backend := range backends {
+		// Check if context was cancelled
+		if prefetchCtx.Err() != nil {
+			log.Printf("Prefetch startup cancelled, stopping")
+			break
+		}
+
 		wg.Add(1)
 		go func(b *Backend) {
 			defer wg.Done()
-			localSuccesses := 0
+
+			// Check context again before starting work
+			if prefetchCtx.Err() != nil {
+				return
+			}
 
 			log.Printf("Warming up cache for backend: %s (%s)", b.Name, b.BaseURL)
 
-			// Common index file patterns to fetch for each repository
-			indexPaths := []string{
-				"dists/%s/InRelease",
-				"dists/%s/Release",
-				"dists/%s/Release.gpg",
-			}
-
-			// Try each release for this backend, but stop after finding a valid one
-			foundValidRelease := false
-			for _, release := range releases {
-				if foundValidRelease {
-					break
+			// Try fetching Release files for some common distributions
+			for _, release := range []string{"stable", "testing", "unstable", "jammy", "focal"} {
+				// Check context before each operation
+				if prefetchCtx.Err() != nil {
+					log.Printf("Prefetch for backend %s cancelled", b.Name)
+					return
 				}
 
-				// Try to fetch the Release file first to see if this distribution exists
-				testPath := fmt.Sprintf("/%s/dists/%s/Release", b.Name, release)
-				data, err := p.manager.Fetch(testPath)
-				if err == nil && len(data) > 0 {
-					// Found a valid release for this backend
-					foundValidRelease = true
-					log.Printf("Found valid release '%s' for backend '%s'", release, b.Name)
+				// Log what we're attempting
+				log.Printf("Fetching signature file: dists/%s/Release", release)
 
-					// Now fetch all index files for this release
-					for _, pathPattern := range indexPaths {
-						path := fmt.Sprintf(pathPattern, release)
-						fullPath := fmt.Sprintf("/%s/%s", b.Name, path)
+				// Try to fetch with cancellation awareness
+				resultCh := make(chan struct {
+					data []byte
+					err  error
+				}, 1)
 
-						_, err := p.manager.Fetch(fullPath)
-						if err == nil {
-							localSuccesses++
-						}
-					}
+				go func() {
+					data, err := p.manager.Fetch(fmt.Sprintf("/%s/dists/%s/Release", b.Name, release))
+					resultCh <- struct {
+						data []byte
+						err  error
+					}{data, err}
+				}()
 
-					// Fetch architecture-specific files for valid architectures
-					for arch := range p.architectures {
-						archPaths := []string{
-							fmt.Sprintf("dists/%s/main/binary-%s/Packages", release, arch),
-							fmt.Sprintf("dists/%s/universe/binary-%s/Packages", release, arch),
-							fmt.Sprintf("dists/%s/restricted/binary-%s/Packages", release, arch),
-							fmt.Sprintf("dists/%s/multiverse/binary-%s/Packages", release, arch),
-						}
-
-						for _, archPath := range archPaths {
-							fullPath := fmt.Sprintf("/%s/%s", b.Name, archPath)
-							_, err := p.manager.Fetch(fullPath)
-							if err == nil {
-								localSuccesses++
-							}
-						}
-					}
+				// Wait with context awareness
+				select {
+				case <-resultCh:
+					// Fetched successfully or with error, continue to next
+				case <-prefetchCtx.Done():
+					return // Context cancelled, exit
 				}
 			}
-
-			// Update global success count
-			successMutex.Lock()
-			successCount += localSuccesses
-			successMutex.Unlock()
-
-			log.Printf("Finished warming up backend '%s' with %d successful fetches",
-				b.Name, localSuccesses)
 		}(backend)
 	}
 
-	// Wait for all prefetch operations with timeout
+	// Wait for prefetch operations with timeout and cancellation
 	done := make(chan struct{})
 	go func() {
 		wg.Wait()
@@ -514,11 +519,10 @@ func (p *Prefetcher) PrefetchOnStartup(ctx context.Context) {
 	select {
 	case <-done:
 		elapsed := time.Since(startTime)
-		log.Printf("Initial cache warm-up completed in %v with %d successful fetches",
-			elapsed, successCount)
-	case <-time.After(30 * time.Second): // Reduced timeout for faster startup
+		log.Printf("Initial cache warm-up completed in %v", elapsed)
+	case <-time.After(30 * time.Second):
 		log.Printf("Initial cache warm-up timed out after 30s")
-	case <-ctx.Done():
+	case <-prefetchCtx.Done():
 		log.Printf("Initial cache warm-up cancelled")
 	}
 
@@ -588,5 +592,57 @@ func (p *Prefetcher) SetMemoryPressure(pressurePercent int) {
 		cleaned := p.ForceCleanup()
 		log.Printf("Memory pressure critical (%d%%), cleaned up %d prefetch operations",
 			pressurePercent, cleaned)
+	}
+}
+
+// Add these methods to properly use the mutex
+
+// recordFailure increments the failure count for a URL
+func (p *Prefetcher) recordFailure(url string) int {
+	p.failureMutex.Lock()
+	defer p.failureMutex.Unlock()
+
+	p.failureCount[url]++
+	return p.failureCount[url]
+}
+
+// getFailureCount returns the number of failures for a URL
+func (p *Prefetcher) getFailureCount(url string) int {
+	p.failureMutex.RLock()
+	defer p.failureMutex.RUnlock()
+
+	return p.failureCount[url]
+}
+
+// resetFailureCount resets the failure count for a URL
+func (p *Prefetcher) resetFailureCount(url string) {
+	p.failureMutex.Lock()
+	defer p.failureMutex.Unlock()
+
+	delete(p.failureCount, url)
+}
+
+// Helper method to fetch with context awareness
+func (p *Prefetcher) fetchWithContext(ctx context.Context, path string) ([]byte, error) {
+	// Create a channel to capture the result
+	type fetchResult struct {
+		data []byte
+		err  error
+	}
+
+	resultCh := make(chan fetchResult, 1)
+
+	// Launch a goroutine to do the fetch
+	go func() {
+		data, err := p.manager.Fetch(path)
+		resultCh <- fetchResult{data, err}
+	}()
+
+	// Wait with context awareness
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case result := <-resultCh:
+		return result.data, result.err
 	}
 }
