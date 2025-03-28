@@ -2,6 +2,7 @@ package backend
 
 import (
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -47,24 +48,28 @@ func (pi *packageIndex) AddPackage(pkg parser.PackageInfo) {
 	pi.packages[pkg.Package] = pkg
 }
 
-// SearchByPackageName searches for packages by name
+// Fix SearchByPackageName to convert pkg.Size from string to int64
 func (tc *TestCache) SearchByPackageName(name string) ([]cache.CacheSearchResult, error) {
 	results := []cache.CacheSearchResult{}
 
-	// Check if GetPackageIndex returns nil
 	index := tc.GetPackageIndex()
 	if index == nil {
 		return results, nil
 	}
 
-	// Search through packages
 	for pkgName, pkg := range index.packages {
 		if strings.Contains(pkgName, name) {
+			// Convert Size from string to int64
+			var size int64
+			if sizeVal, err := strconv.ParseInt(pkg.Size, 10, 64); err == nil {
+				size = sizeVal
+			}
+
 			results = append(results, cache.CacheSearchResult{
 				Path:        pkg.Filename,
 				PackageName: pkg.Package,
 				Version:     pkg.Version,
-				Size:        pkg.Size,
+				Size:        size, // Use converted int64 value
 				LastAccess:  time.Now(),
 				IsCached:    true,
 			})
