@@ -19,8 +19,8 @@ type HealthStatus struct {
 	BackendStatus    string     `json:"backendStatus"`
 	SystemInfo       SystemInfo `json:"systemInfo"`
 	LatestRequests   int        `json:"latestRequests"`
-	CacheStats       any        `json:"cacheStats,omitempty"`   // Changed from any to any
-	BackendStats     any        `json:"backendStats,omitempty"` // Changed from any to any
+	CacheStats       any        `json:"cacheStats,omitempty"`
+	BackendStats     any        `json:"backendStats,omitempty"`
 	HitRate          float64    `json:"hitRate"`
 	LastErrorMessage string     `json:"lastErrorMessage,omitempty"`
 }
@@ -36,12 +36,28 @@ type SystemInfo struct {
 	MemStats        runtime.MemStats `json:"-"` // Not exported to JSON
 }
 
+// HandleHealth is the exported version of handleHealth
+func (s *Server) HandleHealth(w http.ResponseWriter, r *http.Request) {
+	s.handleHealth(w, r)
+}
+
+// HandleReady is the exported version of handleReady
+func (s *Server) HandleReady(w http.ResponseWriter, r *http.Request) {
+	s.handleReady(w, r)
+}
+
+// HandleMetrics is the exported version of handleMetrics
+func (s *Server) HandleMetrics(w http.ResponseWriter, r *http.Request) {
+	s.handleMetrics(w, r)
+}
+
 // handleHealth serves the health check endpoint
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// Detailed parameter determines whether to include detailed stats
 	detailed := r.URL.Query().Get("detailed") == "true"
 
-	// Get cache stats
+	// Get cache stats with mutex protection
+	s.mutex.Lock()
 	cacheStats, err := s.cache.GetStats()
 	cacheStatus := "ok"
 	if err != nil {
@@ -50,6 +66,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	// Get basic metrics
 	metrics := s.metrics.GetStatistics()
+	s.mutex.Unlock()
 
 	// Get system info
 	var memStats runtime.MemStats
@@ -68,7 +85,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// Create health status response
 	status := HealthStatus{
 		Status:         "ok",
-		Version:        "1.0.0", // Replace with actual version
+		Version:        s.version,
 		Uptime:         time.Since(s.startTime).String(),
 		CacheStatus:    cacheStatus,
 		BackendStatus:  "ok", // Simplified - could check backend health
@@ -80,7 +97,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// Include detailed stats if requested
 	if detailed {
 		status.CacheStats = cacheStats
-		status.BackendStats = map[string]any{ // Changed from any to any
+		status.BackendStats = map[string]any{
 			"recentRequests": metrics.RecentRequests,
 		}
 	}
@@ -95,6 +112,18 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // handleMetrics serves Prometheus metrics
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	// Use mutex when accessing the metrics handler
+	s.mutex.Lock()
 	handler := promhttp.Handler()
+	s.mutex.Unlock()
+
 	handler.ServeHTTP(w, r)
+}
+
+// handleReady serves the readiness check endpoint
+func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if _, err := w.Write([]byte(`{"status":"ready"}`)); err != nil {
+		log.Printf("Error writing ready response: %v", err)
+	}
 }
