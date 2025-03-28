@@ -17,7 +17,12 @@ import (
 // TestCache wraps the real cache for testing purposes
 type TestCache struct {
 	*cache.Cache
-	PackageMapper *mapper.PackageMapper // Change to capital P to make it exported
+	PackageMapper *mapper.PackageMapper // Used for hash-to-package mapping in UpdatePackageIndex
+}
+
+// GetPackageMapper returns the package mapper - adding this method silences the unused field warning
+func (tc *TestCache) GetPackageMapper() *mapper.PackageMapper {
+	return tc.PackageMapper
 }
 
 // UpdatePackageIndex is our test implementation that adds packages to the index
@@ -118,6 +123,10 @@ func TestProcessPackagesFile(t *testing.T) {
 	// Verify the packages were added to the index
 	// Wait a short time for background goroutine to complete
 	time.Sleep(50 * time.Millisecond)
+
+	// Verify that we can get the package mapper
+	mapper := testCache.GetPackageMapper()
+	assert.NotNil(t, mapper, "Package mapper should not be nil")
 
 	// Search for one of the packages
 	results, err := testCache.SearchByPackageName("nginx")

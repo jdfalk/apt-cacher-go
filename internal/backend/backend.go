@@ -8,7 +8,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -380,33 +379,6 @@ func (m *Manager) Download(ctx context.Context, path string, backend *Backend) (
 
 	// Return the result
 	return &result, nil
-}
-
-// storeCachedFile stores a downloaded file in the cache
-func (m *Manager) storeCachedFile(data []byte, cacheKey string) error {
-	// Construct the complete cache path
-	cachePath := filepath.Join(m.cacheDir, cacheKey)
-
-	// Ensure the directory exists
-	dir := filepath.Dir(cachePath)
-
-	// Check if directory exists first
-	if stat, err := os.Stat(dir); err == nil && stat.IsDir() {
-		// Directory already exists, proceed to file creation
-	} else {
-		// Try to create the directory
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			// Check again if it exists (could be a race condition)
-			if stat, statErr := os.Stat(dir); statErr == nil && stat.IsDir() {
-				// Directory now exists
-			} else {
-				return fmt.Errorf("failed to create cache directory: %w", err)
-			}
-		}
-	}
-
-	// Write the file
-	return os.WriteFile(cachePath, data, 0644)
 }
 
 // ProcessPackagesFile processes package index files
