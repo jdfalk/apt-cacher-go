@@ -50,8 +50,11 @@ type CacheEntry struct {
 
 // adminDashboard serves the admin dashboard
 func (s *Server) adminDashboard(w http.ResponseWriter, r *http.Request) {
+	s.mutex.Lock()
 	stats := s.metrics.GetStatistics()
 	cacheStats, err := s.cache.GetStats()
+	s.mutex.Unlock()
+
 	if err != nil {
 		http.Error(w, "Failed to retrieve cache statistics", http.StatusInternalServerError)
 		log.Printf("Failed to get cache statistics: %v", err)
@@ -59,7 +62,9 @@ func (s *Server) adminDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get memory statistics
+	s.mutex.Lock()
 	memStats := s.memoryMonitor.GetMemoryUsage()
+	s.mutex.Unlock()
 
 	html := fmt.Sprintf(`
     <!DOCTYPE html>
@@ -176,7 +181,10 @@ func (s *Server) adminClearCache(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.mutex.Lock()
 	count := s.cache.Clear()
+	s.mutex.Unlock()
+
 	log.Printf("Admin action: Cleared %d cache entries", count)
 
 	html := fmt.Sprintf(`
@@ -202,7 +210,10 @@ func (s *Server) adminFlushExpired(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.mutex.Lock()
 	count, err := s.cache.FlushExpired()
+	s.mutex.Unlock()
+
 	if err != nil {
 		http.Error(w, "Failed to flush expired entries", http.StatusInternalServerError)
 		log.Printf("Failed to flush expired cache entries: %v", err)
@@ -228,8 +239,11 @@ func (s *Server) adminFlushExpired(w http.ResponseWriter, r *http.Request) {
 
 // adminGetStats returns cache statistics in JSON format
 func (s *Server) adminGetStats(w http.ResponseWriter, r *http.Request) {
+	s.mutex.Lock()
 	stats := s.metrics.GetStatistics()
 	cacheStats, err := s.cache.GetStats()
+	s.mutex.Unlock()
+
 	if err != nil {
 		http.Error(w, "Failed to retrieve cache statistics", http.StatusInternalServerError)
 		log.Printf("Failed to get cache statistics: %v", err)
@@ -269,7 +283,7 @@ func (s *Server) adminGetStats(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Modified adminSearchCache function
+// adminSearchCache function
 func (s *Server) adminSearchCache(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("q")
 	if query == "" {
@@ -277,8 +291,10 @@ func (s *Server) adminSearchCache(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Search by path (existing code)
+	// Search by path with mutex protection
+	s.mutex.Lock()
 	pathResults, _ := s.cache.Search(query)
+	s.mutex.Unlock()
 
 	// Convert string results to CacheEntry objects for display
 	entryResults := make([]CacheEntry, len(pathResults))
@@ -291,8 +307,10 @@ func (s *Server) adminSearchCache(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Search by package name (new code)
+	// Search by package name with mutex protection
+	s.mutex.Lock()
 	packageResults, _ := s.cache.SearchByPackageName(query)
+	s.mutex.Unlock()
 
 	// Create HTML output
 	html := fmt.Sprintf(`
@@ -392,7 +410,7 @@ func (s *Server) adminSearchCache(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Add this function to internal/server/admin.go
+// adminCachePackage handles package caching requests
 func (s *Server) adminCachePackage(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -405,31 +423,19 @@ func (s *Server) adminCachePackage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Start package download in background
+	// Start package download in background with mutex protection
 	go func() {
 		log.Printf("Admin-triggered package download: %s", path)
+		s.mutex.Lock()
 		_, err := s.backend.Fetch("/" + path)
+		s.mutex.Unlock()
+
 		if err != nil {
 			log.Printf("Error caching package %s: %v", path, err)
 		} else {
 			log.Printf("Successfully cached package %s", path)
 		}
 	}()
-
-	html := fmt.Sprintf(`
-        <html>
-        <body>
-            <h1>Package Caching Initiated</h1>
-            <p>Started caching %s in the background.</p>
-            <p><a href="/admin">Return to Admin Dashboard</a></p>
-        </body>
-        </html>
-    `, path)
-
-	w.Header().Set("Content-Type", "text/html")
-	if _, err := w.Write([]byte(html)); err != nil {
-		log.Printf("Error writing cache package response: %v", err)
-	}
 }
 
 // adminCleanupPrefetcher handles force-cleaning of the prefetcher
@@ -439,7 +445,9 @@ func (s *Server) adminCleanupPrefetcher(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	s.mutex.Lock()
 	count := s.backend.ForceCleanupPrefetcher()
+	s.mutex.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]any{
@@ -451,31 +459,7 @@ func (s *Server) adminCleanupPrefetcher(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-// Add this function to get a color based on memory pressure
-func getColorForPressure(pressure float64) string {
-	if pressure < 50 {
-		return "#4CAF50" // Green
-	} else if pressure < 75 {
-		return "#FFC107" // Yellow
-	} else if pressure < 90 {
-		return "#FF9800" // Orange
-	}
-	return "#F44336" // Red
-}
-
-// Add this function to get a status message based on memory pressure
-func getStatusForPressure(pressure float64) string {
-	if pressure < 50 {
-		return "(Normal)"
-	} else if pressure < 75 {
-		return "(Elevated)"
-	} else if pressure < 90 {
-		return "(High)"
-	}
-	return "(Critical)"
-}
-
-// Add this handler to force memory cleanup
+// adminForceMemoryCleanup handles force memory cleanup
 func (s *Server) adminForceMemoryCleanup(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -486,21 +470,38 @@ func (s *Server) adminForceMemoryCleanup(w http.ResponseWriter, r *http.Request)
 	runtime.GC()
 
 	// Call memory pressure handler with 100% to force all cleanup actions
+	s.mutex.Lock()
 	s.handleHighMemoryPressure(100)
+	s.mutex.Unlock()
+}
 
-	// Return success message
-	html := `
-        <html>
-        <body>
-            <h1>Memory Cleanup Completed</h1>
-            <p>Forced memory cleanup actions have been performed.</p>
-            <p><a href="/admin">Return to Admin Dashboard</a></p>
-        </body>
-        </html>
-    `
-
-	w.Header().Set("Content-Type", "text/html")
-	if _, err := w.Write([]byte(html)); err != nil {
-		log.Printf("Error writing memory cleanup response: %v", err)
+// Add these helper functions at the end of the file
+// getColorForPressure returns a color code based on memory pressure
+func getColorForPressure(pressure float64) string {
+	if pressure > 90 {
+		return "#cc0000" // red
+	} else if pressure > 75 {
+		return "#ff9900" // orange
+	} else if pressure > 50 {
+		return "#ffcc00" // yellow
 	}
+	return "#33cc33" // green
+}
+
+// getStatusForPressure returns a status description based on memory pressure
+func getStatusForPressure(pressure float64) string {
+	if pressure > 90 {
+		return "(Critical)"
+	} else if pressure > 75 {
+		return "(High)"
+	} else if pressure > 50 {
+		return "(Moderate)"
+	}
+	return "(Normal)"
+}
+
+// HandleAdminAuth wraps a handler function with admin authentication
+// Exported for testing
+func (s *Server) HandleAdminAuth(handler http.HandlerFunc) http.HandlerFunc {
+	return s.handleAdminAuth(handler)
 }
