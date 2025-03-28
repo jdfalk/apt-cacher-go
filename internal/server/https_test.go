@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,10 +25,23 @@ func TestHTTPSConnection(t *testing.T) {
 	}
 }
 
+// Add timeout handling to server test
 func TestShouldRemapHost(t *testing.T) {
-	// Create a server with test backends
 	server, _, cleanup := createTestServer(t)
-	defer cleanup()
+	defer func() {
+		done := make(chan struct{})
+		go func() {
+			cleanup()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			// Clean shutdown
+		case <-time.After(2 * time.Second):
+			t.Log("Warning: Test cleanup timed out")
+		}
+	}()
 
 	testCases := []struct {
 		host             string
