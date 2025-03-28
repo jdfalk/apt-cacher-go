@@ -79,8 +79,8 @@ func New(cfg *config.Config, cache *cachelib.Cache, mapper *mapper.PathMapper, p
 		return m.downloadFromURL(url)
 	})
 
-	// Create prefetcher
-	m.prefetcher = NewPrefetcher(m, cfg.MaxConcurrentDownloads/2)
+	// Create prefetcher with architectures
+	m.prefetcher = NewPrefetcher(m, cfg.MaxConcurrentDownloads/2, cfg.Architectures)
 
 	// Start the download queue
 	m.downloadQ.Start(downloadCtx)
@@ -228,16 +228,45 @@ func (m *Manager) processReleaseFile(repo string, path string, data []byte) {
 	// Extract the base directory from the path
 	basedir := filepath.Dir(path)
 
+	// Get the configured architectures
+	var architectures []string
+	if m.prefetcher != nil && m.prefetcher.architectures != nil {
+		for arch := range m.prefetcher.architectures {
+			architectures = append(architectures, arch)
+		}
+	}
+
 	// Prefetch important index files
 	for _, filename := range filenames {
-		if strings.Contains(filename, "Packages") || strings.Contains(filename, "Sources") {
-			fullPath := fmt.Sprintf("/%s/%s/%s", repo, basedir, filename)
-			go func(path string) {
-				if _, err := m.Fetch(path); err != nil {
+		// Only prefetch Packages or Sources files
+		if !strings.Contains(filename, "Packages") && !strings.Contains(filename, "Sources") {
+			continue
+		}
+
+		// Check if this is an architecture-specific file
+		if strings.Contains(filename, "binary-") && len(architectures) > 0 {
+			// Skip files for architectures we don't care about
+			isRelevantArch := false
+			for _, arch := range architectures {
+				if strings.Contains(filename, "binary-"+arch) {
+					isRelevantArch = true
+					break
+				}
+			}
+			if !isRelevantArch {
+				continue
+			}
+		}
+
+		fullPath := fmt.Sprintf("/%s/%s/%s", repo, basedir, filename)
+		go func(path string) {
+			if _, err := m.Fetch(path); err != nil {
+				// Don't log 404 errors to reduce noise
+				if !strings.Contains(err.Error(), "404") {
 					log.Printf("Failed to prefetch %s: %v", path, err)
 				}
-			}(fullPath)
-		}
+			}
+		}(fullPath)
 	}
 }
 

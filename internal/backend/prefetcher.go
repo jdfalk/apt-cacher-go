@@ -13,12 +13,13 @@ import (
 
 // Prefetcher manages background prefetching of packages
 type Prefetcher struct {
-	manager     *Manager
-	active      sync.Map // Track active prefetch operations
-	maxActive   int
-	cleanupTick *time.Ticker
-	wg          sync.WaitGroup
-	stopCh      chan struct{}
+	manager       *Manager
+	active        sync.Map // Track active prefetch operations
+	maxActive     int
+	cleanupTick   *time.Ticker
+	wg            sync.WaitGroup
+	stopCh        chan struct{}
+	architectures map[string]bool // Add this field
 }
 
 // PrefetchOperation tracks a single prefetch operation
@@ -30,12 +31,19 @@ type PrefetchOperation struct {
 }
 
 // NewPrefetcher creates a new prefetcher
-func NewPrefetcher(manager *Manager, maxActive int) *Prefetcher {
+func NewPrefetcher(manager *Manager, maxActive int, architectures []string) *Prefetcher {
+	// Create map for fast lookup
+	archMap := make(map[string]bool)
+	for _, arch := range architectures {
+		archMap[arch] = true
+	}
+
 	p := &Prefetcher{
-		manager:     manager,
-		maxActive:   maxActive,
-		cleanupTick: time.NewTicker(30 * time.Second),
-		stopCh:      make(chan struct{}),
+		manager:       manager,
+		maxActive:     maxActive,
+		cleanupTick:   time.NewTicker(30 * time.Second),
+		stopCh:        make(chan struct{}),
+		architectures: archMap,
 	}
 
 	// Start background cleanup goroutine
@@ -60,6 +68,40 @@ func (p *Prefetcher) cleanupRoutine() {
 	}
 }
 
+// Add a method to filter URLs by architecture:
+func (p *Prefetcher) filterByArchitecture(urls []string) []string {
+	// If no architectures specified, don't filter
+	if len(p.architectures) == 0 {
+		return urls
+	}
+
+	filtered := make([]string, 0, len(urls))
+	for _, url := range urls {
+		// Don't filter non-architecture-specific files
+		if !strings.Contains(url, "binary-") && !strings.Contains(url, "-installer/") {
+			filtered = append(filtered, url)
+			continue
+		}
+
+		// Check if this URL matches one of our configured architectures
+		matchesArch := false
+		for arch := range p.architectures {
+			if strings.Contains(url, "binary-"+arch) || strings.Contains(url, "-installer/binary-"+arch) {
+				matchesArch = true
+				break
+			}
+		}
+
+		if matchesArch {
+			filtered = append(filtered, url)
+		} else {
+			log.Printf("Skipping prefetch for non-configured architecture: %s", url)
+		}
+	}
+
+	return filtered
+}
+
 // ProcessIndexFile analyzes an index file and prefetches popular packages
 func (p *Prefetcher) ProcessIndexFile(repo string, path string, data []byte) {
 	// Don't process if not a Packages file
@@ -77,6 +119,15 @@ func (p *Prefetcher) ProcessIndexFile(repo string, path string, data []byte) {
 	// Skip if no URLs found
 	if len(urls) == 0 {
 		log.Printf("Prefetch operation completed: processed 0/0 URLs in %v", time.Duration(0))
+		return
+	}
+
+	// Filter URLs by architecture
+	urls = p.filterByArchitecture(urls)
+
+	// Skip if no URLs after filtering
+	if len(urls) == 0 {
+		log.Printf("No URLs left after architecture filtering")
 		return
 	}
 

@@ -44,6 +44,20 @@ metrics_enabled: true
 # Download queue
 max_concurrent_downloads: 10
 
+# Prefetching configuration
+prefetch_enabled: true
+max_prefetches: 10
+# Add architecture filtering to reduce 404 errors
+architectures:
+  - amd64 # x86_64 architecture (most common)
+  # - i386 # 32-bit x86 architecture
+  # Comment out architectures you don't need
+  # - armhf   # ARM hard float (Raspberry Pi, etc.)
+  - arm64 # 64-bit ARM
+  # - ppc64el # PowerPC 64-bit little endian
+  # - s390x   # IBM System z
+  # - riscv64 # RISC-V 64-bit
+
 # Repository configuration
 disable_default_repos: false # Set to true to disable built-in repository definitions
 

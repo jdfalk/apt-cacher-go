@@ -53,6 +53,9 @@ type Config struct {
 	PrefetchEnabled bool `yaml:"prefetch_enabled"`
 	MaxPrefetches   int  `yaml:"max_prefetches"`
 
+	// Architectures to prefetch (if empty, prefetch all)
+	Architectures []string `yaml:"architectures"`
+
 	// Default repositories
 	DisableDefaultRepos bool `yaml:"disable_default_repos"`
 }
