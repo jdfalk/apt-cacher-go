@@ -8,16 +8,11 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
-	"os/signal"
-	"syscall"
 
 	"github.com/jdfalk/apt-cacher-go/cmd/admin"
 	"github.com/jdfalk/apt-cacher-go/cmd/benchmark"
 	"github.com/jdfalk/apt-cacher-go/cmd/serve"
-	"github.com/jdfalk/apt-cacher-go/internal/config"
-	"github.com/jdfalk/apt-cacher-go/internal/server"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -75,41 +70,11 @@ func initConfig() {
 		fmt.Println("Using config file:", viper.ConfigFileUsed())
 	}
 }
+
 func main() {
-	// Load configuration
-	configPath := "/etc/apt-cacher-go/config.yaml"
-	if len(os.Args) > 1 {
-		configPath = os.Args[1]
-	}
-
-	log.Printf("Using config file: %s", configPath)
-	cfg, err := config.LoadConfigFileWithDebug(configPath)
-	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
-	}
-
-	// Create server
-	srv, err := server.New(cfg, nil, nil, nil)
-	if err != nil {
-		log.Fatalf("Error: %v", err)
-	}
-
-	// Start the server
-	if err := srv.Start(); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
-	}
-
-	// THIS IS THE FIX: Block the main thread to keep the program running
-	// Set up signal handling for graceful shutdown
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-
-	// Block until we receive a termination signal
-	sig := <-sigCh
-	log.Printf("Received signal %v, shutting down gracefully...", sig)
-
-	// Shutdown the server
-	if err := srv.Shutdown(); err != nil {
-		log.Printf("Error during shutdown: %v", err)
+	// Execute the root command instead of direct server creation
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
 }

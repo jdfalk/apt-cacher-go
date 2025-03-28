@@ -477,6 +477,9 @@ func (m *Manager) KeyManager() *keymanager.KeyManager {
 
 // GetAllBackends returns all configured backends
 func (m *Manager) GetAllBackends() []*Backend {
+	if m == nil || m.backends == nil {
+		return []*Backend{}
+	}
 	return m.backends
 }
 

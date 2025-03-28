@@ -344,57 +344,91 @@ func (p *Prefetcher) PrefetchOnStartup(ctx context.Context) {
 
 	// Get all configured backends
 	backends := p.manager.GetAllBackends()
+	if len(backends) == 0 {
+		log.Printf("No backends configured for prefetch, skipping warm-up")
+		p.startupDone = true
+		return
+	}
+
+	log.Printf("Warming up cache for %d backends", len(backends))
 	var wg sync.WaitGroup
 
-	// Common index file patterns to fetch for each repository
-	indexPaths := []string{
-		"dists/%s/InRelease",
-		"dists/%s/Release",
-		"dists/%s/Release.gpg",
-	}
+	// Track successes
+	successCount := 0
+	var successMutex sync.Mutex
 
-	// For each enabled architecture, add architecture-specific indexes
-	archPaths := []string{
-		"dists/%s/main/binary-%s/Packages",
-		"dists/%s/main/binary-%s/Packages.gz",
-		"dists/%s/main/binary-%s/Packages.xz",
-		"dists/%s/universe/binary-%s/Packages",
-		"dists/%s/universe/binary-%s/Packages.gz",
-		"dists/%s/universe/binary-%s/Packages.xz",
-		"dists/%s/restricted/binary-%s/Packages",
-		"dists/%s/multiverse/binary-%s/Packages",
-	}
-
-	// Common releases to try (this can be made configurable)
+	// Common distributions to try
 	releases := []string{"stable", "testing", "unstable", "jammy", "focal", "noble", "oracular"}
 
+	// Only try a subset of releases for each backend to avoid excessive 404s
 	for _, backend := range backends {
 		wg.Add(1)
 		go func(b *Backend) {
 			defer wg.Done()
+			localSuccesses := 0
 
+			log.Printf("Warming up cache for backend: %s (%s)", b.Name, b.BaseURL)
+
+			// Common index file patterns to fetch for each repository
+			indexPaths := []string{
+				"dists/%s/InRelease",
+				"dists/%s/Release",
+				"dists/%s/Release.gpg",
+			}
+
+			// Try each release for this backend, but stop after finding a valid one
+			foundValidRelease := false
 			for _, release := range releases {
-				// Fetch distribution-independent indexes
-				for _, pathPattern := range indexPaths {
-					path := fmt.Sprintf(pathPattern, release)
-					fullPath := fmt.Sprintf("/%s/%s", b.Name, path)
-
-					// Don't log 404s during startup
-					oldVerbose := p.verboseLogging
-					p.verboseLogging = false
-					_, _ = p.manager.Fetch(fullPath) // Ignore errors
-					p.verboseLogging = oldVerbose
+				if foundValidRelease {
+					break
 				}
 
-				// Fetch architecture-specific indexes
-				for arch := range p.architectures {
-					for _, pathPattern := range archPaths {
-						path := fmt.Sprintf(pathPattern, release, arch)
+				// Try to fetch the Release file first to see if this distribution exists
+				testPath := fmt.Sprintf("/%s/dists/%s/Release", b.Name, release)
+				data, err := p.manager.Fetch(testPath)
+				if err == nil && len(data) > 0 {
+					// Found a valid release for this backend
+					foundValidRelease = true
+					log.Printf("Found valid release '%s' for backend '%s'", release, b.Name)
+
+					// Now fetch all index files for this release
+					for _, pathPattern := range indexPaths {
+						path := fmt.Sprintf(pathPattern, release)
 						fullPath := fmt.Sprintf("/%s/%s", b.Name, path)
-						_, _ = p.manager.Fetch(fullPath) // Ignore errors
+
+						_, err := p.manager.Fetch(fullPath)
+						if err == nil {
+							localSuccesses++
+						}
+					}
+
+					// Fetch architecture-specific files for valid architectures
+					for arch := range p.architectures {
+						archPaths := []string{
+							fmt.Sprintf("dists/%s/main/binary-%s/Packages", release, arch),
+							fmt.Sprintf("dists/%s/universe/binary-%s/Packages", release, arch),
+							fmt.Sprintf("dists/%s/restricted/binary-%s/Packages", release, arch),
+							fmt.Sprintf("dists/%s/multiverse/binary-%s/Packages", release, arch),
+						}
+
+						for _, archPath := range archPaths {
+							fullPath := fmt.Sprintf("/%s/%s", b.Name, archPath)
+							_, err := p.manager.Fetch(fullPath)
+							if err == nil {
+								localSuccesses++
+							}
+						}
 					}
 				}
 			}
+
+			// Update global success count
+			successMutex.Lock()
+			successCount += localSuccesses
+			successMutex.Unlock()
+
+			log.Printf("Finished warming up backend '%s' with %d successful fetches",
+				b.Name, localSuccesses)
 		}(backend)
 	}
 
@@ -408,9 +442,10 @@ func (p *Prefetcher) PrefetchOnStartup(ctx context.Context) {
 	select {
 	case <-done:
 		elapsed := time.Since(startTime)
-		log.Printf("Initial cache warm-up completed in %v", elapsed)
-	case <-time.After(60 * time.Second):
-		log.Printf("Initial cache warm-up timed out after 60s")
+		log.Printf("Initial cache warm-up completed in %v with %d successful fetches",
+			elapsed, successCount)
+	case <-time.After(30 * time.Second): // Reduced timeout for faster startup
+		log.Printf("Initial cache warm-up timed out after 30s")
 	case <-ctx.Done():
 		log.Printf("Initial cache warm-up cancelled")
 	}

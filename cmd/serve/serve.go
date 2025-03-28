@@ -1,13 +1,15 @@
 package serve
 
 import (
-	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/jdfalk/apt-cacher-go/internal/config"
 	"github.com/jdfalk/apt-cacher-go/internal/server"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 var (
@@ -22,9 +24,42 @@ func NewCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start the apt-cacher-go server",
-		Long:  `Start the apt-cacher-go server to proxy and cache package requests`,
+		Long:  `Start the apt-cacher-go server using the provided configuration.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runServe()
+			// Get the config file path from viper or use default
+			configPath := viper.GetString("config")
+			if configPath == "" {
+				configPath = "/etc/apt-cacher-go/config.yaml"
+			}
+
+			log.Printf("Using config file: %s", configPath)
+			cfg, err := config.LoadConfigFileWithDebug(configPath)
+			if err != nil {
+				return err
+			}
+
+			// Create server
+			srv, err := server.New(cfg, nil, nil, nil)
+			if err != nil {
+				return err
+			}
+
+			// Start the server
+			if err := srv.Start(); err != nil {
+				return err
+			}
+
+			// Block the main thread to keep the program running
+			// Set up signal handling for graceful shutdown
+			sigCh := make(chan os.Signal, 1)
+			signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+
+			// Block until we receive a termination signal
+			sig := <-sigCh
+			log.Printf("Received signal %v, shutting down gracefully...", sig)
+
+			// Shutdown the server
+			return srv.Shutdown()
 		},
 	}
 
@@ -35,74 +70,4 @@ func NewCommand() *cobra.Command {
 	cmd.Flags().StringVar(&logLevel, "log-level", "info", "Logging level (debug, info, warn, error)")
 
 	return cmd
-}
-
-func runServe() error {
-	// Load configuration from file first
-	var cfg *config.Config
-	var err error
-
-	if cfgFile != "" {
-		// Load and validate with debug output to help troubleshoot
-		log.Printf("Loading config from: %s", cfgFile)
-		cfg, err = config.LoadConfigFileWithDebug(cfgFile)
-	} else {
-		// Try default locations
-		defaultLocations := []string{
-			"/etc/apt-cacher-go/config.yaml",
-			"./config.yaml",
-		}
-
-		for _, loc := range defaultLocations {
-			if _, err := os.Stat(loc); err == nil {
-				log.Printf("Found config at default location: %s", loc)
-				cfg, err = config.LoadConfigFileWithDebug(loc)
-				if err == nil {
-					break
-				}
-			}
-		}
-
-		// If still no config, use empty config
-		if cfg == nil {
-			cfg = &config.Config{
-				CacheDir:      "/var/cache/apt-cacher-go",
-				ListenAddress: "0.0.0.0",
-				Port:          3142,
-			}
-			log.Printf("No config file found, using defaults")
-		}
-	}
-
-	if err != nil {
-		return fmt.Errorf("config loading error: %w", err)
-	}
-
-	// Override with command-line flags if provided
-	if cacheDir != "" {
-		log.Printf("Overriding cache_dir from flag: %s", cacheDir)
-		cfg.CacheDir = cacheDir
-	}
-
-	if listenAddr != "" {
-		log.Printf("Overriding listen_address from flag: %s", listenAddr)
-		cfg.ListenAddress = listenAddr
-	}
-
-	// Log final configuration being used
-	log.Printf("FINAL CONFIG - Using cache directory: %s", cfg.CacheDir)
-	log.Printf("FINAL CONFIG - Using listen address: %s:%d", cfg.ListenAddress, cfg.Port)
-
-	return runServer(cfg)
-}
-
-func runServer(cfg *config.Config) error {
-	// Create the server using the simplified constructor that creates all components
-	s, err := server.New(cfg, nil, nil, nil)
-	if err != nil {
-		return fmt.Errorf("error creating server: %w", err)
-	}
-
-	// Start the server
-	return s.Start()
 }
