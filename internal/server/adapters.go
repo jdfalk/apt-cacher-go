@@ -72,9 +72,9 @@ func (m *MetricsAdapter) GetTopPackages(limit int) []metrics.PackageStats {
 
 	for i, pkg := range topPackages {
 		result[i] = metrics.PackageStats{
-			Name:      pkg.Name,
-			Requests:  pkg.Requests,
-			BytesSent: pkg.BytesSent,
+			PackageName: pkg.URL,   // Use the correct field name
+			Count:       pkg.Count, // Use the correct field name
+			BytesServed: pkg.Size,  // Use the correct field name
 		}
 	}
 
