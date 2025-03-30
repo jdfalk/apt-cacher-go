@@ -201,6 +201,25 @@ func (m *PathMapper) AddRewriteRule(pattern, repo, rewriteRule string, priority 
 	return nil
 }
 
+// AddRule provides a unified interface to add any type of mapping rule
+func (m *PathMapper) AddRule(ruleType string, pattern, repo string, priority int) error {
+	switch ruleType {
+	case "prefix":
+		m.AddPrefixRule(pattern, repo, priority)
+		return nil
+	case "exact":
+		m.AddExactRule(pattern, repo, priority)
+		return nil
+	case "regex":
+		return m.AddRegexRule(pattern, repo, priority)
+	case "rewrite":
+		// For rewrite rules without an explicit rewrite pattern, use the pattern itself
+		return m.AddRewriteRule(pattern, repo, pattern, priority)
+	default:
+		return fmt.Errorf("unknown rule type: %s", ruleType)
+	}
+}
+
 // sortRules sorts rules by priority (highest first)
 func (m *PathMapper) sortRules() {
 	sort.Slice(m.rules, func(i, j int) bool {
