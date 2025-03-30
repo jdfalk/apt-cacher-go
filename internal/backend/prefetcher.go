@@ -137,12 +137,6 @@ func (p *Prefetcher) ProcessIndexFile(repo string, path string, data []byte) {
 		return
 	}
 
-	// Check if we already have too many operations
-	if atomic.LoadInt32(&p.inProgress) >= int32(p.maxActive) {
-		log.Printf("Skipping prefetch, too many active operations: %d", p.maxActive)
-		return
-	}
-
 	// Parse URLs from the index but don't store the full data
 	urls := extractURLsFromIndexEfficient(data)
 	if len(urls) == 0 {
@@ -165,18 +159,25 @@ func (p *Prefetcher) ProcessIndexFile(repo string, path string, data []byte) {
 			len(filteredURLs), path, totalBatches)
 	}
 
-	// Process each batch in a separate goroutine
+	// Process each batch
 	for i := 0; i < len(filteredURLs); i += batchSize {
 		// Use min function instead of if statement
 		end := min(i+batchSize, len(filteredURLs))
 		batch := filteredURLs[i:end]
 
-		// Don't launch more goroutines if we're already at max
-		if atomic.LoadInt32(&p.inProgress) >= int32(p.maxActive) {
-			continue
+		// Queue the URLs instead of skipping when at capacity
+		for _, url := range batch {
+			select {
+			case p.prefetchQueue <- prefetchRequest{repo: repo, url: url}:
+				// Successfully queued
+				if p.verboseLogging {
+					log.Printf("Queued prefetch for %s", url)
+				}
+			default:
+				// Queue is full, log without blocking
+				log.Printf("Prefetch queue is full, dropping request for %s", url)
+			}
 		}
-
-		go p.processBatch(repo, batch)
 	}
 }
 
