@@ -42,12 +42,12 @@
             "id": 2,
             "legend": {
                 "avg": false,
-                "current": false,
+                "current": true,
                 "max": false,
                 "min": false,
                 "show": true,
                 "total": false,
-                "values": false
+                "values": true
             },
             "lines": true,
             "linewidth": 1,
@@ -76,7 +76,7 @@
             "timeFrom": null,
             "timeRegions": [],
             "timeShift": null,
-            "title": "Request Rate",
+            "title": "Request Rate by Status",
             "tooltip": {
                 "shared": true,
                 "sort": 0,
@@ -139,13 +139,13 @@
             "hiddenSeries": false,
             "id": 4,
             "legend": {
-                "avg": false,
-                "current": false,
+                "avg": true,
+                "current": true,
                 "max": false,
                 "min": false,
                 "show": true,
                 "total": false,
-                "values": false
+                "values": true
             },
             "lines": true,
             "linewidth": 1,
@@ -241,12 +241,12 @@
             "id": 6,
             "legend": {
                 "avg": false,
-                "current": false,
-                "max": false,
+                "current": true,
+                "max": true,
                 "min": false,
                 "show": true,
                 "total": false,
-                "values": false
+                "values": true
             },
             "lines": true,
             "linewidth": 1,
@@ -348,12 +348,12 @@
             "id": 8,
             "legend": {
                 "avg": false,
-                "current": false,
-                "max": false,
+                "current": true,
+                "max": true,
                 "min": false,
                 "show": true,
                 "total": false,
-                "values": false
+                "values": true
             },
             "lines": true,
             "linewidth": 1,
@@ -376,6 +376,13 @@
                     "interval": "",
                     "legendFormat": "Cache Size",
                     "refId": "A"
+                },
+                {
+                    "expr": "apt_cacher_cache_max_size_bytes",
+                    "hide": false,
+                    "interval": "",
+                    "legendFormat": "Max Size",
+                    "refId": "B"
                 }
             ],
             "thresholds": [],
@@ -411,6 +418,408 @@
                     "logBase": 1,
                     "max": null,
                     "min": null,
+                    "show": false
+                }
+            ],
+            "yaxis": {
+                "align": false,
+                "alignLevel": null
+            }
+        },
+        {
+            "aliasColors": {},
+            "bars": false,
+            "dashLength": 10,
+            "dashes": false,
+            "datasource": "Prometheus",
+            "description": "Memory usage of the apt-cacher-go process",
+            "fieldConfig": {
+                "defaults": {
+                    "custom": {}
+                },
+                "overrides": []
+            },
+            "fill": 1,
+            "fillGradient": 0,
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 16
+            },
+            "hiddenSeries": false,
+            "id": 10,
+            "legend": {
+                "avg": false,
+                "current": true,
+                "max": true,
+                "min": false,
+                "show": true,
+                "total": false,
+                "values": true
+            },
+            "lines": true,
+            "linewidth": 1,
+            "nullPointMode": "null",
+            "options": {
+                "alertThreshold": true
+            },
+            "percentage": false,
+            "pluginVersion": "7.2.0",
+            "pointradius": 2,
+            "points": false,
+            "renderer": "flot",
+            "seriesOverrides": [],
+            "spaceLength": 10,
+            "stack": false,
+            "steppedLine": false,
+            "targets": [
+                {
+                    "expr": "process_resident_memory_bytes{job=\"apt-cacher-go\"}",
+                    "interval": "",
+                    "legendFormat": "Memory Usage",
+                    "refId": "A"
+                },
+                {
+                    "expr": "apt_cacher_memory_high_watermark_bytes",
+                    "interval": "",
+                    "legendFormat": "High Watermark",
+                    "refId": "B"
+                },
+                {
+                    "expr": "apt_cacher_memory_critical_watermark_bytes",
+                    "interval": "",
+                    "legendFormat": "Critical Watermark",
+                    "refId": "C"
+                }
+            ],
+            "thresholds": [],
+            "timeFrom": null,
+            "timeRegions": [],
+            "timeShift": null,
+            "title": "Memory Usage",
+            "tooltip": {
+                "shared": true,
+                "sort": 0,
+                "value_type": "individual"
+            },
+            "type": "graph",
+            "xaxis": {
+                "buckets": null,
+                "mode": "time",
+                "name": null,
+                "show": true,
+                "values": []
+            },
+            "yaxes": [
+                {
+                    "format": "bytes",
+                    "label": "Memory",
+                    "logBase": 1,
+                    "max": null,
+                    "min": null,
+                    "show": true
+                },
+                {
+                    "format": "short",
+                    "label": null,
+                    "logBase": 1,
+                    "max": null,
+                    "min": null,
+                    "show": true
+                }
+            ],
+            "yaxis": {
+                "align": false,
+                "alignLevel": null
+            }
+        },
+        {
+            "aliasColors": {},
+            "bars": false,
+            "dashLength": 10,
+            "dashes": false,
+            "datasource": "Prometheus",
+            "description": "Active concurrent download operations",
+            "fieldConfig": {
+                "defaults": {
+                    "custom": {}
+                },
+                "overrides": []
+            },
+            "fill": 1,
+            "fillGradient": 0,
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 16
+            },
+            "hiddenSeries": false,
+            "id": 12,
+            "legend": {
+                "avg": false,
+                "current": true,
+                "max": true,
+                "min": false,
+                "show": true,
+                "total": false,
+                "values": true
+            },
+            "lines": true,
+            "linewidth": 1,
+            "nullPointMode": "null",
+            "options": {
+                "alertThreshold": true
+            },
+            "percentage": false,
+            "pluginVersion": "7.2.0",
+            "pointradius": 2,
+            "points": false,
+            "renderer": "flot",
+            "seriesOverrides": [],
+            "spaceLength": 10,
+            "stack": false,
+            "steppedLine": false,
+            "targets": [
+                {
+                    "expr": "apt_cacher_active_downloads",
+                    "interval": "",
+                    "legendFormat": "Active Downloads",
+                    "refId": "A"
+                },
+                {
+                    "expr": "apt_cacher_max_concurrent_downloads",
+                    "interval": "",
+                    "legendFormat": "Max Concurrent Downloads",
+                    "refId": "B"
+                }
+            ],
+            "thresholds": [],
+            "timeFrom": null,
+            "timeRegions": [],
+            "timeShift": null,
+            "title": "Active Downloads",
+            "tooltip": {
+                "shared": true,
+                "sort": 0,
+                "value_type": "individual"
+            },
+            "type": "graph",
+            "xaxis": {
+                "buckets": null,
+                "mode": "time",
+                "name": null,
+                "show": true,
+                "values": []
+            },
+            "yaxes": [
+                {
+                    "format": "short",
+                    "label": "Count",
+                    "logBase": 1,
+                    "max": null,
+                    "min": "0",
+                    "show": true
+                },
+                {
+                    "format": "short",
+                    "label": null,
+                    "logBase": 1,
+                    "max": null,
+                    "min": null,
+                    "show": true
+                }
+            ],
+            "yaxis": {
+                "align": false,
+                "alignLevel": null
+            }
+        },
+        {
+            "aliasColors": {},
+            "bars": false,
+            "dashLength": 10,
+            "dashes": false,
+            "datasource": "Prometheus",
+            "description": "Cache hit rate percentage",
+            "fieldConfig": {
+                "defaults": {
+                    "custom": {}
+                },
+                "overrides": []
+            },
+            "fill": 1,
+            "fillGradient": 0,
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 24
+            },
+            "hiddenSeries": false,
+            "id": 14,
+            "legend": {
+                "avg": true,
+                "current": true,
+                "max": false,
+                "min": false,
+                "show": true,
+                "total": false,
+                "values": true
+            },
+            "lines": true,
+            "linewidth": 1,
+            "nullPointMode": "null",
+            "options": {
+                "alertThreshold": true
+            },
+            "percentage": false,
+            "pluginVersion": "7.2.0",
+            "pointradius": 2,
+            "points": false,
+            "renderer": "flot",
+            "seriesOverrides": [],
+            "spaceLength": 10,
+            "stack": false,
+            "steppedLine": false,
+            "targets": [
+                {
+                    "expr": "100 * rate(apt_cacher_cache_hits[5m]) / (rate(apt_cacher_cache_hits[5m]) + rate(apt_cacher_cache_misses[5m]))",
+                    "interval": "",
+                    "legendFormat": "Hit Rate",
+                    "refId": "A"
+                }
+            ],
+            "thresholds": [],
+            "timeFrom": null,
+            "timeRegions": [],
+            "timeShift": null,
+            "title": "Cache Hit Rate (%)",
+            "tooltip": {
+                "shared": true,
+                "sort": 0,
+                "value_type": "individual"
+            },
+            "type": "graph",
+            "xaxis": {
+                "buckets": null,
+                "mode": "time",
+                "name": null,
+                "show": true,
+                "values": []
+            },
+            "yaxes": [
+                {
+                    "format": "percent",
+                    "label": "Hit Rate",
+                    "logBase": 1,
+                    "max": "100",
+                    "min": "0",
+                    "show": true
+                },
+                {
+                    "format": "short",
+                    "label": null,
+                    "logBase": 1,
+                    "max": null,
+                    "min": null,
+                    "show": true
+                }
+            ],
+            "yaxis": {
+                "align": false,
+                "alignLevel": null
+            }
+        },
+        {
+            "aliasColors": {},
+            "bars": false,
+            "dashLength": 10,
+            "dashes": false,
+            "datasource": "Prometheus",
+            "description": "Traffic throughput statistics",
+            "fieldConfig": {
+                "defaults": {
+                    "custom": {}
+                },
+                "overrides": []
+            },
+            "fill": 1,
+            "fillGradient": 0,
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 24
+            },
+            "hiddenSeries": false,
+            "id": 16,
+            "legend": {
+                "avg": false,
+                "current": true,
+                "max": true,
+                "min": false,
+                "show": true,
+                "total": false,
+                "values": true
+            },
+            "lines": true,
+            "linewidth": 1,
+            "nullPointMode": "null",
+            "options": {
+                "alertThreshold": true
+            },
+            "percentage": false,
+            "pluginVersion": "7.2.0",
+            "pointradius": 2,
+            "points": false,
+            "renderer": "flot",
+            "seriesOverrides": [],
+            "spaceLength": 10,
+            "stack": false,
+            "steppedLine": false,
+            "targets": [
+                {
+                    "expr": "rate(apt_cacher_bytes_transferred_total[5m])",
+                    "interval": "",
+                    "legendFormat": "Throughput",
+                    "refId": "A"
+                }
+            ],
+            "thresholds": [],
+            "timeFrom": null,
+            "timeRegions": [],
+            "timeShift": null,
+            "title": "Data Throughput",
+            "tooltip": {
+                "shared": true,
+                "sort": 0,
+                "value_type": "individual"
+            },
+            "type": "graph",
+            "xaxis": {
+                "buckets": null,
+                "mode": "time",
+                "name": null,
+                "show": true,
+                "values": []
+            },
+            "yaxes": [
+                {
+                    "format": "Bps",
+                    "label": "Throughput",
+                    "logBase": 1,
+                    "max": null,
+                    "min": null,
+                    "show": true
+                },
+                {
+                    "format": "short",
+                    "label": null,
+                    "logBase": 1,
+                    "max": null,
+                    "min": null,
                     "show": true
                 }
             ],
@@ -420,9 +829,14 @@
             }
         }
     ],
+    "refresh": "10s",
     "schemaVersion": 26,
     "style": "dark",
-    "tags": [],
+    "tags": [
+        "apt-cacher",
+        "proxy",
+        "caching"
+    ],
     "templating": {
         "list": []
     },
@@ -447,5 +861,5 @@
     "timezone": "",
     "title": "apt-cacher-go Dashboard",
     "uid": "apt-cacher-go",
-    "version": 1
+    "version": 2
 }
