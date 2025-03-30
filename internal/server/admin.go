@@ -44,10 +44,11 @@ type TopClient struct {
 
 // CacheEntry represents an entry in the cache (for search results)
 type CacheEntry struct {
-	Path       string
-	Size       int64
-	LastAccess time.Time
-	Expires    time.Time
+	Path       string    `json:"path"`
+	Size       int64     `json:"size"`
+	LastAccess time.Time `json:"lastAccess"`
+	Expires    time.Time `json:"expires,omitempty"`
+	Package    string    `json:"package,omitempty"` // Added this field
 }
 
 // adminDashboard serves the admin dashboard
