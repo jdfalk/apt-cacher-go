@@ -206,7 +206,8 @@ func TestForceCleanup(t *testing.T) {
 	assert.Equal(t, 0, count)
 }
 
-func TestShutdown(t *testing.T) {
+// Change this function name from TestShutdown to TestPrefetcherShutdown
+func TestPrefetcherShutdown(t *testing.T) {
 	mockManager := new(MockManager)
 	mockManager.On("GetAllBackends").Return([]*Backend{}, nil)
 
@@ -326,7 +327,7 @@ func TestPrefetchStartupCancellation(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		prefetcher.PrefetchOnStartup(ctx)
+		prefetcher.RunStartupPrefetch(ctx)
 	}()
 
 	// Wait a bit for prefetch to start
