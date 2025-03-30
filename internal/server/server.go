@@ -46,7 +46,6 @@ type Server struct {
 
 // New creates a new Server instance with the provided options
 func New(cfg *config.Config, opts ServerOptions) (*Server, error) {
-	var err error
 	var cache Cache
 	var pathMapper PathMapper
 	var packageMapper PackageMapper
@@ -70,9 +69,16 @@ func New(cfg *config.Config, opts ServerOptions) (*Server, error) {
 		mapperInstance := mapper.New()
 		// Add default repositories
 		for _, rule := range cfg.MappingRules {
-			log.Printf("Adding mapping rule: %s %s -> %s (priority: %d)",
-				rule.Type, rule.Pattern, rule.Repository, rule.Priority)
-			mapperInstance.AddRule(rule.Type, rule.Pattern, rule.Repository, rule.Priority)
+			switch rule.Type {
+			case "prefix":
+				pathMapper.AddPrefixRule(rule.Pattern, rule.Repository, rule.Priority)
+			case "regex":
+				_ = pathMapper.AddRegexRule(rule.Pattern, rule.Repository, rule.Priority)
+			case "exact":
+				pathMapper.AddExactRule(rule.Pattern, rule.Repository, rule.Priority)
+			case "rewrite":
+				_ = pathMapper.AddRewriteRule(rule.Pattern, rule.Repository, rule.RewriteRule, rule.Priority)
+			}
 		}
 		pathMapper = &MapperAdapter{PathMapper: mapperInstance}
 	}
@@ -104,11 +110,27 @@ func New(cfg *config.Config, opts ServerOptions) (*Server, error) {
 	// Create memory monitor or use provided
 	memoryMonitor = opts.MemoryMonitor
 	if memoryMonitor == nil {
+		highWatermark := 1024     // Default 1GB in MB
+		criticalWatermark := 2048 // Default 2GB in MB
+
+		// Try to read from config metadata if available
+		if val, ok := cfg.GetMetadata("memory_management.high_watermark_mb"); ok {
+			if v, ok := val.(int); ok {
+				highWatermark = v
+			}
+		}
+		if val, ok := cfg.GetMetadata("memory_management.critical_watermark_mb"); ok {
+			if v, ok := val.(int); ok {
+				criticalWatermark = v
+			}
+		}
+
+		// Create memory monitor with these values
 		monitor := NewMemoryMonitor(
-			cfg.MemoryHighWatermark,
-			cfg.MemoryCriticalWatermark,
+			highWatermark,
+			criticalWatermark,
 			func(pressure int) {
-				log.Printf("Memory pressure: %d", pressure)
+				s.handleHighMemoryPressure(float64(pressure))
 			})
 		memoryMonitor = &MemoryMonitorAdapter{MemoryMonitor: monitor}
 	}
@@ -416,7 +438,7 @@ func (s *Server) wrapWithMetrics(next http.HandlerFunc) http.HandlerFunc {
 			status = "error"
 		} else if rw.statusCode == 307 || rw.statusCode == 302 {
 			status = "redirect"
-		} else if rw.statusCode == 200 && strings.Contains(r.Header.Get("X-Cache"), "MISS") {
+		} else if rw.statusCode == 200 && strings.contains(r.Header.Get("X-Cache"), "MISS") {
 			status = "miss"
 		}
 
@@ -520,7 +542,7 @@ func (s *Server) handlePackageRequest(w http.ResponseWriter, r *http.Request) {
 		packageName = s.packageMapper.GetPackageNameForHash(requestPath)
 		// Send package name to metrics if available
 		if packageName != "" {
-			s.metrics.RecordPackageAccess(packageName)
+			s.metrics.RecordRequest(requestPath, time.Since(start), clientIP, packageName)
 		}
 	}
 	s.mutex.Unlock()
