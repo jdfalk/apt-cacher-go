@@ -1,10 +1,13 @@
 package serve
 
 import (
+	"context"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/jdfalk/apt-cacher-go/internal/config"
 	"github.com/jdfalk/apt-cacher-go/internal/server"
@@ -39,7 +42,7 @@ func NewCommand() *cobra.Command {
 			}
 
 			// Create server
-			srv, err := server.New(cfg, nil, nil, nil)
+			srv, err := server.New(cfg, server.ServerOptions{})
 			if err != nil {
 				return err
 			}
@@ -70,4 +73,39 @@ func NewCommand() *cobra.Command {
 	cmd.Flags().StringVar(&logLevel, "log-level", "info", "Logging level (debug, info, warn, error)")
 
 	return cmd
+}
+
+// runServe function update
+func runServe(cfg *config.Config, version string) error {
+	// Create the server with ServerOptions
+	srv, err := server.New(cfg, server.ServerOptions{
+		Version: version,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create server: %w", err)
+	}
+
+	// Start the server
+	if err := srv.Start(); err != nil {
+		return fmt.Errorf("failed to start server: %w", err)
+	}
+
+	// Block the main thread to keep the program running
+	// Set up signal handling for graceful shutdown
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+
+	// Block until we receive a termination signal
+	sig := <-sigCh
+	log.Printf("Received signal %v, shutting down gracefully...", sig)
+
+	// Shutdown the server
+	_, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(); err != nil {
+		return fmt.Errorf("failed to shutdown server: %w", err)
+	}
+
+	return nil
 }
