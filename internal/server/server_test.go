@@ -16,6 +16,7 @@ import (
 	"github.com/jdfalk/apt-cacher-go/internal/config"
 	"github.com/jdfalk/apt-cacher-go/internal/mapper"
 	"github.com/jdfalk/apt-cacher-go/internal/metrics"
+	"github.com/jdfalk/apt-cacher-go/internal/mocks"
 	"github.com/jdfalk/apt-cacher-go/internal/parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -347,8 +348,9 @@ type CacheInterface interface {
 	Exists(path string) bool
 	GetStats() cache.CacheStats
 	GetLastModified(path string) time.Time
-	// Add the Search method to match the Cache interface
 	Search(query string) ([]string, error)
+	SearchByPackageName(name string) ([]cache.CacheSearchResult, error)
+	UpdatePackageIndex(packages []parser.PackageInfo) error
 }
 
 type MapperInterface interface {
@@ -358,10 +360,10 @@ type MapperInterface interface {
 // TestServerWithMocks tests the server using mocks
 func TestServerWithMocks(t *testing.T) {
 	// Create mocks
-	mockBackend := new(MockBackendManager)
-	mockCache := new(MockCache)
-	mockMapper := new(MockPathMapper)
-	mockPkgMapper := new(MockPackageMapper)
+	mockBackend := new(mocks.MockBackendManager)
+	mockCache := new(mocks.MockCache)
+	mockMapper := new(mocks.MockPathMapper)
+	mockPkgMapper := new(mocks.MockPackageMapper)
 
 	// Setup minimal config
 	cfg := &config.Config{
@@ -405,14 +407,14 @@ type TestCacheInterface interface {
 // Fix server tests by ensuring interfaces are implemented correctly
 func TestServerWithExtDeps(t *testing.T) {
 	// Create mocks using stretchr/testify/mock
-	mockBackend := new(MockBackendManager)
-	mockCache := new(MockCacheProvider)
-	mockMapper := new(MockPathMapper)
-	mockPkgMapper := new(MockPackageMapper)
+	mockBackend := new(mocks.MockBackendManager)
+	mockCache := new(mocks.MockCache)
+	mockMapper := new(mocks.MockPathMapper)
+	mockPkgMapper := new(mocks.MockPackageMapper)
 
 	// Configure basic expectations
 	mockCache.On("GetStats").Return(cache.CacheStats{})
-	mockBackend.On("KeyManager").Return(&MockKeyManager{})
+	mockBackend.On("KeyManager").Return(&mocks.MockKeyManager{})
 	mockMapper.On("MapPath", mock.Anything).Return(mapper.MappingResult{
 		Repository: "test-repo",
 		RemotePath: "path/to/file",
