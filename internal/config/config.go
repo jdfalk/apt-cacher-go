@@ -102,6 +102,9 @@ type KeyManagementConfig struct {
 
 	// Directory to store keys
 	KeyDir string `yaml:"key_dir"`
+
+	// Length of generated GPG keys in bits (2048, 4096, etc.)
+	KeyLength int `yaml:"key_length"`
 }
 
 // PrefetchConfig holds settings for prefetching
