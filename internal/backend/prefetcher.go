@@ -237,25 +237,11 @@ func (p *Prefetcher) processBatch(repo string, urls []string) {
 
 			// Handle errors more efficiently
 			if err != nil {
-				if p.metrics != nil && p.metrics.PrefetchFailures != nil {
-					reason := "error"
-					if strings.Contains(err.Error(), "404") {
-						reason = "404"
-					}
-					p.metrics.PrefetchFailures.WithLabelValues(repo, reason).Inc()
-				}
-
 				// Record the failure to track consecutive failures
 				failCount := p.recordFailure(u)
 
 				// Log with different detail levels based on failure count
-				if failCount > 3 {
-					// After multiple failures, reduce logging frequency
-					if failCount%10 == 0 {
-						log.Printf("URL %s has failed %d times", u, failCount)
-					}
-				} else if !strings.Contains(err.Error(), "404") || p.verboseLogging {
-					// Only log non-404 errors to reduce noise
+				if p.verboseLogging || failCount == 1 {
 					log.Printf("Failed to prefetch %s: %v", u, err)
 				}
 				return
@@ -417,10 +403,9 @@ func (p *Prefetcher) SetVerboseLogging(verbose bool) {
 	p.verboseLogging = verbose
 }
 
-// Fix the PrefetchOnStartup method
-
-// PrefetchOnStartup warms the cache by fetching common index files
-func (p *Prefetcher) PrefetchOnStartup(ctx context.Context) {
+// RunStartupPrefetch warms the cache by fetching common index files
+// Renamed from PrefetchOnStartup to match the method call in backend.go
+func (p *Prefetcher) RunStartupPrefetch(ctx context.Context) {
 	if p.startupDone {
 		return
 	}
@@ -570,10 +555,10 @@ func extractURLsFromIndexEfficient(data []byte) []string {
 	for _, line := range strings.Split(string(data), "\n") {
 		// Look for Filename: entries in Packages files
 		if strings.HasPrefix(line, "Filename: ") {
-			path := strings.TrimPrefix(line, "Filename: ")
-			path = strings.TrimSpace(path)
-			if path != "" {
-				urls = append(urls, path)
+			url := strings.TrimPrefix(line, "Filename: ")
+			url = strings.TrimSpace(url)
+			if url != "" {
+				urls = append(urls, url)
 			}
 		}
 	}
