@@ -1,6 +1,8 @@
 package backend
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -153,11 +155,8 @@ func (p *Prefetcher) ProcessIndexFile(repo string, path string, data []byte) {
 
 	// Process each batch in a separate goroutine
 	for i := 0; i < len(filteredURLs); i += batchSize {
-		end := i + batchSize
-		if end > len(filteredURLs) {
-			end = len(filteredURLs)
-		}
-
+		// Use min function instead of if statement
+		end := min(i+batchSize, len(filteredURLs))
 		batch := filteredURLs[i:end]
 
 		// Don't launch more goroutines if we're already at max
@@ -551,8 +550,10 @@ func (p *Prefetcher) FilterURLsByArchitecture(urls []string) []string {
 func extractURLsFromIndexEfficient(data []byte) []string {
 	urls := make([]string, 0, 100) // Pre-allocate for efficiency
 
-	// Convert to string but process line by line to avoid large memory allocation
-	for _, line := range strings.Split(string(data), "\n") {
+	// Use bufio.Scanner for more efficient line processing
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for scanner.Scan() {
+		line := scanner.Text()
 		// Look for Filename: entries in Packages files
 		if strings.HasPrefix(line, "Filename: ") {
 			url := strings.TrimPrefix(line, "Filename: ")
@@ -590,6 +591,7 @@ func (p *Prefetcher) recordFailure(url string) int {
 }
 
 // getFailureCount returns the number of failures for a URL
+// Currently unused, but kept for potential future metrics reporting
 func (p *Prefetcher) getFailureCount(url string) int {
 	p.failureMutex.RLock()
 	defer p.failureMutex.RUnlock()
@@ -606,6 +608,8 @@ func (p *Prefetcher) resetFailureCount(url string) {
 }
 
 // Helper method to fetch with context awareness
+// fetchWithContext provides a context-aware version of Fetch
+// Kept for future implementation of more context-aware prefetching
 func (p *Prefetcher) fetchWithContext(ctx context.Context, path string) ([]byte, error) {
 	// Create a channel to capture the result
 	type fetchResult struct {
