@@ -42,7 +42,7 @@ func (m *MockBackendManager) PrefetchOnStartup(ctx context.Context) {
 	m.Called(ctx)
 }
 
-func (m *MockBackendManager) KeyManager() interface{} {
+func (m *MockBackendManager) KeyManager() any {
 	args := m.Called()
 	return args.Get(0)
 }
