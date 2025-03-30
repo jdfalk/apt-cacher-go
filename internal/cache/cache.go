@@ -514,17 +514,26 @@ func (c *Cache) loadState() error {
 
 // Close safely shuts down the cache
 func (c *Cache) Close() error {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
+	// Add timeout to avoid deadlock
+	done := make(chan struct{})
 
-	// Save state to disk
-	err := c.saveState()
-	if err != nil {
-		log.Printf("Failed to save cache state: %v", err)
+	go func() {
+		// Try to save state with timeout protection
+		if err := c.saveState(); err != nil {
+			log.Printf("Error saving cache state: %v", err)
+		}
+		close(done)
+	}()
+
+	// Wait with timeout
+	select {
+	case <-done:
+		return nil
+	case <-time.After(2 * time.Second):
+		// Log warning but continue
+		log.Println("Cache state save timed out, continuing shutdown")
+		return nil
 	}
-
-	// Perform any other cleanup needed
-	return nil
 }
 
 // getDirSize calculates the total size of all files in a directory recursively
