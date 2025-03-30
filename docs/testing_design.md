@@ -108,3 +108,76 @@ The CI pipeline includes:
 3. Performance benchmarks compared to baseline
 4. Code coverage reporting
 5. Static analysis with Go linters
+
+## Test Helpers and Utilities
+
+### TestCache Implementation
+
+The `TestCache` in `backend_test.go` demonstrates how to implement test doubles:
+
+```go
+type TestCache struct {
+    *cache.Cache
+    PackageMapper *mapper.PackageMapper
+    packageIdx    *packageIndex
+}
+```
+
+This pattern allows tests to:
+
+- Wrap real components
+- Override specific behaviors
+- Track method calls
+- Simulate various conditions
+
+### Mock HTTP Servers
+
+For testing HTTP interactions, the project uses:
+
+```go
+func setupMockServer() *httptest.Server {
+    return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        // Simulate various backend responses
+    }))
+}
+```
+
+### Temporary Test Directories
+
+Tests use the Go testing package's `t.TempDir()` to create isolated test environments:
+
+```go
+func TestCacheStorage(t *testing.T) {
+    tempDir := t.TempDir()
+    cache, err := cache.New(tempDir, 1024*1024*10)
+    // Test operations...
+}
+```
+
+## Race Condition Testing
+
+The project employs specific strategies to detect and prevent race conditions:
+
+1. Tests are run with Go's race detector: `go test -race ./...`
+2. Concurrency-focused tests intentionally create high contention
+3. Stress tests run operations in parallel to expose synchronization issues
+4. Timeouts prevent deadlocks during tests
+
+## Test Data Management
+
+The project includes:
+
+1. Sample Debian/Ubuntu package files
+2. Repository index file templates
+3. Utilities to generate test data programmatically
+4. Compressed sample repositories for realistic testing
+
+## Testing in CI/CD Pipeline
+
+The continuous integration setup includes:
+
+1. GitHub Actions workflow for automated testing
+2. Matrix testing across multiple Go versions
+3. Caching of dependencies for faster builds
+4. Performance comparison with previous baseline
+5. Docker-based integration test environments
