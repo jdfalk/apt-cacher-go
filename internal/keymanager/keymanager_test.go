@@ -6,25 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/jdfalk/apt-cacher-go/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestKeyGeneration(t *testing.T) {
-	// Implement key generation test
-}
-
-func TestKeyStorage(t *testing.T) {
-	// Implement key storage test
-}
-
-func TestKeyRetrieval(t *testing.T) {
-	// Implement key retrieval test
-}
-
+// TestNewKeyManager tests the creation of a new key manager
 func TestNewKeyManager(t *testing.T) {
 	// Create temp directory
 	tempDir, err := os.MkdirTemp("", "keymanager-test")
@@ -47,7 +35,6 @@ func TestNewKeyManager(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, km)
 	assert.Equal(t, keyDir, km.config.KeyDir)
-	assert.Empty(t, km.keyCache)
 
 	// Test creation with disabled config
 	disabledCfg := &config.KeyManagementConfig{
@@ -59,6 +46,7 @@ func TestNewKeyManager(t *testing.T) {
 	assert.Nil(t, km2)
 }
 
+// TestDetectKeyError tests the key error detection functionality
 func TestDetectKeyError(t *testing.T) {
 	// Create temp directory
 	tempDir, err := os.MkdirTemp("", "keymanager-test")
@@ -113,6 +101,7 @@ func TestDetectKeyError(t *testing.T) {
 	}
 }
 
+// TestKeyPathOperations tests key path handling and existence checks
 func TestKeyPathOperations(t *testing.T) {
 	// Create temp directory
 	tempDir, err := os.MkdirTemp("", "keymanager-test")
@@ -146,22 +135,15 @@ func TestKeyPathOperations(t *testing.T) {
 	keyFile := filepath.Join(keyDir, keyID+".gpg")
 	require.NoError(t, os.WriteFile(keyFile, []byte("mock key data"), 0644))
 
-	// Initialize key cache with the existing key
-	files, err := os.ReadDir(keyDir)
+	// Recreate the key manager to detect existing files
+	km, err = New(cfg, tempDir)
 	require.NoError(t, err)
-
-	for _, file := range files {
-		if !file.IsDir() && filepath.Ext(file.Name()) == ".gpg" {
-			fileID := filepath.Base(file.Name())
-			fileID = fileID[:len(fileID)-4] // Remove .gpg extension
-			km.keyCache[fileID] = time.Now()
-		}
-	}
 
 	// Test HasKey again (should be true now)
 	assert.True(t, km.HasKey(keyID))
 }
 
+// TestFetchKey tests retrieving a key from a keyserver
 func TestFetchKey(t *testing.T) {
 	// Create a mock keyserver
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -172,7 +154,10 @@ func TestFetchKey(t *testing.T) {
 			if query.Get("op") == "get" && query.Get("search") == "0x12345678" {
 				// Return a mock key
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("-----BEGIN PGP PUBLIC KEY BLOCK-----\nMock Key Data\n-----END PGP PUBLIC KEY BLOCK-----"))
+				_, err := w.Write([]byte("-----BEGIN PGP PUBLIC KEY BLOCK-----\nMock Key Data\n-----END PGP PUBLIC KEY BLOCK-----"))
+				if err != nil {
+					t.Fatalf("failed to write response: %v", err)
+				}
 				return
 			}
 		}
@@ -222,6 +207,7 @@ func TestFetchKey(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// TestKeyManagerWithExistingKeys tests loading existing keys at initialization
 func TestKeyManagerWithExistingKeys(t *testing.T) {
 	// Create temp directory
 	tempDir, err := os.MkdirTemp("", "keymanager-test")
