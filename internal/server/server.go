@@ -717,7 +717,7 @@ func (s *Server) Port() int {
 
 // TLSPort returns the HTTPS port if TLS is enabled
 func (s *Server) TLSPort() int {
-	if s.httpsServer != nil {
+	if s.cfg.TLSEnabled {
 		return s.cfg.TLSPort
 	}
 	return 0
