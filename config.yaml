@@ -1,110 +1,73 @@
-# apt-cacher-go advanced configuration
+# apt-cacher-go configuration
 
 # Server configuration
-# PRODUCTION: For production, bind to specific interfaces instead of 0.0.0.0
-listen_address: "0.0.0.0" # Listen on all IPv4 interfaces
-# PRODUCTION: Default apt port is 3142, consider using a non-standard port for obfuscation
+listen_address: "0.0.0.0"
 port: 3142
-# PRODUCTION: Admin interface should be restricted to localhost or internal network
-admin_port: 3143 # Port for admin interface
-
-# HTTPS handling
-# PRODUCTION: HTTPS remapping should be enabled in production environments
-https_remap:
-  enabled: true # Enable transparent HTTPS-to-HTTP remapping
-  # PRODUCTION: Always verify packages in production to prevent MITM attacks
-  verify_packages: true # Still verify package signatures
-
-# TLS configuration
-# PRODUCTION: Enable TLS for all traffic in production environments
+admin_port: 3143
 tls_enabled: false
-tls_port: 3144 # Changed to avoid conflict with admin port
-# PRODUCTION: Use proper certificates from a trusted CA in production
+tls_port: 3144
 tls_cert: "/etc/apt-cacher-go/cert.pem"
 tls_key: "/etc/apt-cacher-go/key.pem"
-# PRODUCTION: In production, use a path that's rotated/managed by logrotate
 log_file: "/var/log/apt-cacher-go.log"
-# PRODUCTION: Use "error" or "warn" in production to reduce log size
 log_level: "info"
 
 # Cache configuration
-# PRODUCTION: Use a dedicated disk/partition with fast I/O for cache
-cache_dir: "/mnt/bigdata/apt-cache-go"
-# PRODUCTION: 100G-1TB recommended for large deployments
-cache_size: "40G"
-# PRODUCTION: 1h is good for most cases; increase for very busy servers
+cache_dir: "/var/cache/apt-cacher-go"
+cache_size: "60G"
+cache_ttls:
+  index: "1h"
+  package: "30d"
 cleanup_freq: "1h"
 
-# Cache TTLs
-# PRODUCTION: Adjust based on repository update frequency
-cache_ttls:
-  # PRODUCTION: 15m-1h recommended; shorter values ensure fresher metadata
-  index: "1h" # Release files expire quickly
-  # PRODUCTION: 7d-30d recommended; longer values reduce bandwidth
-  package: "30d" # Packages can be cached longer
-
-# Security
-# PRODUCTION: Restrict to specific subnets in production!
+# Security settings
 allowed_ips:
   - "0.0.0.0/0" # Allow all IPv4
   - "::/0" # Allow all IPv6
-# PRODUCTION: 20-50 for small deployments, 100+ for larger ones
 rate_limit: 100 # Requests per minute per IP
-# PRODUCTION: Enable auth for public-facing instances
 auth_enabled: false
-# PRODUCTION: Enable admin auth in ALL production environments
 admin_auth: false
-# PRODUCTION: Use strong, unique password in production
-admin_user: "admin"
-admin_password: "password"
+username: "admin"
+password: "password"
 
-# Metrics
-# PRODUCTION: Enable for monitoring system health
+# Metrics configuration
 metrics_enabled: true
 
 # Download queue
-# PRODUCTION: 10-30 for 100Mbps links, 30-50 for gigabit
 max_concurrent_downloads: 10
 
-# Prefetching configuration
-# PRODUCTION: Enable prefetching to improve client performance
-prefetch:
-  enabled: true
-  # PRODUCTION: 5-10 for most environments, up to 20 for high-bandwidth servers
-  max_concurrent: 20 # Reduced from previous value
-  batch_size: 10
-  # PRODUCTION: Enable for better performance after restarts
-  warmup_on_startup: true # New option to warm cache on startup
-  # PRODUCTION: Include only architectures actually used in your environment
-  architectures:
-    - amd64 # x86_64 architecture (most common)
-    - i386 # 32-bit x86 architecture (legacy systems)
-  verbose_logging: false # Don't log 404 errors
+# Prefetching legacy options
+prefetch_enabled: true
+max_prefetches: 20
+architectures:
+  - amd64
+  - i386
 
-# Key management
-# PRODUCTION: Enable to automatically retrieve repository keys
+# Default repositories
+disable_default_repos: false
+
+# Key management configuration
 key_management:
   enabled: true
-  # PRODUCTION: Enable to fix missing key errors automatically
   auto_retrieve: true
-  # PRODUCTION: 30d-365d recommended
   key_ttl: "365d"
-  # PRODUCTION: Include multiple keyservers for redundancy
   keyservers:
     - "hkp://keyserver.ubuntu.com:80"
     - "hkp://keys.gnupg.net:80"
     - "hkp://pool.sks-keyservers.net:80"
-  # PRODUCTION: Use a relative path inside cache_dir to avoid permission issues
-  key_dir: "keys" # Will be created as /mnt/bigdata/apt-cache-go/keys
+  key_dir: "keys"
+  key_length: 4096
 
-# Repository configuration
-# PRODUCTION: Set to true if you're manually configuring all repositories
-disable_default_repos: false
+# New prefetch configuration structure
+prefetch:
+  enabled: true
+  max_concurrent: 20
+  architectures:
+    - amd64
+    - i386
+  warmup_on_startup: true
 
 # Repository backends
-# PRODUCTION: Add all repositories used by your clients
 backends:
-  # Third-party repositories with explicit HTTP URLs
   - name: "docker"
     url: "http://download.docker.com/linux/ubuntu"
     priority: 60
@@ -121,50 +84,47 @@ backends:
     url: "http://hwraid.le-vert.net/ubuntu"
     priority: 40
 
-# Advanced mapping rules
-# PRODUCTION: Define explicit mappings for special repositories
+# Mapping rules
 mapping_rules:
-  # Docker rules
   - type: "prefix"
     pattern: "docker/linux/ubuntu"
     repository: "docker"
     priority: 60
-
-  # Grafana rules
   - type: "prefix"
     pattern: "grafana/oss/deb"
     repository: "grafana"
     priority: 55
-
-  # Plex rules
   - type: "prefix"
     pattern: "plex/repo/deb"
     repository: "plex"
     priority: 50
-
-  # PostgreSQL rules
   - type: "prefix"
     pattern: "postgresql/pub/repos/apt"
     repository: "postgresql"
     priority: 45
-
-  # HWRaid rules
   - type: "prefix"
     pattern: "hwraid/ubuntu"
     repository: "hwraid"
     priority: 40
 
-# Memory and performance tuning
-memory_management:
-  max_cache_size: 8G # Maximum memory to use for caching
-  persistent_storage: true # Use disk-based storage for hash mappings
-  high_watermark_mb: 6144 # 1GB soft limit
-  critical_watermark_mb: 8096 # 2GB hard limit
-  monitor_interval: "5s"
-
-# Increase cache size while reducing memory footprint
-cache:
-  directory: "/mnt/bigdata/apt-cache-go"
-  max_size: "40G"
-  cleanup_interval: "1h"
-  flush_interval: "5m" # Periodically flush data to disk
+# Additional metadata
+metadata:
+  memory_management:
+    high_watermark_mb: 6144
+    critical_watermark_mb: 8096
+    monitor_interval: "5s"
+  cache:
+    flush_interval: "5m"
+  # Add development release handling configuration
+  dev_release:
+    enabled: true
+    codenames:
+      - "oracular"
+      - "noble"
+      - "devel"
+      - "experimental"
+    skip_missing_components:
+      - "-security"
+      - "-updates"
+      - "-backports"
+    suppress_errors: true
