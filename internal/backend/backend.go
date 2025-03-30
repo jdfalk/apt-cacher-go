@@ -21,13 +21,36 @@ import (
 	"github.com/jdfalk/apt-cacher-go/internal/queue"
 )
 
+// CacheProvider defines the interface for cache operations
+type CacheProvider interface {
+	Get(path string) ([]byte, error)
+	Put(path string, data []byte) error
+	PutWithExpiration(path string, data []byte, ttl time.Duration) error
+	IsFresh(path string) bool
+	Exists(path string) bool
+	UpdatePackageIndex(packages []parser.PackageInfo) error
+	SearchByPackageName(name string) ([]cachelib.CacheSearchResult, error)
+	GetStats() cachelib.CacheStats
+}
+
+// PathMapperProvider defines the interface for path mapping operations
+type PathMapperProvider interface {
+	MapPath(path string) (mapper.MappingResult, error)
+}
+
+// PackageMapperProvider defines the interface for package mapping operations
+type PackageMapperProvider interface {
+	AddHashMapping(hash, packageName string)
+	GetPackageNameForHash(path string) string
+}
+
 // Manager handles connections to upstream repositories
 type Manager struct {
 	backends       []*Backend
-	cache          *cachelib.Cache
+	cache          CacheProvider
 	client         *http.Client
-	mapper         *mapper.PathMapper
-	packageMapper  *mapper.PackageMapper // Add this line
+	mapper         PathMapperProvider
+	packageMapper  PackageMapperProvider // Add this line
 	downloadCtx    context.Context
 	downloadCancel context.CancelFunc // Added field to store the cancel function
 	downloadQ      *queue.Queue
@@ -44,8 +67,8 @@ type Backend struct {
 	client   *http.Client // Added client field
 }
 
-// Fix the New method to properly initialize the queue
-func New(cfg *config.Config, cache *cachelib.Cache, mapper *mapper.PathMapper, packageMapper *mapper.PackageMapper) (*Manager, error) {
+// Modify the New function to accept interfaces instead of concrete types
+func New(cfg *config.Config, cache CacheProvider, mapper PathMapperProvider, packageMapper PackageMapperProvider) (*Manager, error) {
 	// Create HTTP client for backends
 	client := &http.Client{
 		Timeout: 30 * time.Second,
@@ -116,7 +139,9 @@ func (m *Manager) Shutdown() {
 	m.downloadQ.Stop()
 
 	// Add this line to properly shutdown the prefetcher
-	m.prefetcher.Shutdown()
+	if m.prefetcher != nil {
+		m.prefetcher.Shutdown()
+	}
 }
 
 // Fix the Fetch method to handle the queue Submit properly
@@ -223,14 +248,15 @@ func (m *Manager) Fetch(requestPath string) ([]byte, error) {
 	// Process Release files to find additional index files
 	if mappingResult.IsIndex && (strings.HasSuffix(mappingResult.RemotePath, "Release") ||
 		strings.HasSuffix(mappingResult.RemotePath, "InRelease")) {
-		go m.processReleaseFile(mappingResult.Repository, mappingResult.RemotePath, result)
+		go m.ProcessReleaseFile(mappingResult.Repository, mappingResult.RemotePath, result)
 	}
 
 	return result, nil
 }
 
-// processReleaseFile analyzes a Release file to find additional index files
-func (m *Manager) processReleaseFile(repo string, path string, data []byte) {
+// ProcessReleaseFile analyzes a Release file to find additional index files
+// Changed from private 'processReleaseFile' to public 'ProcessReleaseFile' for testing
+func (m *Manager) ProcessReleaseFile(repo string, path string, data []byte) {
 	// Parse the Release file
 	filenames, err := parser.ParseIndexFilenames(data)
 	if err != nil {
@@ -446,7 +472,9 @@ func (m *Manager) ProcessPackagesFile(repo string, path string, data []byte) {
 	}
 
 	// If you want to also trigger prefetching
-	m.prefetcher.ProcessIndexFile(repo, path, data)
+	if m.prefetcher != nil {
+		m.prefetcher.ProcessIndexFile(repo, path, data)
+	}
 }
 
 // ForceCleanupPrefetcher forces cleanup of stale prefetch operations
@@ -473,7 +501,7 @@ func (m *Manager) GetAllBackends() []*Backend {
 // PrefetchOnStartup warms the cache by prefetching common files
 func (m *Manager) PrefetchOnStartup(ctx context.Context) {
 	if m.prefetcher != nil {
-		m.prefetcher.PrefetchOnStartup(ctx)
+		m.prefetcher.RunStartupPrefetch(ctx)
 	} else {
 		log.Printf("Prefetcher not initialized, skipping startup prefetch")
 	}
