@@ -56,9 +56,9 @@ func (m *MockCache) Exists(path string) bool {
 	return args.Bool(0)
 }
 
-func (m *MockCache) GetStats() (CacheStats, error) {
+func (m *MockCache) GetStats() CacheStats {
 	args := m.Called()
-	return args.Get(0).(CacheStats), args.Error(1)
+	return args.Get(0).(CacheStats)
 }
 
 func (m *MockCache) Clear() error {
@@ -158,11 +158,12 @@ func TestCacheConcurrency(t *testing.T) {
 	done := make(chan bool, numOperations*2)
 
 	// Add concurrent operations
-	for i := 0; i < numOperations; i++ {
+	for i := range numOperations {
 		go func(idx int) {
 			key := filepath.Join("test", "concurrent", fmt.Sprintf("file-%d.data", idx))
-			data := []byte(fmt.Sprintf("Data for file %d", idx))
-			_ = realCache.Put(key, data) // Ignore the error, just using _ to acknowledge it
+			var buf []byte
+			buf = fmt.Appendf(buf, "Data for file %d", idx)
+			_ = realCache.Put(key, buf) // Ignore the error, just using _ to acknowledge it
 			done <- true
 		}(i)
 
@@ -174,7 +175,7 @@ func TestCacheConcurrency(t *testing.T) {
 	}
 
 	// Wait for all operations to complete
-	for i := 0; i < numOperations*2; i++ {
+	for range numOperations * 2 {
 		<-done
 	}
 }
@@ -200,7 +201,6 @@ func TestCacheCleanup(t *testing.T) {
 	require.NoError(t, cache.Put("test/file2.deb", testData))
 
 	// Verify that only one file is still in cache - due to LRU eviction
-	stats, err := cache.GetStats()
-	require.NoError(t, err)
+	stats := cache.GetStats()
 	assert.LessOrEqual(t, stats.CurrentSize, int64(1024))
 }
