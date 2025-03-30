@@ -4,7 +4,36 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
+
+// MockMapper implements mock functionality for testing
+type MockMapper struct {
+	mock.Mock
+}
+
+func (m *MockMapper) MapPath(path string) (MappingResult, error) {
+	args := m.Called(path)
+	return args.Get(0).(MappingResult), args.Error(1)
+}
+
+func (m *MockMapper) AddRule(rule MappingRule) {
+	m.Called(rule)
+}
+
+// MockPackageMapper implements mock functionality for testing
+type MockPackageMapper struct {
+	mock.Mock
+}
+
+func (m *MockPackageMapper) AddHashMapping(hash, packageName string) {
+	m.Called(hash, packageName)
+}
+
+func (m *MockPackageMapper) GetPackageNameForHash(path string) string {
+	args := m.Called(path)
+	return args.String(0)
+}
 
 func TestPathMapping(t *testing.T) {
 	m := New()
@@ -143,4 +172,28 @@ func TestPackageMapper(t *testing.T) {
 
 	result2 := pm.GetPackageNameForHash("/path/by-hash/SHA256/another-hash")
 	assert.Equal(t, "python3.9", result2)
+}
+
+func TestMockPackageMapper(t *testing.T) {
+	// Create mock
+	mockPM := new(MockPackageMapper)
+
+	// Set expectations
+	mockPM.On("AddHashMapping", "test-hash", "test-package").Return()
+	mockPM.On("GetPackageNameForHash", "/path/by-hash/SHA256/test-hash").Return("test-package")
+	mockPM.On("GetPackageNameForHash", "/path/by-hash/SHA256/unknown-hash").Return("")
+
+	// Use mock
+	mockPM.AddHashMapping("test-hash", "test-package")
+
+	// Test retrieving known hash
+	result := mockPM.GetPackageNameForHash("/path/by-hash/SHA256/test-hash")
+	assert.Equal(t, "test-package", result)
+
+	// Test retrieving unknown hash
+	result = mockPM.GetPackageNameForHash("/path/by-hash/SHA256/unknown-hash")
+	assert.Equal(t, "", result)
+
+	// Verify all expectations were met
+	mockPM.AssertExpectations(t)
 }
