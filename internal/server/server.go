@@ -740,11 +740,11 @@ func addDefaultRepositories(cfg *config.Config, m *mapper.PathMapper) {
 	}{
 		{"ubuntu-archive", "http://archive.ubuntu.com/ubuntu", "archive.ubuntu.com/ubuntu", 100},
 		{"ubuntu-security", "http://security.ubuntu.com/ubuntu", "security.ubuntu.com/ubuntu", 95},
-		{"debian", "http://deb.debian.org/debian", "deb.debian.org/debian", 90},
-		{"debian-security", "http://security.debian.org/debian-security", "security.debian.org/debian-security", 85},
-		{"debian-backports", "http://deb.debian.org/debian-backports", "deb.debian.org/debian-backports", 80},
-		{"ubuntu-ports", "http://ports.ubuntu.com/ubuntu-ports", "ports.ubuntu.com/ubuntu-ports", 75},
-		{"kali", "http://http.kali.org/kali", "http.kali.org/kali", 70},
+		{"debian", "http://packages.debian.org/debian", "packages.debian.org/debian", 90},
+        {"debian-security", "http://security.debian.org/debian-security", "security.debian.org/debian-security", 85},
+        {"debian-backports", "http://backports.debian.org/debian-backports", "backports.debian.org/debian-backports", 80},
+        {"ubuntu-ports", "http://ports.ubuntu.com/ubuntu-ports", "ports.ubuntu.com/ubuntu-ports", 75},
+        {"kali", "http://http.kali.org/kali", "http.kali.org/kali", 70},
 	}
 
 	// Track which standard repos exist
