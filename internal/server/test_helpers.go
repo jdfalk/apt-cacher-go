@@ -67,6 +67,8 @@ func NewTestServerFixture(t *testing.T) *TestServerFixture {
 	mockBackend.On("ForceCleanupPrefetcher").Return(0).Maybe()
 	mockBackend.On("PrefetchOnStartup", mock.Anything).Return(nil).Maybe()
 	mockCache.On("GetStats").Return(cache.CacheStats{}).Maybe()
+	// ADD THIS: Mock expectation for Close() which is called during server shutdown
+	mockCache.On("Close").Return(nil).Maybe()
 	mockMapper.On("MapPath", mock.Anything).Return(mapper.MappingResult{
 		Repository: "test-repo",
 		RemotePath: "path/to/file",
@@ -75,10 +77,16 @@ func NewTestServerFixture(t *testing.T) *TestServerFixture {
 	}, nil).Maybe()
 	mockMetrics.On("GetStatistics").Return(metrics.Statistics{}).Maybe()
 	mockMemMonitor.On("GetMemoryUsage").Return(map[string]any{
-		"allocated_mb": float64(100),
-		"system_mb":    float64(200),
-		"pressure":     0,
+		"allocated_mb":    float64(100),
+		"system_mb":       float64(200),
+		"pressure":        0,
+		"memory_pressure": 0.75, // Add this field to match test expectations
 	}).Maybe()
+
+	// ADD THIS: Mock expectation for Start() method which is being called in New()
+	mockMemMonitor.On("Start").Return().Maybe()
+	// ADD THIS: Mock expectation for Stop() which may be called during cleanup
+	mockMemMonitor.On("Stop").Return().Maybe()
 
 	// Create server with mocks
 	server, err := New(cfg, ServerOptions{
