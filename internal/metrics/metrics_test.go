@@ -170,7 +170,8 @@ func TestConcurrentAccess(t *testing.T) {
 
 	// Test concurrent RecordRequest
 	wg.Add(iterations)
-	for i := 0; i < iterations; i++ {
+	// CHANGE 1: Modernize for loop using range over ints at line 172
+	for i := range iterations {
 		go func(i int) {
 			defer wg.Done()
 			path := fmt.Sprintf("/path%d", i)
@@ -182,7 +183,8 @@ func TestConcurrentAccess(t *testing.T) {
 
 	// Test concurrent RecordCacheHit and RecordCacheMiss
 	wg.Add(iterations * 2)
-	for i := 0; i < iterations; i++ {
+	// CHANGE 2: Modernize for loop using range over ints at line 184
+	for i := range iterations {
 		go func(i int) {
 			defer wg.Done()
 			collector.RecordCacheHit(fmt.Sprintf("/path%d", i), int64(i*10))
