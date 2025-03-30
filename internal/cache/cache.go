@@ -36,15 +36,18 @@ type CacheSearchResult struct {
 
 // Cache represents a file cache for apt packages
 type Cache struct {
-	rootDir     string
-	maxSize     int64
-	currentSize int64
-	items       map[string]*cacheEntry
-	mutex       sync.RWMutex // Added for thread safety
-	lruCache    *LRUCache    // Changed from lru.LRUCache to LRUCache
-	hitCount    int64
-	missCount   int64
-	statsMutex  sync.RWMutex // Separate mutex for statistics
+	rootDir        string
+	maxSize        int64
+	currentSize    int64
+	items          map[string]*cacheEntry
+	mutex          sync.RWMutex // Added for thread safety
+	lruCache       *LRUCache    // Changed from lru.LRUCache to LRUCache
+	hitCount       int64
+	missCount      int64
+	statsMutex     sync.RWMutex // Separate mutex for statistics
+	packageIndex   map[string]parser.PackageInfo
+	packageMutex   sync.RWMutex
+	verboseLogging bool
 }
 
 // cacheEntry represents a single file in the cache
@@ -70,11 +73,12 @@ func New(rootDir string, maxSize int64) (*Cache, error) {
 	}
 
 	cache := &Cache{
-		rootDir:     rootDir,
-		maxSize:     maxSize,
-		currentSize: 0,
-		items:       make(map[string]*cacheEntry),
-		lruCache:    NewLRUCache(10000), // Track up to 10k items
+		rootDir:      rootDir,
+		maxSize:      maxSize,
+		currentSize:  0,
+		items:        make(map[string]*cacheEntry),
+		lruCache:     NewLRUCache(10000), // Track up to 10k items
+		packageIndex: make(map[string]parser.PackageInfo),
 	}
 
 	// Load cache state if available
@@ -774,8 +778,32 @@ func (c *Cache) SearchByPackageName(name string) ([]CacheSearchResult, error) {
 
 // UpdatePackageIndex adds package information to the index
 func (c *Cache) UpdatePackageIndex(packages []parser.PackageInfo) error {
-	// In a real implementation, this would store package metadata
-	// For simplicity, we'll just log the operation
-	log.Printf("Updating package index with %d packages", len(packages))
+	c.packageMutex.Lock()
+	defer c.packageMutex.Unlock()
+
+	existingCount := len(c.packageIndex)
+	addedCount := 0
+
+	// Add packages to index
+	for _, pkg := range packages {
+		// Skip if already exists with same version
+		if existing, ok := c.packageIndex[pkg.Package]; ok && existing.Version == pkg.Version {
+			continue
+		}
+
+		c.packageIndex[pkg.Package] = pkg
+		addedCount++
+	}
+
+	// Improved logging that uses the existingCount variable
+	if addedCount > 0 {
+		log.Printf("Added %d new packages to index (had %d, now %d total packages)",
+			addedCount, existingCount, len(c.packageIndex))
+	} else {
+		// Log always, not just when verbose, but keep it clear this is an informational message
+		log.Printf("Package index update: no new packages added (index contains %d packages)",
+			existingCount)
+	}
+
 	return nil
 }
