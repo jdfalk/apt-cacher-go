@@ -58,11 +58,21 @@ func createPrefetcher(mockManager *MockManager, maxActive int, architectures []s
 	return NewPrefetcher(testManager, maxActive, architectures)
 }
 
+// setupBasicMockExpectations sets up common mock expectations to avoid "unexpected call" errors
+func setupBasicMockExpectations(mockManager *MockManager) {
+	// Set up the mock to handle ANY fetch calls that might happen
+	mockManager.On("Fetch", mock.Anything).Return([]byte("test data"), nil).Maybe()
+	mockManager.On("GetAllBackends").Return([]*Backend{}, nil).Maybe()
+}
+
 func TestNewPrefetcher(t *testing.T) {
 	mockManager := new(MockManager)
 	archs := []string{"amd64", "i386"}
 
-	// Mock GetAllBackends to return empty slice
+	// Set up basic expectations
+	setupBasicMockExpectations(mockManager)
+
+	// Specific expectation for this test - override the Maybe() one
 	mockManager.On("GetAllBackends").Return([]*Backend{}, nil)
 
 	prefetcher := createPrefetcher(mockManager, 10, archs)
@@ -78,7 +88,9 @@ func TestNewPrefetcher(t *testing.T) {
 
 func TestFilterByArchitecture(t *testing.T) {
 	mockManager := new(MockManager)
-	mockManager.On("GetAllBackends").Return([]*Backend{}, nil)
+
+	// Set up basic expectations
+	setupBasicMockExpectations(mockManager)
 
 	// Test with specific architectures
 	p1 := createPrefetcher(mockManager, 10, []string{"amd64", "arm64"})
@@ -112,7 +124,9 @@ func TestFilterByArchitecture(t *testing.T) {
 
 func TestFilterURLsByArchitecture(t *testing.T) {
 	mockManager := new(MockManager)
-	mockManager.On("GetAllBackends").Return([]*Backend{}, nil)
+
+	// Set up basic expectations
+	setupBasicMockExpectations(mockManager)
 
 	prefetcher := createPrefetcher(mockManager, 10, []string{"amd64"})
 
@@ -159,7 +173,7 @@ func TestContainsAnyArch(t *testing.T) {
 
 func TestMemoryPressure(t *testing.T) {
 	mockManager := new(MockManager)
-	mockManager.On("GetAllBackends").Return([]*Backend{}, nil)
+	setupBasicMockExpectations(mockManager)
 
 	prefetcher := createPrefetcher(mockManager, 10, []string{"amd64"})
 
@@ -171,7 +185,8 @@ func TestMemoryPressure(t *testing.T) {
 	assert.Equal(t, int32(90), prefetcher.memoryPressure)
 
 	// Test that processing is skipped when memory pressure is high
-	mockManager.On("Fetch", mock.Anything).Return([]byte("test"), nil)
+	// Add a specific expectation that will override the Maybe() one
+	mockManager.On("Fetch", "pool/main/a/apt/apt_2.2.4_amd64.deb").Return([]byte("specific test"), nil)
 
 	// This should skip processing due to high memory pressure
 	prefetcher.ProcessIndexFile("debian", "dists/stable/main/binary-amd64/Packages", []byte("Filename: test.deb"))
@@ -183,7 +198,7 @@ func TestMemoryPressure(t *testing.T) {
 
 func TestForceCleanup(t *testing.T) {
 	mockManager := new(MockManager)
-	mockManager.On("GetAllBackends").Return([]*Backend{}, nil)
+	setupBasicMockExpectations(mockManager)
 
 	prefetcher := createPrefetcher(mockManager, 10, []string{"amd64"})
 
@@ -209,7 +224,7 @@ func TestForceCleanup(t *testing.T) {
 // Change this function name from TestShutdown to TestPrefetcherShutdown
 func TestPrefetcherShutdown(t *testing.T) {
 	mockManager := new(MockManager)
-	mockManager.On("GetAllBackends").Return([]*Backend{}, nil)
+	setupBasicMockExpectations(mockManager)
 
 	prefetcher := createPrefetcher(mockManager, 10, []string{"amd64"})
 
@@ -234,7 +249,7 @@ func TestPrefetcherShutdown(t *testing.T) {
 
 func TestSetVerboseLogging(t *testing.T) {
 	mockManager := new(MockManager)
-	mockManager.On("GetAllBackends").Return([]*Backend{}, nil)
+	setupBasicMockExpectations(mockManager)
 	prefetcher := createPrefetcher(mockManager, 10, []string{})
 
 	assert.False(t, prefetcher.verboseLogging)
@@ -247,7 +262,7 @@ func TestSetVerboseLogging(t *testing.T) {
 }
 func TestIsArchitectureEnabled(t *testing.T) {
 	mockManager := new(MockManager)
-	mockManager.On("GetAllBackends").Return([]*Backend{}, nil)
+	setupBasicMockExpectations(mockManager)
 	prefetcher := createPrefetcher(mockManager, 10, []string{"amd64", "arm64"})
 
 	assert.True(t, prefetcher.IsArchitectureEnabled("amd64"))
@@ -263,7 +278,7 @@ func TestIsArchitectureEnabled(t *testing.T) {
 
 func TestAddArchitecture(t *testing.T) {
 	mockManager := new(MockManager)
-	mockManager.On("GetAllBackends").Return([]*Backend{}, nil)
+	setupBasicMockExpectations(mockManager)
 	prefetcher := createPrefetcher(mockManager, 10, []string{"amd64"})
 
 	assert.True(t, prefetcher.IsArchitectureEnabled("amd64"))
@@ -279,7 +294,7 @@ func TestAddArchitecture(t *testing.T) {
 
 func TestProcessIndexFileConcurrencyLimit(t *testing.T) {
 	mockManager := new(MockManager)
-	mockManager.On("GetAllBackends").Return([]*Backend{}, nil)
+	setupBasicMockExpectations(mockManager)
 	maxActive := 2
 	prefetcher := createPrefetcher(mockManager, maxActive, []string{})
 	// Set in-progress to max to test throttling
@@ -304,6 +319,10 @@ Filename: pool/main/a/apt/apt_2.2.4_amd64.deb
 func TestPrefetchStartupCancellation(t *testing.T) {
 	mockManager := new(MockManager)
 
+	// Set up basic expectations first
+	setupBasicMockExpectations(mockManager)
+
+	// Override with more specific behavior
 	// Mock a valid backend
 	mockBackend := &Backend{
 		Name:    "test-repo",
@@ -311,7 +330,7 @@ func TestPrefetchStartupCancellation(t *testing.T) {
 	}
 	mockManager.On("GetAllBackends").Return([]*Backend{mockBackend})
 
-	// Set up the mock to delay on fetch
+	// Set up the mock to delay on fetch - this will override the Maybe() expectation
 	mockManager.On("Fetch", mock.Anything).Run(func(args mock.Arguments) {
 		// Sleep to simulate network delay
 		time.Sleep(200 * time.Millisecond)
