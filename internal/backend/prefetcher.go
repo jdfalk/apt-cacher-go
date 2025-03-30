@@ -37,6 +37,7 @@ type Prefetcher struct {
 	memoryPressure int32                    // Atomic value for memory pressure (0-100)
 	metrics        *metrics.PrefetchMetrics // Track metrics
 	prefetchQueue  chan prefetchRequest     // Queue for pending operations
+	batchSize      int                      // Batch size for prefetch operations
 }
 
 type prefetchRequest struct {
@@ -70,6 +71,7 @@ func NewPrefetcher(manager PrefetcherManager, maxActive int, architectures []str
 		metrics:        metrics.RegisterPrefetchMetrics(),
 		memoryPressure: 0,
 		prefetchQueue:  make(chan prefetchRequest, 1000), // Buffer size of 1000
+		batchSize:      5,                                // Default batch size
 	}
 
 	// Start worker goroutines to process the queue
@@ -81,6 +83,13 @@ func NewPrefetcher(manager PrefetcherManager, maxActive int, architectures []str
 	go p.cleanupRoutine()
 
 	return p
+}
+
+// SetBatchSize allows configuring the batch size
+func (p *Prefetcher) SetBatchSize(size int) {
+	if size > 0 {
+		p.batchSize = size
+	}
 }
 
 // cleanupRoutine periodically checks for stale operations
@@ -150,34 +159,35 @@ func (p *Prefetcher) ProcessIndexFile(repo string, path string, data []byte) {
 		return
 	}
 
-	// Process in smaller batches to reduce memory pressure
-	batchSize := 10
-	totalBatches := (len(filteredURLs) + batchSize - 1) / batchSize
+	// Use the instance batchSize field instead of trying to access a non-existent config
+	batchSize := p.batchSize
 
-	if p.verboseLogging {
-		log.Printf("Processing %d URLs from %s in %d batches",
-			len(filteredURLs), path, totalBatches)
-	}
-
-	// Process each batch
+	// Add backoff between batches
 	for i := 0; i < len(filteredURLs); i += batchSize {
-		// Use min function instead of if statement
 		end := min(i+batchSize, len(filteredURLs))
 		batch := filteredURLs[i:end]
 
-		// Queue the URLs instead of skipping when at capacity
+		// Queue with retry limits and backoff
 		for _, url := range batch {
-			select {
-			case p.prefetchQueue <- prefetchRequest{repo: repo, url: url}:
-				// Successfully queued
-				if p.verboseLogging {
-					log.Printf("Queued prefetch for %s", url)
+			if _, alreadyActive := p.active.Load(url); !alreadyActive {
+				if atomic.LoadInt32(&p.inProgress) < int32(p.maxActive) {
+					// Add to queue with backoff if it fails
+					p.prefetchQueue <- prefetchRequest{repo: repo, url: url}
+				} else {
+					// Don't drop, instead queue with a timeout
+					select {
+					case p.prefetchQueue <- prefetchRequest{repo: repo, url: url}:
+						// Successfully queued
+					case <-time.After(100 * time.Millisecond):
+						// Queue is blocked, log and continue
+						log.Printf("Prefetch queue is full, skipping %s", url)
+					}
 				}
-			default:
-				// Queue is full, log without blocking
-				log.Printf("Prefetch queue is full, dropping request for %s", url)
 			}
 		}
+
+		// Add a small delay between batches to avoid overwhelming connections
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
