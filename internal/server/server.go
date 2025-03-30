@@ -96,6 +96,8 @@ func New(cfg *config.Config, opts ServerOptions) (*Server, error) {
 				}
 			}
 		}
+		// ADD THIS: Call addDefaultRepositories here
+		addDefaultRepositories(cfg, mapperInstance)
 		pathMapper = &MapperAdapter{PathMapper: mapperInstance}
 	}
 

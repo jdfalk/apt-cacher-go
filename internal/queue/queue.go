@@ -51,6 +51,8 @@ func (q *Queue) Start(handler func(any) error) {
 					// Execute task
 					if err := handler(task.Data); err != nil {
 						// Log error but continue processing
+						// Using a blank identifier to acknowledge we're intentionally ignoring the error
+						_ = err
 					}
 				case <-q.stopCh:
 					return
