@@ -731,39 +731,90 @@ func addDefaultRepositories(cfg *config.Config, m *mapper.PathMapper) {
 		return
 	}
 
-	// Add standard Debian/Ubuntu repositories if none defined
-	if len(cfg.Backends) == 0 {
-		log.Printf("Adding default repository backends")
-
-		cfg.Backends = append(cfg.Backends, []config.Backend{
-			{Name: "ubuntu-archive", URL: "http://archive.ubuntu.com/ubuntu", Priority: 100},
-			{Name: "ubuntu-security", URL: "http://security.ubuntu.com/ubuntu", Priority: 95},
-			{Name: "debian", URL: "http://deb.debian.org/debian", Priority: 90},
-			{Name: "debian-security", URL: "http://security.debian.org/debian-security", Priority: 85},
-			{Name: "debian-backports", URL: "http://deb.debian.org/debian-backports", Priority: 80},
-			{Name: "ubuntu-ports", URL: "http://ports.ubuntu.com/ubuntu-ports", Priority: 75},
-			{Name: "kali", URL: "http://http.kali.org/kali", Priority: 70},
-		}...)
+	// Check for standard repositories and add any missing ones
+	standardRepos := []struct {
+		name     string
+		url      string
+		pattern  string // Added pattern field for mapping
+		priority int
+	}{
+		{"ubuntu-archive", "http://archive.ubuntu.com/ubuntu", "archive.ubuntu.com/ubuntu", 100},
+		{"ubuntu-security", "http://security.ubuntu.com/ubuntu", "security.ubuntu.com/ubuntu", 95},
+		{"debian", "http://deb.debian.org/debian", "deb.debian.org/debian", 90},
+		{"debian-security", "http://security.debian.org/debian-security", "security.debian.org/debian-security", 85},
+		{"debian-backports", "http://deb.debian.org/debian-backports", "deb.debian.org/debian-backports", 80},
+		{"ubuntu-ports", "http://ports.ubuntu.com/ubuntu-ports", "ports.ubuntu.com/ubuntu-ports", 75},
+		{"kali", "http://http.kali.org/kali", "http.kali.org/kali", 70},
 	}
 
-	// Add default mapping rules if none defined
-	if len(cfg.MappingRules) == 0 {
-		log.Printf("Adding default repository mapping rules")
+	// Track which standard repos exist
+	existingRepos := make(map[string]bool)
+	for _, backend := range cfg.Backends {
+		existingRepos[backend.Name] = true
+	}
 
-		// Default handling for common third-party repositories
-		defaultMappings := []struct {
-			repoName string
-			pattern  string
-			priority int
-		}{
-			{"docker", "download.docker.com/linux/ubuntu", 60},
-			{"grafana", "packages.grafana.com/oss/deb", 55},
-			{"plex", "downloads.plex.tv/repo/deb", 50},
-			{"postgresql", "apt.postgresql.org/pub/repos/apt", 45},
-			{"hwraid", "hwraid.le-vert.net/ubuntu", 40},
+	// Add missing standard repositories
+	reposAdded := 0
+	for _, repo := range standardRepos {
+		if !existingRepos[repo.name] {
+			cfg.Backends = append(cfg.Backends, config.Backend{
+				Name:     repo.name,
+				URL:      repo.url,
+				Priority: repo.priority,
+			})
+			reposAdded++
 		}
+	}
 
-		for _, mapping := range defaultMappings {
+	if reposAdded > 0 {
+		log.Printf("Added %d missing standard repository backends", reposAdded)
+	}
+
+	// Track which mapping rules exist for both standard and third-party repos
+	existingMappings := make(map[string]bool)
+	for _, rule := range cfg.MappingRules {
+		existingMappings[rule.Pattern] = true
+	}
+
+	// Add mapping rules for standard repositories if they don't exist
+	standardMappingsAdded := 0
+	for _, repo := range standardRepos {
+		if !existingMappings[repo.pattern] {
+			m.AddPrefixRule(repo.pattern, repo.name, repo.priority)
+
+			// Add to MappingRules list for config consistency
+			cfg.MappingRules = append(cfg.MappingRules, config.MappingRule{
+				Type:       "prefix",
+				Pattern:    repo.pattern,
+				Repository: repo.name,
+				Priority:   repo.priority,
+			})
+			standardMappingsAdded++
+			existingMappings[repo.pattern] = true // Mark as existing
+		}
+	}
+
+	if standardMappingsAdded > 0 {
+		log.Printf("Added %d standard repository mapping rules", standardMappingsAdded)
+	}
+
+	// Check for third-party repository mappings and add if missing
+	thirdPartyMappings := []struct {
+		repoName string
+		pattern  string
+		priority int
+	}{
+		{"docker", "download.docker.com/linux/ubuntu", 60},
+		{"grafana", "packages.grafana.com/oss/deb", 55},
+		{"plex", "downloads.plex.tv/repo/deb", 50},
+		{"postgresql", "apt.postgresql.org/pub/repos/apt", 45},
+		{"hwraid", "hwraid.le-vert.net/ubuntu", 40},
+	}
+
+	// Add third-party mappings if they don't exist
+	thirdPartyMappingsAdded := 0
+	for _, mapping := range thirdPartyMappings {
+		if !existingMappings[mapping.pattern] {
 			m.AddPrefixRule(mapping.pattern, mapping.repoName, mapping.priority)
 
 			// Add to MappingRules list for config consistency
@@ -773,7 +824,36 @@ func addDefaultRepositories(cfg *config.Config, m *mapper.PathMapper) {
 				Repository: mapping.repoName,
 				Priority:   mapping.priority,
 			})
+			thirdPartyMappingsAdded++
 		}
+	}
+
+	if thirdPartyMappingsAdded > 0 {
+		log.Printf("Added %d third-party repository mapping rules", thirdPartyMappingsAdded)
+	}
+
+	// Add development release handling configuration if it doesn't exist
+	if cfg.Metadata == nil {
+		cfg.Metadata = make(map[string]interface{})
+	}
+
+	if _, exists := cfg.Metadata["dev_release"]; !exists {
+		cfg.Metadata["dev_release"] = map[string]interface{}{
+			"enabled": true,
+			"codenames": []string{
+				"oracular",
+				"noble",
+				"devel",
+				"experimental",
+			},
+			"skip_missing_components": []string{
+				"-security",
+				"-updates",
+				"-backports",
+			},
+			"suppress_errors": true,
+		}
+		log.Printf("Added development release handling configuration")
 	}
 }
 
