@@ -2,7 +2,6 @@ package backend
 
 import (
 	"bytes"
-	"context"
 	"io"
 	"net/http"
 	"os"
@@ -19,11 +18,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Mock for HTTP fetching
-var httpFetch = func(ctx context.Context, url string, client any) ([]byte, error) {
-	// Properly implemented empty mock function
-	return []byte("mock data"), nil
-}
+// // Fix unused parameters in mock function by using underscore prefix
+// var httpFetch = func(_ context.Context, _ string, _ any) ([]byte, error) {
+// 	// Properly implemented empty mock function that ignores parameters
+// 	return []byte("mock data"), nil
+// }
 
 // MockCache implements mock functionality for testing
 type MockCache struct {
