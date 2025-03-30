@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -177,11 +178,33 @@ func New(cfg *config.Config, opts ServerOptions) (*Server, error) {
 	}
 
 	// Configure logger
+	var logWriter io.Writer = os.Stdout
+
+	// Check if log file is specified in config
+	if cfg.LogFile != "" {
+		// Open log file in append mode, create if it doesn't exist
+		logFile, err := os.OpenFile(cfg.LogFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			// Log warning but continue with stdout only
+			log.Printf("Warning: Could not open log file %s: %v, using stdout only", cfg.LogFile, err)
+		} else {
+			// Use MultiWriter to log to both stdout and file
+			logWriter = io.MultiWriter(os.Stdout, logFile)
+			log.Printf("Logging to %s and stdout", cfg.LogFile)
+		}
+	}
+
+	// Use the configured writer
 	if opts.Logger != nil {
+		// If a specific logger is provided, use it instead
 		s.logger = log.New(opts.Logger, "apt-cacher-go: ", log.LstdFlags)
 	} else {
-		s.logger = log.New(os.Stdout, "apt-cacher-go: ", log.LstdFlags)
+		// Use our configured writer (stdout or stdout+file)
+		s.logger = log.New(logWriter, "apt-cacher-go: ", log.LstdFlags)
 	}
+
+	// Also redirect standard logger to our writer to capture all log messages
+	log.SetOutput(logWriter)
 
 	// Set up HTTP handlers
 	s.setupHTTPHandlers()
@@ -740,11 +763,11 @@ func addDefaultRepositories(cfg *config.Config, m *mapper.PathMapper) {
 	}{
 		{"ubuntu-archive", "http://archive.ubuntu.com/ubuntu", "archive.ubuntu.com/ubuntu", 100},
 		{"ubuntu-security", "http://security.ubuntu.com/ubuntu", "security.ubuntu.com/ubuntu", 95},
-		{"debian", "http://packages.debian.org/debian", "packages.debian.org/debian", 90},
-        {"debian-security", "http://security.debian.org/debian-security", "security.debian.org/debian-security", 85},
-        {"debian-backports", "http://backports.debian.org/debian-backports", "backports.debian.org/debian-backports", 80},
-        {"ubuntu-ports", "http://ports.ubuntu.com/ubuntu-ports", "ports.ubuntu.com/ubuntu-ports", 75},
-        {"kali", "http://http.kali.org/kali", "http.kali.org/kali", 70},
+		{"debian", "http://deb.debian.org/debian", "deb.debian.org/debian", 90},
+		{"debian-security", "http://security.debian.org/debian-security", "security.debian.org/debian-security", 85},
+		{"debian-backports", "http://deb.debian.org/debian-backports", "deb.debian.org/debian-backports", 80},
+		{"ubuntu-ports", "http://ports.ubuntu.com/ubuntu-ports", "ports.ubuntu.com/ubuntu-ports", 75},
+		{"kali", "http://http.kali.org/kali", "http.kali.org/kali", 70},
 	}
 
 	// Track which standard repos exist
