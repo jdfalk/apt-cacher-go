@@ -831,8 +831,18 @@ func (c *Cache) UpdatePackageIndex(packages []parser.PackageInfo) error {
 	existingCount := len(c.packageIndex)
 	addedCount := 0
 
+	// Check if packageIndex is nil and initialize it
+	if c.packageIndex == nil {
+		c.packageIndex = make(map[string]parser.PackageInfo)
+	}
+
 	// Add packages to index
 	for _, pkg := range packages {
+		// Skip empty package names
+		if pkg.Package == "" {
+			continue
+		}
+
 		// Skip if already exists with same version
 		if existing, ok := c.packageIndex[pkg.Package]; ok && existing.Version == pkg.Version {
 			continue
@@ -842,15 +852,49 @@ func (c *Cache) UpdatePackageIndex(packages []parser.PackageInfo) error {
 		addedCount++
 	}
 
-	// Improved logging that uses the existingCount variable
+	// Only log at debug level for no changes
 	if addedCount > 0 {
 		log.Printf("Added %d new packages to index (had %d, now %d total packages)",
 			addedCount, existingCount, len(c.packageIndex))
+
+		// Save index to disk after updates
+		go func() {
+			if err := c.savePackageIndex(); err != nil {
+				log.Printf("Error saving package index: %v", err)
+			}
+		}()
 	} else {
-		// Log always, not just when verbose, but keep it clear this is an informational message
 		log.Printf("Package index update: no new packages added (index contains %d packages)",
 			existingCount)
 	}
 
+	return nil
+}
+
+// savePackageIndex persists the package index to disk
+func (c *Cache) savePackageIndex() error {
+	// Use a local copy to avoid holding the lock
+	c.packageMutex.RLock()
+	localIndex := make(map[string]parser.PackageInfo, len(c.packageIndex))
+	for k, v := range c.packageIndex {
+		localIndex[k] = v
+	}
+	c.packageMutex.RUnlock()
+
+	// Create the file
+	indexPath := filepath.Join(c.rootDir, "package_index.json")
+	file, err := os.Create(indexPath)
+	if err != nil {
+		return fmt.Errorf("failed to create package index file: %w", err)
+	}
+	defer file.Close()
+
+	// Write the data
+	encoder := json.NewEncoder(file)
+	if err := encoder.Encode(localIndex); err != nil {
+		return fmt.Errorf("failed to encode package index: %w", err)
+	}
+
+	log.Printf("Package index saved to %s (%d packages)", indexPath, len(localIndex))
 	return nil
 }
