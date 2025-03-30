@@ -7,17 +7,116 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
+
+// MockMetricsCollector implements mock functionality for testing
+type MockMetricsCollector struct {
+	mock.Mock
+}
+
+func (m *MockMetricsCollector) RecordRequest(path string, duration time.Duration, clientIP, packageName string) {
+	m.Called(path, duration, clientIP, packageName)
+}
+
+func (m *MockMetricsCollector) RecordCacheHit(path string, size int64) {
+	m.Called(path, size)
+}
+
+func (m *MockMetricsCollector) RecordCacheMiss(path string, size int64) {
+	m.Called(path, size)
+}
+
+func (m *MockMetricsCollector) RecordError(path string) {
+	m.Called(path)
+}
+
+func (m *MockMetricsCollector) RecordBytesServed(bytes int64) {
+	m.Called(bytes)
+}
+
+func (m *MockMetricsCollector) GetStatistics() Statistics {
+	args := m.Called()
+	return args.Get(0).(Statistics)
+}
+
+func (m *MockMetricsCollector) GetTopPackages(limit int) []PackageStats {
+	args := m.Called(limit)
+	return args.Get(0).([]PackageStats)
+}
+
+func (m *MockMetricsCollector) GetTopClients(limit int) []ClientStats {
+	args := m.Called(limit)
+	return args.Get(0).([]ClientStats)
+}
 
 func TestMetricsFunctionality(t *testing.T) {
 	t.Run("hello world", func(t *testing.T) {
-		if 1+1 != 2 {
-			t.Errorf("Expected %d, but got %d", 2, 1+1)
-		}
+		assert.Equal(t, 2, 1+1)
 	})
 }
 
-// Add the following new tests:
+func TestCollectorWithMock(t *testing.T) {
+	// Setup mock
+	mockCollector := new(MockMetricsCollector)
+
+	// Setup expectations
+	mockCollector.On("RecordRequest", "/test/path", 100*time.Millisecond, "127.0.0.1", "test-package").Return()
+	mockCollector.On("RecordCacheHit", "/test/path", int64(1024)).Return()
+	mockCollector.On("RecordCacheMiss", "/test/path", int64(2048)).Return()
+	mockCollector.On("RecordError", "/test/path").Return()
+	mockCollector.On("RecordBytesServed", int64(4096)).Return()
+
+	// Mock statistics
+	stats := Statistics{
+		TotalRequests: 1,
+		CacheHits:     1,
+		CacheMisses:   1,
+		Errors:        1,
+		BytesServed:   4096,
+	}
+	mockCollector.On("GetStatistics").Return(stats)
+
+	// Mock top packages
+	topPkgs := []PackageStats{
+		{URL: "test-package", Count: 5, Size: 1024},
+	}
+	mockCollector.On("GetTopPackages", 10).Return(topPkgs)
+
+	// Mock top clients
+	topClients := []ClientStats{
+		{IP: "127.0.0.1", Requests: 10},
+	}
+	mockCollector.On("GetTopClients", 10).Return(topClients)
+
+	// Use the mock
+	mockCollector.RecordRequest("/test/path", 100*time.Millisecond, "127.0.0.1", "test-package")
+	mockCollector.RecordCacheHit("/test/path", 1024)
+	mockCollector.RecordCacheMiss("/test/path", 2048)
+	mockCollector.RecordError("/test/path")
+	mockCollector.RecordBytesServed(4096)
+
+	// Get statistics and verify
+	returnedStats := mockCollector.GetStatistics()
+	assert.Equal(t, 1, returnedStats.TotalRequests)
+	assert.Equal(t, 1, returnedStats.CacheHits)
+	assert.Equal(t, 1, returnedStats.CacheMisses)
+	assert.Equal(t, 1, returnedStats.Errors)
+	assert.Equal(t, int64(4096), returnedStats.BytesServed)
+
+	// Get top packages and verify
+	returnedPkgs := mockCollector.GetTopPackages(10)
+	assert.Equal(t, 1, len(returnedPkgs))
+	assert.Equal(t, "test-package", returnedPkgs[0].URL)
+
+	// Get top clients and verify
+	returnedClients := mockCollector.GetTopClients(10)
+	assert.Equal(t, 1, len(returnedClients))
+	assert.Equal(t, "127.0.0.1", returnedClients[0].IP)
+
+	// Verify all expectations were met
+	mockCollector.AssertExpectations(t)
+}
 
 func TestStandardRecordBytesServed(t *testing.T) {
 	collector := New()
@@ -299,21 +398,21 @@ func TestGetTopPackages(t *testing.T) {
 
 	// Add package stats - removing leading slashes to match implementation
 	collector.packages["pkg1"] = PackageStats{
-		URL:        "pkg1", // Changed from "/pkg1" to match actual implementation
+		URL:        "pkg1",
 		Count:      10,
 		LastAccess: time.Now(),
 		Size:       1024,
 	}
 
 	collector.packages["pkg2"] = PackageStats{
-		URL:        "pkg2", // Changed from "/pkg2"
+		URL:        "pkg2",
 		Count:      5,
 		LastAccess: time.Now(),
 		Size:       2048,
 	}
 
 	collector.packages["pkg3"] = PackageStats{
-		URL:        "pkg3", // Changed from "/pkg3"
+		URL:        "pkg3",
 		Count:      15,
 		LastAccess: time.Now(),
 		Size:       3072,
@@ -324,9 +423,9 @@ func TestGetTopPackages(t *testing.T) {
 
 	// Verify top packages (should be pkg3, pkg1)
 	assert.Equal(t, 2, len(topPackages))
-	assert.Equal(t, "pkg3", topPackages[0].URL) // Changed from "/pkg3"
+	assert.Equal(t, "pkg3", topPackages[0].URL)
 	assert.Equal(t, 15, topPackages[0].Count)
-	assert.Equal(t, "pkg1", topPackages[1].URL) // Changed from "/pkg1"
+	assert.Equal(t, "pkg1", topPackages[1].URL)
 	assert.Equal(t, 10, topPackages[1].Count)
 }
 
