@@ -15,6 +15,7 @@ import (
 	"github.com/jdfalk/apt-cacher-go/internal/config"
 	"github.com/jdfalk/apt-cacher-go/internal/mapper"
 	"github.com/jdfalk/apt-cacher-go/internal/metrics"
+	"github.com/jdfalk/apt-cacher-go/internal/mocks"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -23,13 +24,13 @@ import (
 type TestServerFixture struct {
 	Server        *Server
 	Config        *config.Config
-	Backend       *MockBackendManager
-	Cache         *MockCache
-	Mapper        *MockPathMapper
-	PackageMapper *MockPackageMapper
-	Metrics       *MockMetricsCollector
-	KeyManager    *MockKeyManager
-	MemoryMonitor *MockMemoryMonitor
+	Backend       *mocks.MockBackendManager
+	Cache         *mocks.MockCache
+	Mapper        *mocks.MockPathMapper
+	PackageMapper *mocks.MockPackageMapper
+	Metrics       *mocks.MockMetricsCollector
+	KeyManager    *mocks.MockKeyManager
+	MemoryMonitor *mocks.MockMemoryMonitor
 	TempDir       string
 	Cleanup       func()
 }
@@ -41,13 +42,13 @@ func NewTestServerFixture(t *testing.T) *TestServerFixture {
 	require.NoError(t, err)
 
 	// Create mock components
-	mockBackend := new(MockBackendManager)
-	mockCache := new(MockCache)
-	mockMapper := new(MockPathMapper)
-	mockPkgMapper := new(MockPackageMapper)
-	mockMetrics := new(MockMetricsCollector)
-	mockKeyManager := new(MockKeyManager)
-	mockMemMonitor := new(MockMemoryMonitor)
+	mockBackend := new(mocks.MockBackendManager)
+	mockCache := new(mocks.MockCache)
+	mockMapper := new(mocks.MockPathMapper)
+	mockPkgMapper := new(mocks.MockPackageMapper)
+	mockMetrics := new(mocks.MockMetricsCollector)
+	mockKeyManager := new(mocks.MockKeyManager)
+	mockMemMonitor := new(mocks.MockMemoryMonitor)
 
 	// Create configuration
 	cfg := &config.Config{
@@ -94,9 +95,23 @@ func NewTestServerFixture(t *testing.T) *TestServerFixture {
 
 	// Create cleanup function
 	cleanup := func() {
-		if err := server.Shutdown(); err != nil {
-			t.Logf("Error shutting down server: %v", err)
+		// Add proper shutdown with timeout to prevent deadlocks
+		doneChan := make(chan struct{})
+		go func() {
+			defer close(doneChan)
+			if err := server.Shutdown(); err != nil {
+				t.Logf("Error shutting down server: %v", err)
+			}
+		}()
+
+		// Add timeout to prevent test hanging
+		select {
+		case <-doneChan:
+			// Shutdown completed successfully
+		case <-time.After(2 * time.Second):
+			t.Log("Warning: Server shutdown timed out")
 		}
+
 		os.RemoveAll(tempDir)
 	}
 
@@ -133,7 +148,7 @@ func ExecuteRequestWithAuth(handler http.HandlerFunc, method, url string, body i
 }
 
 // wrapTestHandler wraps a handler with middleware for testing
-func wrapTestHandler(metrics *MockMetricsCollector, handler http.HandlerFunc) http.HandlerFunc {
+func wrapTestHandler(metrics *mocks.MockMetricsCollector, handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		handler(w, r)
@@ -199,31 +214,27 @@ func CreateTestServer(t *testing.T) (*Server, string, func()) {
 	})
 	require.NoError(t, err)
 
-	// Cleanup function
+	// Cleanup function with timeout to prevent deadlocks
 	cleanup := func() {
-		if err := server.Shutdown(); err != nil {
-			t.Logf("Error shutting down server: %v", err)
+		doneChan := make(chan struct{})
+
+		go func() {
+			defer close(doneChan)
+			if err := server.Shutdown(); err != nil {
+				t.Logf("Error shutting down server: %v", err)
+			}
+		}()
+
+		// Add timeout to prevent test hanging
+		select {
+		case <-doneChan:
+			// Shutdown completed successfully
+		case <-time.After(2 * time.Second):
+			t.Log("Warning: Server shutdown timed out")
 		}
+
 		os.RemoveAll(tempDir)
 	}
 
 	return server, tempDir, cleanup
-}
-
-// MockMemoryMonitor is a mock for MemoryMonitorInterface
-type MockMemoryMonitor struct {
-	mock.Mock
-}
-
-func (m *MockMemoryMonitor) Start() {
-	m.Called()
-}
-
-func (m *MockMemoryMonitor) Stop() {
-	m.Called()
-}
-
-func (m *MockMemoryMonitor) GetMemoryUsage() map[string]any {
-	args := m.Called()
-	return args.Get(0).(map[string]any)
 }
