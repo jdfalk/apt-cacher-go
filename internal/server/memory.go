@@ -8,8 +8,9 @@ import (
 	"time"
 )
 
-// MemoryMonitor tracks and manages memory usage
+// MemoryMonitor tracks system memory usage
 type MemoryMonitor struct {
+	mu                   sync.RWMutex // Change from sync.Mutex
 	highWatermarkMB      int64
 	criticalWatermarkMB  int64
 	memoryPressure       int64 // Atomic value 0-100
@@ -19,7 +20,6 @@ type MemoryMonitor struct {
 	stopCh               chan struct{}
 	memoryPressureAction func(pressure int)
 	stopOnce             sync.Once
-	mutex                sync.Mutex
 	ctx                  context.Context
 	cancel               context.CancelFunc
 }
@@ -85,9 +85,9 @@ func (m *MemoryMonitor) checkMemory() {
 
 	// Check if GC has run since last check
 	if memStats.NumGC > m.lastGCCount {
-		m.mutex.Lock()
+		m.mu.Lock()
 		m.gcCycles += int(memStats.NumGC - m.lastGCCount)
-		m.mutex.Unlock()
+		m.mu.Unlock()
 		m.lastGCCount = memStats.NumGC
 	}
 
@@ -105,27 +105,45 @@ func (m *MemoryMonitor) Stop() {
 	})
 }
 
-// GetMemoryUsage returns the current memory usage stats
+// GetMemoryUsage returns memory statistics
 func (m *MemoryMonitor) GetMemoryUsage() map[string]any {
-	var memStats runtime.MemStats
-	runtime.ReadMemStats(&memStats)
+	m.mu.RLock()         // Use mu instead of mutex
+	defer m.mu.RUnlock() // Use mu instead of mutex
+
+	var stats runtime.MemStats
+	runtime.ReadMemStats(&stats)
 
 	return map[string]any{
-		"allocated_mb":          float64(memStats.Alloc) / 1024 / 1024,
-		"total_allocated_mb":    float64(memStats.TotalAlloc) / 1024 / 1024,
-		"system_mb":             float64(memStats.Sys) / 1024 / 1024,
-		"gc_cycles":             memStats.NumGC,
+		"allocated_mb":          float64(stats.Alloc) / (1024 * 1024),
+		"system_mb":             float64(stats.Sys) / (1024 * 1024),
+		"total_allocated_mb":    float64(stats.TotalAlloc) / (1024 * 1024),
+		"heap_objects":          stats.HeapObjects,
+		"gc_cycles":             stats.NumGC,
 		"goroutines":            runtime.NumGoroutine(),
-		"heap_objects":          memStats.HeapObjects,
-		"high_watermark_mb":     float64(m.highWatermarkMB),
-		"critical_watermark_mb": float64(m.criticalWatermarkMB),
+		"high_watermark_mb":     m.highWatermarkMB,
+		"critical_watermark_mb": m.criticalWatermarkMB,
 		"pressure":              m.getCurrentPressure(),
+		"memory_pressure":       float64(m.getCurrentPressure()) / 100.0, // Add this field to match test expectations
 	}
 }
 
-// Add this method to fix the missing getCurrentPressure method
+// getCurrentPressure returns the current memory pressure value
 func (m *MemoryMonitor) getCurrentPressure() int {
+	m.mu.RLock()         // Use mu instead of mutex
+	defer m.mu.RUnlock() // Use mu instead of mutex
 	return int(atomic.LoadInt64(&m.memoryPressure))
+}
+
+// SetPressureHandler sets or updates the memory pressure action function
+func (m *MemoryMonitor) SetPressureHandler(action func(pressure int)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.memoryPressureAction = action
+}
+
+// SetPressureHandler sets the action handler on the underlying MemoryMonitor
+func (m *MemoryMonitorAdapter) SetPressureHandler(action func(pressure int)) {
+	m.MemoryMonitor.SetPressureHandler(action)
 }
 
 // HandleHighMemoryPressure is the exported version of handleHighMemoryPressure
