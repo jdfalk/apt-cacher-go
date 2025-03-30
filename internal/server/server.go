@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -234,6 +233,9 @@ func (s *Server) setupHTTPHandlers() {
 		s.logger.Printf("Admin interface will be available at http://%s:%d/admin/\n",
 			s.cfg.ListenAddress, s.cfg.Port)
 	}
+
+	// Set up HTTPS server if enabled (function is now in https.go)
+	s.setupHTTPSServer(mainMux)
 }
 
 // setupAdminHandlers configures admin-related HTTP handlers
@@ -246,44 +248,17 @@ func (s *Server) setupAdminHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/clear", s.adminClearCache)
 	mux.HandleFunc("/search", s.adminSearchCache)
 	mux.HandleFunc("/memory", s.adminMemoryStats)
+	mux.HandleFunc("/report", s.handleDirectoryRequest)
 
 	// Add any missing handlers that were called
 	mux.HandleFunc("/cleanup-prefetcher", s.adminCleanupPrefetcher)
 	mux.HandleFunc("/cleanup-memory", s.adminForceMemoryCleanup)
 }
 
-// Add a simplified implementation of adminDashboard if it doesn't exist
-func (s *Server) adminHome(w http.ResponseWriter, r *http.Request) {
-	s.adminDashboard(w, r) // Redirect to dashboard
-}
-
 // Add a simple directory handler implementation
 func (s *Server) handleDirectoryRequest(w http.ResponseWriter, r *http.Request) {
 	// Implement basic directory listing or redirect to dashboard
 	http.Redirect(w, r, "/report", http.StatusFound)
-}
-
-// setupHTTPSServer configures HTTPS server if enabled
-func (s *Server) setupHTTPSServer(mainMux *http.ServeMux) {
-	if s.cfg.TLSEnabled && s.cfg.TLSCert != "" && s.cfg.TLSKey != "" {
-		tlsConfig := &tls.Config{
-			MinVersion: tls.VersionTLS12,
-			CipherSuites: []uint16{
-				tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
-				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-				tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
-				tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
-				tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
-				tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-			},
-		}
-
-		s.httpsServer = &http.Server{
-			Addr:      fmt.Sprintf("%s:%d", s.cfg.ListenAddress, s.cfg.TLSPort),
-			Handler:   s.acl.Middleware(mainMux),
-			TLSConfig: tlsConfig,
-		}
-	}
 }
 
 // StartWithContext begins listening for HTTP requests with the provided context
