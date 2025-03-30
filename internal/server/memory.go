@@ -123,6 +123,11 @@ func (m *MemoryMonitor) GetMemoryUsage() map[string]any {
 	}
 }
 
+// Add this method to fix the missing getCurrentPressure method
+func (m *MemoryMonitor) getCurrentPressure() int {
+	return int(atomic.LoadInt64(&m.memoryPressure))
+}
+
 // HandleHighMemoryPressure is the exported version of handleHighMemoryPressure
 func (s *Server) HandleHighMemoryPressure(pressure float64) {
 	s.handleHighMemoryPressure(pressure)
