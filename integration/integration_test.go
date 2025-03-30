@@ -140,7 +140,9 @@ func setupTestServer(t *testing.T, mockURL string) (*TestServer, func()) {
 	}
 
 	// Create server
-	srv, err := server.New(cfg, nil, nil, nil)
+	srv, err := server.New(cfg, server.ServerOptions{
+		Version: "test-version",
+	})
 	require.NoError(t, err)
 
 	// Create client with timeout
@@ -593,7 +595,9 @@ func TestErrorHandling(t *testing.T) {
 	}
 
 	// Create and start the server
-	srv, err := server.New(cfg, nil, nil, nil)
+	srv, err := server.New(cfg, server.ServerOptions{
+		Version: "test-version",
+	})
 	require.NoError(t, err)
 
 	// Create client
