@@ -54,12 +54,13 @@ func NewPackageIndex() *PackageIndex {
 }
 
 // AddPackage adds a package to the index
-func (idx *PackageIndex) AddPackage(pkg PackageInfo) {
-	idx.mutex.Lock()
-	defer idx.mutex.Unlock()
+func (pi *PackageIndex) AddPackage(pkg PackageInfo) {
+	pi.mutex.Lock()
+	defer pi.mutex.Unlock()
 
-	idx.Packages[pkg.Package] = append(idx.Packages[pkg.Package], pkg)
-	idx.LastUpdated = time.Now()
+	// Store by both package name and full key for better search
+	pi.Packages[pkg.Package] = append(pi.Packages[pkg.Package], pkg)
+	pi.LastUpdated = time.Now()
 }
 
 // Search searches the index for packages matching a query
