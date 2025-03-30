@@ -1,7 +1,7 @@
 package server
 
 import (
-	"log"
+	"context"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -20,109 +20,106 @@ type MemoryMonitor struct {
 	memoryPressureAction func(pressure int)
 	stopOnce             sync.Once
 	mutex                sync.Mutex
+	ctx                  context.Context
+	cancel               context.CancelFunc
 }
 
 // NewMemoryMonitor creates a new monitor
 func NewMemoryMonitor(highWatermarkMB, criticalWatermarkMB int, action func(pressure int)) *MemoryMonitor {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &MemoryMonitor{
 		highWatermarkMB:      int64(highWatermarkMB),
 		criticalWatermarkMB:  int64(criticalWatermarkMB),
+		memoryPressureAction: action,
 		checkInterval:        30 * time.Second,
 		stopCh:               make(chan struct{}),
-		memoryPressureAction: action,
+		ctx:                  ctx,
+		cancel:               cancel,
 	}
 }
 
 // Start begins monitoring memory usage
 func (m *MemoryMonitor) Start() {
-	m.stopOnce.Do(func() {
-		m.stopCh = make(chan struct{})
-		go func() {
-			ticker := time.NewTicker(m.checkInterval)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ticker.C:
-					m.checkMemoryUsage()
-				case <-m.stopCh:
-					return
-				}
-			}
-		}()
-	})
+	go m.monitorLoop()
+}
+
+// monitorLoop periodically checks memory usage
+func (m *MemoryMonitor) monitorLoop() {
+	ticker := time.NewTicker(m.checkInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			m.checkMemory()
+		case <-m.ctx.Done():
+			return
+		case <-m.stopCh:
+			return
+		}
+	}
+}
+
+// checkMemory reads current memory statistics
+func (m *MemoryMonitor) checkMemory() {
+	var memStats runtime.MemStats
+	runtime.ReadMemStats(&memStats)
+
+	allocMB := int64(memStats.Alloc) / (1024 * 1024)
+
+	// Calculate memory pressure as percentage of high watermark
+	var pressure int64
+	if allocMB >= m.criticalWatermarkMB {
+		pressure = 100
+	} else if allocMB >= m.highWatermarkMB {
+		// Scale between 70-99% based on position between high and critical
+		excess := allocMB - m.highWatermarkMB
+		criticalExcess := m.criticalWatermarkMB - m.highWatermarkMB
+		pressure = 70 + (excess * 29 / criticalExcess)
+	} else {
+		// Scale between 0-69% based on position up to high watermark
+		pressure = allocMB * 69 / m.highWatermarkMB
+	}
+
+	atomic.StoreInt64(&m.memoryPressure, pressure)
+
+	// Check if GC has run since last check
+	if memStats.NumGC > m.lastGCCount {
+		m.mutex.Lock()
+		m.gcCycles += int(memStats.NumGC - m.lastGCCount)
+		m.mutex.Unlock()
+		m.lastGCCount = memStats.NumGC
+	}
+
+	// Take action if pressure is high
+	if pressure > 70 && m.memoryPressureAction != nil {
+		m.memoryPressureAction(int(pressure))
+	}
 }
 
 // Stop stops monitoring
 func (m *MemoryMonitor) Stop() {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-	if m.stopCh != nil {
+	m.stopOnce.Do(func() {
+		m.cancel()
 		close(m.stopCh)
-		m.stopCh = nil
-	}
+	})
 }
 
-// GetMemoryUsage returns current memory statistics
+// GetMemoryUsage returns the current memory usage stats
 func (m *MemoryMonitor) GetMemoryUsage() map[string]any {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
-
-	// Calculate memory pressure
-	pressure := atomic.LoadInt64(&m.memoryPressure)
 
 	return map[string]any{
-		"allocated_mb":    float64(memStats.Alloc) / (1024 * 1024),
-		"system_mb":       float64(memStats.Sys) / (1024 * 1024),
-		"memory_pressure": float64(pressure) / 100.0,
-		"gc_cycles":       m.gcCycles,
-		"heap_objects":    memStats.HeapObjects,
-	}
-}
-
-// checkMemoryUsage checks memory usage and takes action if needed
-func (m *MemoryMonitor) checkMemoryUsage() {
-	var memStats runtime.MemStats
-	runtime.ReadMemStats(&memStats)
-
-	allocatedMB := int64(memStats.Alloc) / (1024 * 1024)
-
-	// Calculate memory pressure as percentage of high watermark
-	var pressure int64
-	if allocatedMB >= m.highWatermarkMB {
-		pressure = 100
-	} else {
-		pressure = (allocatedMB * 100) / m.highWatermarkMB
-	}
-
-	// Update the atomic pressure value
-	atomic.StoreInt64(&m.memoryPressure, pressure)
-
-	// Track GC cycles
-	if memStats.NumGC > m.lastGCCount {
-		m.gcCycles += int(memStats.NumGC - m.lastGCCount)
-		m.lastGCCount = memStats.NumGC
-	}
-
-	// Take action based on memory pressure
-	if pressure > 90 {
-		log.Printf("Critical memory pressure: %d%% (%dMB used)", pressure, allocatedMB)
-
-		// Force garbage collection
-		runtime.GC()
-
-		// If we're above critical watermark, take drastic action
-		if allocatedMB > m.criticalWatermarkMB {
-			log.Printf("Memory usage critical: %dMB used, forcing cleanup", allocatedMB)
-			if m.memoryPressureAction != nil {
-				m.memoryPressureAction(int(pressure))
-			}
-		}
-	} else if pressure > 75 {
-		log.Printf("High memory pressure: %d%% (%dMB used)", pressure, allocatedMB)
-		// Suggest garbage collection
-		runtime.GC()
+		"allocated_mb":          float64(memStats.Alloc) / 1024 / 1024,
+		"total_allocated_mb":    float64(memStats.TotalAlloc) / 1024 / 1024,
+		"system_mb":             float64(memStats.Sys) / 1024 / 1024,
+		"gc_cycles":             memStats.NumGC,
+		"goroutines":            runtime.NumGoroutine(),
+		"heap_objects":          memStats.HeapObjects,
+		"high_watermark_mb":     float64(m.highWatermarkMB),
+		"critical_watermark_mb": float64(m.criticalWatermarkMB),
+		"pressure":              m.getCurrentPressure(),
 	}
 }
 
