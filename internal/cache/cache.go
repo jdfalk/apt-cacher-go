@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,18 +37,17 @@ type CacheSearchResult struct {
 
 // Cache represents a file cache for apt packages
 type Cache struct {
-	rootDir        string
-	maxSize        int64
-	currentSize    int64
-	items          map[string]*cacheEntry
-	mutex          sync.RWMutex // Added for thread safety
-	lruCache       *LRUCache    // Changed from lru.LRUCache to LRUCache
-	hitCount       int64
-	missCount      int64
-	statsMutex     sync.RWMutex // Separate mutex for statistics
-	packageIndex   map[string]parser.PackageInfo
-	packageMutex   sync.RWMutex
-	verboseLogging bool
+	rootDir      string
+	maxSize      int64
+	currentSize  int64
+	items        map[string]*cacheEntry
+	mutex        sync.RWMutex // Added for thread safety
+	lruCache     *LRUCache    // Changed from lru.LRUCache to LRUCache
+	hitCount     int64
+	missCount    int64
+	statsMutex   sync.RWMutex // Separate mutex for statistics
+	packageIndex map[string]parser.PackageInfo
+	packageMutex sync.RWMutex
 }
 
 // cacheEntry represents a single file in the cache
@@ -754,22 +754,69 @@ func (c *Cache) Search(pattern string) ([]string, error) {
 
 // SearchByPackageName finds packages by name
 func (c *Cache) SearchByPackageName(name string) ([]CacheSearchResult, error) {
-	c.mutex.RLock()
-	defer c.mutex.RUnlock()
+	c.packageMutex.RLock()
+	defer c.packageMutex.RUnlock()
 
-	results := []CacheSearchResult{}
+	var results []CacheSearchResult
+	searchTerm := strings.ToLower(name)
 
-	// For simplicity, just return file paths that contain the package name
-	for path, entry := range c.items {
-		if strings.Contains(path, name) {
-			results = append(results, CacheSearchResult{
-				Path:        path,
-				PackageName: name,      // We don't have real package name info
-				Version:     "unknown", // We don't have version info
-				Size:        entry.Size,
-				LastAccess:  entry.LastAccessed,
-				IsCached:    true,
-			})
+	// First check the package index
+	for pkgName, info := range c.packageIndex {
+		if strings.Contains(strings.ToLower(pkgName), searchTerm) {
+			// Create a full path to check if file exists in cache
+			cachePath := info.Filename
+			if c.Exists(cachePath) {
+				size := int64(0)
+				if sizeVal, err := strconv.ParseInt(info.Size, 10, 64); err == nil {
+					size = sizeVal
+				}
+
+				results = append(results, CacheSearchResult{
+					PackageName: pkgName,
+					Version:     info.Version,
+					Path:        cachePath,
+					Size:        size,
+				})
+			}
+		}
+	}
+
+	// If no results from index, fall back to filesystem search
+	if len(results) == 0 {
+		err := filepath.Walk(c.rootDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil // Skip files with errors
+			}
+
+			// Skip directories
+			if info.IsDir() {
+				return nil
+			}
+
+			// Only look at .deb files
+			if !strings.HasSuffix(path, ".deb") {
+				return nil
+			}
+
+			// Check if the filename contains the search term
+			filename := filepath.Base(path)
+			if strings.Contains(strings.ToLower(filename), searchTerm) {
+				relPath, err := filepath.Rel(c.rootDir, path)
+				if err != nil {
+					return nil
+				}
+
+				results = append(results, CacheSearchResult{
+					PackageName: strings.Split(filename, "_")[0], // Extract package name
+					Path:        relPath,
+					Size:        info.Size(),
+				})
+			}
+			return nil
+		})
+
+		if err != nil {
+			return nil, fmt.Errorf("error searching cache directory: %w", err)
 		}
 	}
 
