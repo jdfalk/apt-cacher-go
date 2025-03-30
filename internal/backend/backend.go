@@ -110,8 +110,16 @@ func New(cfg *config.Config, cache CacheProvider, mapper PathMapperProvider, pac
 	// Create the download queue
 	m.downloadQ = queue.New(cfg.MaxConcurrentDownloads)
 
-	// Create prefetcher with architectures
-	m.prefetcher = NewPrefetcher(m, cfg.MaxConcurrentDownloads/2, cfg.Architectures)
+	// Create prefetcher if enabled
+	if cfg.Prefetch.Enabled {
+		// Use the proper config values from Prefetch struct
+		maxConcurrent := cfg.Prefetch.MaxConcurrent
+		if maxConcurrent <= 0 {
+			maxConcurrent = 5 // Default if not specified
+		}
+
+		m.prefetcher = NewPrefetcher(m, maxConcurrent, cfg.Prefetch.Architectures)
+	}
 
 	// Start the download queue with the handler function
 	m.downloadQ.Start(func(task any) error {
