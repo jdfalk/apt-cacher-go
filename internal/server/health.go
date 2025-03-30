@@ -58,11 +58,8 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	// Get cache stats with mutex protection
 	s.mutex.Lock()
-	cacheStats, err := s.cache.GetStats()
+	cacheStats := s.cache.GetStats() // No error to handle with the new interface
 	cacheStatus := "ok"
-	if err != nil {
-		cacheStatus = "error"
-	}
 
 	// Get basic metrics
 	metrics := s.metrics.GetStatistics()
