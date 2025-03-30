@@ -318,7 +318,25 @@ func (s *Server) adminSearchCache(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mutex.Unlock()
 
-	// Rest of the function to display results...
+	// Create combined results array to use packageResults
+	combinedResults := make([]CacheEntry, len(entryResults)+len(packageResults))
+	copy(combinedResults, entryResults)
+
+	// Convert package results to CacheEntry objects
+	for i, pkgResult := range packageResults {
+		combinedResults[len(entryResults)+i] = CacheEntry{
+			Path:       pkgResult.Path,
+			Size:       pkgResult.Size,
+			LastAccess: pkgResult.LastAccess,
+			Package:    pkgResult.PackageName,
+		}
+	}
+
+	// Return JSON response
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(combinedResults); err != nil {
+		http.Error(w, "Error encoding response", http.StatusInternalServerError)
+	}
 }
 
 // adminCachePackage handles package caching requests
