@@ -36,6 +36,12 @@ type Prefetcher struct {
 	failureMutex   sync.RWMutex             // Mutex for failure map
 	memoryPressure int32                    // Atomic value for memory pressure (0-100)
 	metrics        *metrics.PrefetchMetrics // Track metrics
+	prefetchQueue  chan prefetchRequest     // Queue for pending operations
+}
+
+type prefetchRequest struct {
+	repo string
+	url  string
 }
 
 // PrefetchOperation tracks a single prefetch operation
@@ -63,6 +69,12 @@ func NewPrefetcher(manager PrefetcherManager, maxActive int, architectures []str
 		failureCount:   make(map[string]int),
 		metrics:        metrics.RegisterPrefetchMetrics(),
 		memoryPressure: 0,
+		prefetchQueue:  make(chan prefetchRequest, 1000), // Buffer size of 1000
+	}
+
+	// Start worker goroutines to process the queue
+	for i := 0; i < maxActive; i++ {
+		go p.queueWorker()
 	}
 
 	// Start background cleanup goroutine
@@ -180,81 +192,17 @@ func (p *Prefetcher) processBatch(repo string, urls []string) {
 			break
 		}
 
-		// Skip if we already have too many operations
-		if atomic.LoadInt32(&p.inProgress) >= int32(p.maxActive) {
-			log.Printf("Reached max active operations during prefetch: %d", p.maxActive)
-			continue
-		}
-
-		// Update metrics if available
-		if p.metrics != nil && p.metrics.PrefetchAttempts != nil {
-			p.metrics.PrefetchAttempts.WithLabelValues(repo).Inc()
-		}
-
-		// Track as in-progress
-		urlID := fmt.Sprintf("%s-%d", url, time.Now().UnixNano())
-
-		// Skip if already in progress
-		if _, loaded := p.active.LoadOrStore(urlID, time.Now()); loaded {
-			continue
-		}
-
-		atomic.AddInt32(&p.inProgress, 1)
-
-		p.wg.Add(1)
-		go func(u string, id string) {
-			defer p.wg.Done()
-			defer p.active.Delete(id)
-			defer atomic.AddInt32(&p.inProgress, -1)
-
-			// Use context with timeout instead of FetchWithContext
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-
-			// Use a channel to implement timeout with existing Fetch method
-			resultCh := make(chan struct {
-				data []byte
-				err  error
-			}, 1)
-
-			go func() {
-				data, err := p.manager.Fetch(u)
-				resultCh <- struct {
-					data []byte
-					err  error
-				}{data, err}
-			}()
-
-			// Wait for either result or timeout
-			var err error
-			select {
-			case result := <-resultCh:
-				err = result.err
-			case <-ctx.Done():
-				err = ctx.Err()
+		// Instead of skipping, add to queue
+		select {
+		case p.prefetchQueue <- prefetchRequest{repo: repo, url: url}:
+			// Successfully queued
+			if p.verboseLogging {
+				log.Printf("Queued prefetch for %s", url)
 			}
-
-			// Handle errors more efficiently
-			if err != nil {
-				// Record the failure to track consecutive failures
-				failCount := p.recordFailure(u)
-
-				// Log with different detail levels based on failure count
-				if p.verboseLogging || failCount == 1 {
-					log.Printf("Failed to prefetch %s: %v", u, err)
-				}
-				return
-			}
-
-			// On success, reset the failure counter
-			p.resetFailureCount(u)
-
-			// Success
-			processed++
-			if p.metrics != nil && p.metrics.PrefetchSuccesses != nil {
-				p.metrics.PrefetchSuccesses.WithLabelValues(repo).Inc()
-			}
-		}(url, urlID)
+		default:
+			// Queue is full
+			log.Printf("Prefetch queue is full, dropping request for %s", url)
+		}
 	}
 
 	// Log completion after batch is done
@@ -279,6 +227,106 @@ func (p *Prefetcher) processBatch(repo string, urls []string) {
 				processed, len(urls), duration)
 		}
 	}()
+}
+
+// Add a queue worker method
+func (p *Prefetcher) queueWorker() {
+	for {
+		select {
+		case <-p.stopCh:
+			return // Exit when prefetcher is shutdown
+		case req := <-p.prefetchQueue:
+			// Process the queued request
+			p.processSingleURL(req.repo, req.url)
+		}
+	}
+}
+
+// Add a method to process a single URL
+func (p *Prefetcher) processSingleURL(repo, url string) {
+	// Update metrics if available
+	if p.metrics != nil && p.metrics.PrefetchAttempts != nil {
+		p.metrics.PrefetchAttempts.WithLabelValues(repo).Inc()
+	}
+
+	// Track as in-progress
+	urlID := fmt.Sprintf("%s-%d", url, time.Now().UnixNano())
+
+	// Skip if already in progress
+	if _, loaded := p.active.LoadOrStore(urlID, time.Now()); loaded {
+		return
+	}
+
+	atomic.AddInt32(&p.inProgress, 1)
+
+	p.wg.Add(1)
+	go func(u string, id string) {
+		defer p.wg.Done()
+		defer p.active.Delete(id)
+		defer atomic.AddInt32(&p.inProgress, -1)
+
+		// Use context with timeout instead of FetchWithContext
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		// Use a channel to implement timeout with existing Fetch method
+		resultCh := make(chan struct {
+			data []byte
+			err  error
+		}, 1)
+
+		go func() {
+			data, err := p.manager.Fetch(u)
+			select {
+			case resultCh <- struct {
+				data []byte
+				err  error
+			}{data, err}:
+				// Successfully sent result
+			case <-ctx.Done():
+				// Context cancelled, just return
+				return
+			}
+		}()
+
+		// Wait for either result or timeout
+		var err error
+		select {
+		case result := <-resultCh:
+			err = result.err
+		case <-ctx.Done():
+			err = ctx.Err()
+		}
+
+		// Handle errors more efficiently
+		if err != nil {
+			// Record the failure to track consecutive failures
+			failCount := p.recordFailure(u)
+
+			// Log with different detail levels based on failure count
+			if p.verboseLogging || failCount == 1 {
+				log.Printf("Failed to prefetch %s: %v", u, err)
+			}
+
+			// Report failure to metrics
+			if p.metrics != nil && p.metrics.PrefetchFailures != nil {
+				reason := "fetch_error"
+				if ctx.Err() != nil {
+					reason = "timeout"
+				}
+				p.metrics.PrefetchFailures.WithLabelValues(repo, reason).Inc()
+			}
+			return
+		}
+
+		// On success, reset the failure counter
+		p.resetFailureCount(u)
+
+		// Success - record metrics
+		if p.metrics != nil && p.metrics.PrefetchSuccesses != nil {
+			p.metrics.PrefetchSuccesses.WithLabelValues(repo).Inc()
+		}
+	}(url, urlID)
 }
 
 // Filter URLs by configured architectures
