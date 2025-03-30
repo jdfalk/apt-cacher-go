@@ -1,6 +1,10 @@
 package server
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
+
 	"github.com/jdfalk/apt-cacher-go/internal/backend"
 	"github.com/jdfalk/apt-cacher-go/internal/cache"
 	"github.com/jdfalk/apt-cacher-go/internal/keymanager"
@@ -15,22 +19,37 @@ type CacheAdapter struct {
 
 // GetStats adapts the GetStats method to match the interface
 func (c *CacheAdapter) GetStats() cache.CacheStats {
-	stats, err := c.Cache.GetStats()
-	if err != nil || stats == nil {
-		return cache.CacheStats{}
-	}
-	return *stats
+	// Fix: GetStats() returns only one value, not two
+	stats := c.Cache.GetStats()
+	return stats
 }
 
 // Search adapts the Search method if available
 func (c *CacheAdapter) Search(query string) ([]string, error) {
-	if searcher, ok := c.Cache.(interface {
-		Search(string) ([]string, error)
-	}); ok {
-		return searcher.Search(query)
-	}
-	// Basic fallback implementation - could be improved
-	return []string{}, nil
+	// Instead of attempting type assertion on c.Cache, implement a simple search
+	// that calls other methods on the concrete Cache type
+
+	// Implement a basic file system search using the cache directory
+	dir := c.Cache.RootDir()
+	var results []string
+
+	// Use filepath.Walk to scan for matching files
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // Skip errors
+		}
+
+		if !info.IsDir() && strings.Contains(path, query) {
+			// Convert absolute path to relative path from cache root
+			relPath, err := filepath.Rel(dir, path)
+			if err == nil {
+				results = append(results, relPath)
+			}
+		}
+		return nil
+	})
+
+	return results, err
 }
 
 // MapperAdapter adapts *mapper.PathMapper to PathMapper interface
@@ -71,11 +90,7 @@ func (m *MetricsAdapter) GetTopPackages(limit int) []metrics.PackageStats {
 	result := make([]metrics.PackageStats, len(topPackages))
 
 	for i, pkg := range topPackages {
-		result[i] = metrics.PackageStats{
-			PackageName: pkg.URL,   // Use the correct field name
-			Count:       pkg.Count, // Use the correct field name
-			BytesServed: pkg.Size,  // Use the correct field name
-		}
+		result[i] = metrics.PackageStats(pkg)
 	}
 
 	return result
@@ -87,11 +102,7 @@ func (m *MetricsAdapter) GetTopClients(limit int) []metrics.ClientStats {
 	result := make([]metrics.ClientStats, len(topClients))
 
 	for i, client := range topClients {
-		result[i] = metrics.ClientStats{
-			IP:        client.IP,
-			Requests:  client.Requests,
-			BytesSent: client.BytesSent,
-		}
+		result[i] = metrics.ClientStats(client)
 	}
 
 	return result
