@@ -26,188 +26,204 @@ type Server struct {
 	cfg           *config.Config
 	httpServer    *http.Server
 	httpsServer   *http.Server
-	adminServer   *http.Server    // New field for admin server
-	cache         *cachelib.Cache // Use the alias here too
-	backend       *backend.Manager
-	metrics       *metrics.Collector
+	adminServer   *http.Server // New field for admin server
+	cache         Cache        // Use the alias here too
+	backend       BackendManager
+	metrics       MetricsCollector
 	prometheus    *metrics.PrometheusCollector
 	acl           *security.ACL
-	mapper        *mapper.PathMapper
-	packageMapper *mapper.PackageMapper // Add packageMapper field
+	mapper        PathMapper
+	packageMapper PackageMapper // Add packageMapper field
 	startTime     time.Time
 	version       string
 	logger        *log.Logger // Add logger field
-	memoryMonitor *MemoryMonitor
+	memoryMonitor MemoryMonitorInterface
 	mutex         sync.Mutex
 	startOnce     sync.Once
 	shutdownOnce  sync.Once
 	shutdownCh    chan struct{} // Add shutdown channel
 }
 
-// New creates a new Server instance
-func New(cfg *config.Config, backendManager *backend.Manager, cache *cachelib.Cache, packageMapper *mapper.PackageMapper) (*Server, error) {
-	// If we only received the config, initialize the other components
-	if backendManager == nil && cache == nil {
-		// Create a new cache - using the imported package, not the parameter
-		cacheInstance, err := cachelib.New(cfg.CacheDir, 10*1024) // 10GB default
+// New creates a new Server instance with the provided options
+func New(cfg *config.Config, opts ServerOptions) (*Server, error) {
+	var err error
+	var cache Cache
+	var pathMapper PathMapper
+	var packageMapper PackageMapper
+	var backendManager BackendManager
+	var metricsCollector MetricsCollector
+	var memoryMonitor MemoryMonitorInterface
+
+	// Create cache or use provided
+	cache = opts.Cache
+	if cache == nil {
+		cacheInstance, err := cachelib.New(cfg.CacheDir, 10*1024*1024*1024) // 10GB default
 		if err != nil {
 			return nil, fmt.Errorf("failed to create cache: %w", err)
 		}
+		cache = &CacheAdapter{Cache: cacheInstance}
+	}
 
-		// Create a package mapper
-		pm := mapper.NewPackageMapper()
+	// Create path mapper or use provided
+	pathMapper = opts.PathMapper
+	if pathMapper == nil {
+		mapperInstance := mapper.New()
+		// Add default repositories
+		for _, rule := range cfg.MappingRules {
+			log.Printf("Adding mapping rule: %s %s -> %s (priority: %d)",
+				rule.Type, rule.Pattern, rule.Repository, rule.Priority)
+			mapperInstance.AddRule(rule.Type, rule.Pattern, rule.Repository, rule.Priority)
+		}
+		pathMapper = &MapperAdapter{PathMapper: mapperInstance}
+	}
 
-		// Create the path mapper
-		pathMapper := mapper.New()
+	// Create package mapper or use provided
+	packageMapper = opts.PackageMapper
+	if packageMapper == nil {
+		packageMapper = mapper.NewPackageMapper()
+	}
 
-		// Create the backend manager
-		manager, err := backend.New(cfg, cacheInstance, pathMapper, pm)
+	// Create backend manager or use provided
+	backendManager = opts.BackendManager
+	if backendManager == nil {
+		manager, err := backend.New(cfg, cache.(backend.CacheProvider),
+			pathMapper.(backend.PathMapperProvider),
+			packageMapper.(backend.PackageMapperProvider))
 		if err != nil {
 			return nil, fmt.Errorf("failed to create backend manager: %w", err)
 		}
-
-		// Now call ourselves with all components
-		return New(cfg, manager, cacheInstance, pm)
+		backendManager = &BackendManagerAdapter{Manager: manager}
 	}
 
-	// Create the server with the provided components
+	// Create metrics collector or use provided
+	metricsCollector = opts.MetricsCollector
+	if metricsCollector == nil {
+		metricsCollector = &MetricsAdapter{Collector: metrics.New()}
+	}
+
+	// Create memory monitor or use provided
+	memoryMonitor = opts.MemoryMonitor
+	if memoryMonitor == nil {
+		monitor := NewMemoryMonitor(
+			cfg.MemoryHighWatermark,
+			cfg.MemoryCriticalWatermark,
+			func(pressure int) {
+				log.Printf("Memory pressure: %d", pressure)
+			})
+		memoryMonitor = &MemoryMonitorAdapter{MemoryMonitor: monitor}
+	}
+
+	// Create the server instance
 	s := &Server{
 		cfg:           cfg,
-		backend:       backendManager,
 		cache:         cache,
-		metrics:       metrics.New(), // Using the correct constructor
-		packageMapper: packageMapper, // Add this line
+		backend:       backendManager,
+		mapper:        pathMapper,
+		packageMapper: packageMapper,
+		metrics:       metricsCollector,
 		startTime:     time.Now(),
-		version:       "1.0.0",
-		logger:        log.New(os.Stdout, "apt-cacher-go: ", log.LstdFlags),
-		shutdownCh:    make(chan struct{}), // Initialize shutdown channel
+		version:       opts.Version,
+		memoryMonitor: memoryMonitor,
+		shutdownCh:    make(chan struct{}),
 	}
 
-	// Output configuration being used
-	fmt.Printf("Creating server with: Cache Directory: %s\n", cfg.CacheDir)
-
-	_, err := cfg.ParseCacheSize()
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse cache size: %v", err)
-	}
-	// Using s.cache instead of creating a new instance
-	s.cache = cache
-	if s.cache == nil {
-		return nil, fmt.Errorf("cache instance is nil")
+	// Configure logger
+	if opts.Logger != nil {
+		s.logger = log.New(opts.Logger, "apt-cacher-go: ", log.LstdFlags)
+	} else {
+		s.logger = log.New(os.Stdout, "apt-cacher-go: ", log.LstdFlags)
 	}
 
-	// Create advanced path mapper
-	m := mapper.New()
+	// Set up HTTP handlers
+	s.setupHTTPHandlers()
 
-	// Add default repositories if not disabled
-	addDefaultRepositories(cfg, m)
+	// Start the memory monitor
+	s.memoryMonitor.Start()
 
-	// Register custom mapping rules from config
-	for _, rule := range cfg.MappingRules {
-		fmt.Printf("Adding mapping rule: %s %s -> %s (priority: %d)\n",
-			rule.Type, rule.Pattern, rule.Repository, rule.Priority)
+	return s, nil
+}
 
-		switch rule.Type {
-		case "regex":
-			if err := m.AddRegexRule(rule.Pattern, rule.Repository, rule.Priority); err != nil {
-				log.Printf("Warning: Invalid regex rule %q: %v", rule.Pattern, err)
-			}
-		case "prefix":
-			m.AddPrefixRule(rule.Pattern, rule.Repository, rule.Priority)
-		case "exact":
-			m.AddExactRule(rule.Pattern, rule.Repository, rule.Priority)
-		case "rewrite":
-			if err := m.AddRewriteRule(rule.Pattern, rule.Repository, rule.RewriteRule, rule.Priority); err != nil {
-				log.Printf("Warning: Invalid rewrite rule %q: %v", rule.Pattern, err)
-			}
-		}
-	}
-	// Create backend
-	backendManager, err = backend.New(cfg, s.cache, m, s.packageMapper)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create backend manager: %w", err)
-	}
-	s.backend = backendManager
-
-	metricsCollector := metrics.New()
-	prometheusCollector := metrics.NewPrometheusCollector()
-
-	// Initialize ACL
-	acl, err := security.New(cfg.AllowedIPs)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize ACL: %w", err)
-	}
-
+// setupHTTPHandlers creates and configures all HTTP handlers
+func (s *Server) setupHTTPHandlers() {
 	// Create main HTTP handler
 	mainMux := http.NewServeMux()
-
-	// Create admin HTTP handler
-	adminMux := http.NewServeMux()
-
-	// Set server properties
-	s.mapper = m
-	s.metrics = metricsCollector
-	s.prometheus = prometheusCollector
-	s.acl = acl
-	s.httpServer = &http.Server{
-		Addr:    fmt.Sprintf("%s:%d", cfg.ListenAddress, cfg.Port),
-		Handler: acl.Middleware(mainMux),
-	}
 
 	// Register main handlers (non-admin routes)
 	mainMux.HandleFunc("/", s.wrapWithMetrics(s.handlePackageRequest))
 	mainMux.HandleFunc("/acng-report.html", s.wrapWithMetrics(s.handleReportRequest))
 
-	// Monitoring and health endpoints on main server
+	// Monitoring and health endpoints
 	mainMux.HandleFunc("/metrics", s.handleMetrics)
 	mainMux.HandleFunc("/health", s.handleHealth)
 	mainMux.HandleFunc("/ready", s.handleReady)
 
-	// Add HTTPS handler for CONNECT method
+	// Add HTTPS handler
 	mainMux.HandleFunc("/https/", s.wrapWithMetrics(s.handleHTTPSRequest))
 
 	// Add GPG key handler
 	mainMux.HandleFunc("/gpg/", s.ServeKey)
 
-	// Create and set up admin server if port is different from main port
-	if cfg.AdminPort > 0 && cfg.AdminPort != cfg.Port {
-		// Register admin routes on admin server
-		adminMux.HandleFunc("/", s.handleAdminAuth(s.adminDashboard))
-		adminMux.HandleFunc("/admin", s.handleAdminAuth(s.adminDashboard))
-		adminMux.HandleFunc("/admin/", s.handleAdminAuth(s.adminDashboard))
-		adminMux.HandleFunc("/admin/clearcache", s.handleAdminAuth(s.adminClearCache))
-		adminMux.HandleFunc("/admin/flushexpired", s.handleAdminAuth(s.adminFlushExpired))
-		adminMux.HandleFunc("/admin/stats", s.handleAdminAuth(s.adminGetStats))
-		adminMux.HandleFunc("/admin/search", s.handleAdminAuth(s.adminSearchCache))
-		adminMux.HandleFunc("/admin/cache", s.handleAdminAuth(s.adminCachePackage))
-		adminMux.HandleFunc("/admin/cleanup-memory", s.handleAdminAuth(s.adminForceMemoryCleanup))
-		adminMux.HandleFunc("/admin/cleanup-prefetcher", s.handleAdminAuth(s.adminCleanupPrefetcher))
+	// Setup main HTTP server
+	s.httpServer = &http.Server{
+		Addr:    fmt.Sprintf("%s:%d", s.cfg.ListenAddress, s.cfg.Port),
+		Handler: s.acl.Middleware(mainMux),
+	}
+
+	// Setup admin routes
+	s.setupAdminHandlers(mainMux)
+
+	// Setup HTTPS server if configured
+	s.setupHTTPSServer(mainMux)
+}
+
+// setupAdminHandlers configures admin-related HTTP handlers
+func (s *Server) setupAdminHandlers(mainMux *http.ServeMux) {
+	// Create admin HTTP handler
+	adminMux := http.NewServeMux()
+
+	// Admin dashboard and related endpoints
+	adminHandlers := map[string]http.HandlerFunc{
+		"/":                         s.adminDashboard,
+		"/admin":                    s.adminDashboard,
+		"/admin/":                   s.adminDashboard,
+		"/admin/clearcache":         s.adminClearCache,
+		"/admin/flushexpired":       s.adminFlushExpired,
+		"/admin/stats":              s.adminGetStats,
+		"/admin/search":             s.adminSearchCache,
+		"/admin/cache":              s.adminCachePackage,
+		"/admin/cleanup-memory":     s.adminForceMemoryCleanup,
+		"/admin/cleanup-prefetcher": s.adminCleanupPrefetcher,
+	}
+
+	// Check if admin port is different
+	if s.cfg.AdminPort > 0 && s.cfg.AdminPort != s.cfg.Port {
+		// Register admin routes on separate admin server
+		for path, handler := range adminHandlers {
+			adminMux.HandleFunc(path, s.handleAdminAuth(handler))
+		}
 
 		// Create admin server
 		s.adminServer = &http.Server{
-			Addr:    fmt.Sprintf("%s:%d", cfg.ListenAddress, cfg.AdminPort),
-			Handler: acl.Middleware(adminMux),
+			Addr:    fmt.Sprintf("%s:%d", s.cfg.ListenAddress, s.cfg.AdminPort),
+			Handler: s.acl.Middleware(adminMux),
 		}
 
-		log.Printf("Admin interface will be available at http://%s:%d/",
-			cfg.ListenAddress, cfg.AdminPort)
+		s.logger.Printf("Admin interface will be available at http://%s:%d/",
+			s.cfg.ListenAddress, s.cfg.AdminPort)
 	} else {
-		// If admin port is same as main port or not configured,
-		// add admin routes to main server
-		mainMux.HandleFunc("/admin", s.handleAdminAuth(s.adminDashboard))
-		mainMux.HandleFunc("/admin/", s.handleAdminAuth(s.adminDashboard))
-		mainMux.HandleFunc("/admin/clearcache", s.handleAdminAuth(s.adminClearCache))
-		mainMux.HandleFunc("/admin/flushexpired", s.handleAdminAuth(s.adminFlushExpired))
-		mainMux.HandleFunc("/admin/stats", s.handleAdminAuth(s.adminGetStats))
-		mainMux.HandleFunc("/admin/search", s.handleAdminAuth(s.adminSearchCache))
-		mainMux.HandleFunc("/admin/cleanup-memory", s.handleAdminAuth(s.adminForceMemoryCleanup))
+		// Register admin routes on main server
+		for path, handler := range adminHandlers {
+			mainMux.HandleFunc(path, s.handleAdminAuth(handler))
+		}
 
-		log.Printf("Admin interface will be available at http://%s:%d/admin",
-			cfg.ListenAddress, cfg.Port)
+		s.logger.Printf("Admin interface will be available at http://%s:%d/admin",
+			s.cfg.ListenAddress, s.cfg.Port)
 	}
+}
 
-	// If TLS is configured, set up HTTPS server
-	if cfg.TLSEnabled && cfg.TLSCert != "" && cfg.TLSKey != "" {
+// setupHTTPSServer configures HTTPS server if enabled
+func (s *Server) setupHTTPSServer(mainMux *http.ServeMux) {
+	if s.cfg.TLSEnabled && s.cfg.TLSCert != "" && s.cfg.TLSKey != "" {
 		tlsConfig := &tls.Config{
 			MinVersion: tls.VersionTLS12,
 			CipherSuites: []uint16{
@@ -221,57 +237,27 @@ func New(cfg *config.Config, backendManager *backend.Manager, cache *cachelib.Ca
 		}
 
 		s.httpsServer = &http.Server{
-			Addr:      fmt.Sprintf("%s:%d", cfg.ListenAddress, cfg.TLSPort),
-			Handler:   acl.Middleware(mainMux),
+			Addr:      fmt.Sprintf("%s:%d", s.cfg.ListenAddress, s.cfg.TLSPort),
+			Handler:   s.acl.Middleware(mainMux),
 			TLSConfig: tlsConfig,
 		}
 	}
-
-	// Create memory monitor
-	memoryMonitor := NewMemoryMonitor(1024, 2048, func(pressure int) {
-		// Take action when memory pressure is high
-		if pressure > 95 {
-			// Clear caches to reduce memory pressure
-			log.Printf("Critical memory pressure (%d%%), clearing caches", pressure)
-			if packageMapper != nil {
-				packageMapper.ClearCache()
-			}
-
-			// Force prefetcher cleanup
-			if s.backend != nil {
-				s.backend.ForceCleanupPrefetcher()
-			}
-
-			// Force garbage collection
-			runtime.GC()
-		}
-	})
-	memoryMonitor.Start()
-
-	// Store in server instance
-	s.memoryMonitor = memoryMonitor
-
-	return s, nil
 }
 
-// Start begins listening for HTTP requests
-func (s *Server) Start() error {
+// StartWithContext begins listening for HTTP requests with the provided context
+func (s *Server) StartWithContext(ctx context.Context) error {
 	var startErr error
 
 	s.startOnce.Do(func() {
-		// Initialize components in the main thread before starting server
-		if s.memoryMonitor == nil {
-			s.memoryMonitor = NewMemoryMonitor(1024, 2048, func(pressure int) {
-				s.handleHighMemoryPressure(float64(pressure) / 100)
-			})
-			s.memoryMonitor.Start()
-		}
+		// Create context for server operations
+		serverCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
 
-		// Now start HTTP servers in goroutines
+		// Start the HTTP server
 		go func() {
-			log.Printf("Starting HTTP server on %s", s.httpServer.Addr)
+			s.logger.Printf("Starting HTTP server on %s", s.httpServer.Addr)
 			if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Printf("HTTP server error: %v", err)
+				s.logger.Printf("HTTP server error: %v", err)
 				startErr = err
 			}
 		}()
@@ -279,9 +265,9 @@ func (s *Server) Start() error {
 		// Start HTTPS server if configured
 		if s.httpsServer != nil {
 			go func() {
-				log.Printf("Starting HTTPS server on %s", s.httpsServer.Addr)
+				s.logger.Printf("Starting HTTPS server on %s", s.httpsServer.Addr)
 				if err := s.httpsServer.ListenAndServeTLS(s.cfg.TLSCert, s.cfg.TLSKey); err != nil && err != http.ErrServerClosed {
-					log.Printf("HTTPS server error: %v", err)
+					s.logger.Printf("HTTPS server error: %v", err)
 				}
 			}()
 		}
@@ -289,76 +275,107 @@ func (s *Server) Start() error {
 		// Start the admin server if configured separately
 		if s.adminServer != nil && s.cfg.AdminPort != s.cfg.Port {
 			go func() {
-				log.Printf("Admin interface will be available at http://%s/admin", s.adminServer.Addr)
+				s.logger.Printf("Starting admin server on %s", s.adminServer.Addr)
 				if err := s.adminServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-					log.Printf("Admin server error: %v", err)
+					s.logger.Printf("Admin server error: %v", err)
 				}
 			}()
 		}
 
 		// Warm up the cache in the background
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel() // Make sure to call cancel to avoid context leak
-		s.backend.PrefetchOnStartup(ctx)
+		s.backend.PrefetchOnStartup(serverCtx)
+
+		// Wait for shutdown signal
+		<-serverCtx.Done()
+		s.Shutdown()
 	})
 
 	return startErr
 }
 
-// Shutdown gracefully stops the server
+// Start begins listening for HTTP requests
+func (s *Server) Start() error {
+	return s.StartWithContext(context.Background())
+}
+
+// Shutdown safely shuts down the server and all components
 func (s *Server) Shutdown() error {
 	var err error
 
-	// Use shutdownOnce with a timeout to avoid deadlocks
+	// Use sync.Once to ensure we only shutdown once
 	s.shutdownOnce.Do(func() {
-		log.Printf("Shutting down server...")
+		s.logger.Println("Shutting down server...")
 
-		// Create context with timeout for shutdown
+		// Signal all goroutines to stop
+		close(s.shutdownCh)
+
+		// Create context with timeout for HTTP servers
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		// Close the shutdown channel first to signal other goroutines
-		close(s.shutdownCh)
-
-		// Shutdown HTTP server with timeout
+		// Shutdown HTTP servers first
+		var httpErr, httpsErr, adminErr error
 		if s.httpServer != nil {
-			if err := s.httpServer.Shutdown(ctx); err != nil {
-				log.Printf("HTTP server shutdown error: %v", err)
-			}
+			httpErr = s.httpServer.Shutdown(ctx)
 		}
-
-		// Shutdown HTTPS server with timeout
 		if s.httpsServer != nil {
-			if err := s.httpsServer.Shutdown(ctx); err != nil {
-				log.Printf("HTTPS server shutdown error: %v", err)
-			}
+			httpsErr = s.httpsServer.Shutdown(ctx)
 		}
-
-		// Shutdown admin server with timeout
 		if s.adminServer != nil {
-			if err := s.adminServer.Shutdown(ctx); err != nil {
-				log.Printf("Admin server shutdown error: %v", err)
-			}
+			adminErr = s.adminServer.Shutdown(ctx)
 		}
 
-		// Shutdown the cache with timeout
+		// Shutdown backend components
+		if s.backend != nil {
+			s.backend.ForceCleanupPrefetcher()
+		}
+
+		// Stop memory monitor
+		if s.memoryMonitor != nil {
+			s.memoryMonitor.Stop()
+		}
+
+		// Safely close the cache with timeout to prevent deadlocks
 		if s.cache != nil {
-			// Use a timeout for cache close to avoid deadlocks
-			cacheDone := make(chan struct{})
-			go func() {
-				s.cache.Close()
-				close(cacheDone)
-			}()
+			// See if cache implements a Close method
+			if closer, ok := s.cache.(interface{ Close() error }); ok {
+				// Create a timeout context for cache closing
+				closeCtx, closeCancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer closeCancel()
 
-			select {
-			case <-cacheDone:
-				// Cache closed successfully
-			case <-time.After(2 * time.Second):
-				log.Printf("Warning: Cache close timed out")
+				// Channel to signal when cache is closed
+				done := make(chan struct{})
+				var closeErr error
+
+				// Close cache in a goroutine
+				go func() {
+					defer close(done)
+					closeErr = closer.Close()
+				}()
+
+				// Wait for either closure or timeout
+				select {
+				case <-done:
+					// Cache closed successfully
+					if closeErr != nil {
+						s.logger.Printf("Error closing cache: %v", closeErr)
+					}
+				case <-closeCtx.Done():
+					s.logger.Println("Warning: Cache close operation timed out")
+				}
 			}
 		}
 
-		log.Printf("Server shutdown complete")
+		// Combine errors
+		if httpErr != nil {
+			err = httpErr
+		} else if httpsErr != nil {
+			err = httpsErr
+		} else if adminErr != nil {
+			err = adminErr
+		}
+
+		s.logger.Println("Server shutdown complete")
 	})
 
 	return err
@@ -483,94 +500,75 @@ func (s *Server) handlePackageRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Extract request information
 	requestPath := r.URL.Path
-
-	// Start timing the request
-	start := time.Now()
 	clientIP := extractClientIP(r)
 
-	// Use mutex when accessing packageMapper
+	// Check for conditional request
+	if r.Header.Get("If-Modified-Since") != "" {
+		if s.handleConditionalRequest(w, r, requestPath) {
+			return // Request was handled conditionally
+		}
+	}
+
+	// Record client information
 	s.mutex.Lock()
+	s.metrics.SetLastClientIP(clientIP)
+	// Get package name for metrics and logging
 	packageName := ""
 	if s.packageMapper != nil {
 		packageName = s.packageMapper.GetPackageNameForHash(requestPath)
-	}
-	s.mutex.Unlock()
-
-	defer func() {
-		// Use mutex when updating metrics
-		s.mutex.Lock()
-		s.metrics.RecordRequest(requestPath, time.Since(start), clientIP, packageName)
-		s.mutex.Unlock()
-	}()
-
-	log.Printf("Request: %s %s", r.Method, requestPath)
-
-	// Check for special APT-specific request headers
-	if r.Header.Get("If-Modified-Since") != "" {
-		// Fixed: Use correct Cache.Get() method parameters and return values
-		data, err := s.cache.Get(requestPath)
-		if err == nil && len(data) > 0 {
-			// We have the file in cache, parse the If-Modified-Since header
-			modTime, err := time.Parse(http.TimeFormat, r.Header.Get("If-Modified-Since"))
-			if err == nil {
-				// Get metadata information about the cached file
-				// Fixed: Don't use os.Stat directly on cache data
-				fileModTime := s.cache.GetLastModified(requestPath)
-				if !fileModTime.IsZero() && !fileModTime.After(modTime) {
-					// File hasn't been modified since the specified time
-					w.WriteHeader(http.StatusNotModified)
-					return
-				}
-			}
+		// Send package name to metrics if available
+		if packageName != "" {
+			s.metrics.RecordPackageAccess(packageName)
 		}
-		// If we don't have the file or it's modified, continue with normal flow
 	}
-
-	// Get client IP
-	clientIP = r.RemoteAddr
-	if idx := strings.LastIndex(clientIP, ":"); idx != -1 {
-		clientIP = clientIP[:idx] // Strip port number if present
-	}
-
-	// Update last client IP with mutex protection
-	s.mutex.Lock()
-	s.metrics.SetLastClientIP(clientIP)
 	s.mutex.Unlock()
 
-	// Fetch the package
+	// Fetch the package data
 	data, err := s.backend.Fetch(requestPath)
 	if err != nil {
-		log.Printf("Error fetching %s: %v", requestPath, err)
+		s.logger.Printf("Error fetching %s: %v", requestPath, err)
 		http.Error(w, "Package not found", http.StatusNotFound)
 		return
 	}
 
-	// Update last file size with mutex protection
+	// Update last file size
 	s.mutex.Lock()
 	s.metrics.SetLastFileSize(int64(len(data)))
 	s.mutex.Unlock()
 
-	// Determine content type
-	contentType := getContentType(requestPath)
-
-	// Set headers
-	w.Header().Set("Content-Type", contentType)
+	// Set response headers
+	w.Header().Set("Content-Type", getContentType(requestPath))
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
 
-	// Add cache control headers for browsers/proxies
+	// Add cache control headers
 	if isIndexFile(requestPath) {
-		// Index files expire sooner
 		w.Header().Set("Cache-Control", "max-age=1800") // 30 minutes
 	} else {
-		// Package files can be cached longer
 		w.Header().Set("Cache-Control", "max-age=2592000") // 30 days
 	}
 
 	// Send the response
 	if _, err := w.Write(data); err != nil {
-		log.Printf("Error writing package data: %v", err)
+		s.logger.Printf("Error writing package data: %v", err)
 	}
+}
+
+// handleConditionalRequest handles If-Modified-Since requests
+func (s *Server) handleConditionalRequest(w http.ResponseWriter, r *http.Request, path string) bool {
+	data, err := s.cache.Get(path)
+	if err == nil && len(data) > 0 {
+		modTime, err := time.Parse(http.TimeFormat, r.Header.Get("If-Modified-Since"))
+		if err == nil {
+			fileModTime := s.cache.GetLastModified(path)
+			if !fileModTime.IsZero() && !fileModTime.After(modTime) {
+				w.WriteHeader(http.StatusNotModified)
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // getContentType determines the content type based on the file extension
