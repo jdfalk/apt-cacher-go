@@ -2,6 +2,7 @@ package backend
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -17,12 +18,6 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
-
-// // Fix unused parameters in mock function by using underscore prefix
-// var httpFetch = func(_ context.Context, _ string, _ any) ([]byte, error) {
-// 	// Properly implemented empty mock function that ignores parameters
-// 	return []byte("mock data"), nil
-// }
 
 // MockCache implements mock functionality for testing
 type MockCache struct {
@@ -131,6 +126,7 @@ SHA256: 21f19637588d829b4ec43420b371dbcb63e557eacd8cedd55c9916c3e07f30de
 Description: Interactive high-level object-oriented language (version 3.9)
 `
 
+// Properly fix TestProcessPackagesFile to use setupBackendTestMocks
 func TestProcessPackagesFile(t *testing.T) {
 	// Create a temporary directory for the cache
 	tempDir, err := os.MkdirTemp("", "backend-test")
@@ -141,6 +137,9 @@ func TestProcessPackagesFile(t *testing.T) {
 	mockCache := new(MockCache)
 	mockMapper := new(MockMapper)
 	mockPackageMapper := new(MockPackageMapper)
+
+	// Set up common mock expectations first
+	setupBackendTestMocks(mockCache, mockMapper, mockPackageMapper)
 
 	// Create config
 	cfg := &config.Config{
@@ -164,16 +163,17 @@ func TestProcessPackagesFile(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, len(packages))
 
+	// Override the common expectations with specific ones for this test
 	// Expect the package index to be updated
 	mockCache.On("UpdatePackageIndex", mock.MatchedBy(func(pkgs []parser.PackageInfo) bool {
 		return len(pkgs) == 2 &&
 			(pkgs[0].Package == "nginx" || pkgs[1].Package == "nginx") &&
 			(pkgs[0].Package == "python3.9" || pkgs[1].Package == "python3.9")
-	})).Return(nil)
+	})).Return(nil).Once() // Use Once() to ensure this specific call happens
 
 	// Expect hash mappings to be added for SHA256 values
-	mockPackageMapper.On("AddHashMapping", "8e4565d1b45eaf04b98c814ddda511ee5a1f80e50568009f24eec817a7797052", "nginx").Return()
-	mockPackageMapper.On("AddHashMapping", "21f19637588d829b4ec43420b371dbcb63e557eacd8cedd55c9916c3e07f30de", "python3.9").Return()
+	mockPackageMapper.On("AddHashMapping", "8e4565d1b45eaf04b98c814ddda511ee5a1f80e50568009f24eec817a7797052", "nginx").Return().Once()
+	mockPackageMapper.On("AddHashMapping", "21f19637588d829b4ec43420b371dbcb63e557eacd8cedd55c9916c3e07f30de", "python3.9").Return().Once()
 
 	// Test repository and path
 	repo := "test-repo"
@@ -199,7 +199,7 @@ func TestProcessPackagesFile(t *testing.T) {
 		},
 	}
 
-	mockCache.On("SearchByPackageName", "nginx").Return(expectedResults, nil)
+	mockCache.On("SearchByPackageName", "nginx").Return(expectedResults, nil).Once()
 
 	results, err := mockCache.SearchByPackageName("nginx")
 	require.NoError(t, err)
@@ -261,11 +261,15 @@ func CreateMockBackendManager(manager *Manager) *Manager {
 	return manager
 }
 
+// Fix TestFetchFromBackend
 func TestFetchFromBackend(t *testing.T) {
 	// Create mock components
 	mockCache := new(MockCache)
 	mockMapper := new(MockMapper)
 	mockPackageMapper := new(MockPackageMapper)
+
+	// Set up common mock expectations
+	setupBackendTestMocks(mockCache, mockMapper, mockPackageMapper)
 
 	// Create config with multiple backends
 	cfg := &config.Config{
@@ -284,20 +288,20 @@ func TestFetchFromBackend(t *testing.T) {
 	// Set up test data
 	testPath := "/debian/pool/main/n/nginx/nginx_1.18.0-6_amd64.deb"
 
-	// Set up expectations
+	// Set up specific expectations - override the generic ones
 	// 1. Mapper will map the path
 	mockMapper.On("MapPath", testPath).Return(mapper.MappingResult{
 		Repository: "debian",
 		RemotePath: "pool/main/n/nginx/nginx_1.18.0-6_amd64.deb",
 		CachePath:  "debian/pool/main/n/nginx/nginx_1.18.0-6_amd64.deb",
 		IsIndex:    false,
-	}, nil)
+	}, nil).Once()
 
 	// 2. Cache will be checked but won't have the file
-	mockCache.On("Get", "debian/pool/main/n/nginx/nginx_1.18.0-6_amd64.deb").Return(nil, os.ErrNotExist)
+	mockCache.On("Get", "debian/pool/main/n/nginx/nginx_1.18.0-6_amd64.deb").Return(nil, os.ErrNotExist).Once()
 
 	// 3. Cache will store the fetched file
-	mockCache.On("PutWithExpiration", "debian/pool/main/n/nginx/nginx_1.18.0-6_amd64.deb", []byte("mock package data"), mock.Anything).Return(nil)
+	mockCache.On("PutWithExpiration", "debian/pool/main/n/nginx/nginx_1.18.0-6_amd64.deb", []byte("mock package data"), mock.Anything).Return(nil).Once()
 
 	// Create a testable version of the manager with our custom backend behavior
 	testManager := CreateMockBackendManager(manager)
@@ -419,11 +423,18 @@ func TestProcessReleaseFile(t *testing.T) {
 	mockCache.AssertExpectations(t)
 }
 
+// Fix TestShutdown
 func TestShutdown(t *testing.T) {
 	// Create mock components
 	mockCache := new(MockCache)
 	mockMapper := new(MockMapper)
 	mockPackageMapper := new(MockPackageMapper)
+
+	// Set up common mock expectations
+	setupBackendTestMocks(mockCache, mockMapper, mockPackageMapper)
+
+	// Add specific Close expectation for proper shutdown
+	mockCache.On("Close").Return(nil).Maybe()
 
 	// Create config
 	cfg := &config.Config{
@@ -451,6 +462,11 @@ func TestShutdown(t *testing.T) {
 	case <-time.After(1 * time.Second):
 		t.Fatal("Shutdown timed out")
 	}
+
+	// Verify expectations
+	mockCache.AssertExpectations(t)
+	mockMapper.AssertExpectations(t)
+	mockPackageMapper.AssertExpectations(t)
 }
 
 // setupBackendTestMocks sets up common mock expectations to avoid "unexpected call" errors
@@ -460,6 +476,9 @@ func setupBackendTestMocks(mockCache *MockCache, mockMapper *MockMapper, mockPac
 	mockCache.On("Put", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockCache.On("PutWithExpiration", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockCache.On("UpdatePackageIndex", mock.Anything).Return(nil).Maybe()
+	mockCache.On("IsFresh", mock.Anything).Return(false).Maybe()
+	mockCache.On("Exists", mock.Anything).Return(false).Maybe()
+	mockCache.On("GetStats").Return(cache.CacheStats{}).Maybe()
 
 	// Common mapper expectations
 	mockMapper.On("MapPath", mock.Anything).Return(mapper.MappingResult{
@@ -467,9 +486,96 @@ func setupBackendTestMocks(mockCache *MockCache, mockMapper *MockMapper, mockPac
 		RemotePath: "path/to/file",
 		CachePath:  "test-repo/path/to/file",
 		IsIndex:    false,
+		Rule:       nil,
 	}, nil).Maybe()
 
 	// Common package mapper expectations
 	mockPackageMapper.On("AddHashMapping", mock.Anything, mock.Anything).Maybe()
 	mockPackageMapper.On("GetPackageNameForHash", mock.Anything).Return("").Maybe()
+}
+
+// Add a test for error cases in Fetch
+func TestFetchWithErrors(t *testing.T) {
+	// Create mock components
+	mockCache := new(MockCache)
+	mockMapper := new(MockMapper)
+	mockPackageMapper := new(MockPackageMapper)
+
+	// Set up common mock expectations
+	setupBackendTestMocks(mockCache, mockMapper, mockPackageMapper)
+
+	// Create config
+	cfg := &config.Config{
+		CacheDir: t.TempDir(),
+		Backends: []config.Backend{
+			{Name: "test-repo", URL: "http://example.com", Priority: 100},
+		},
+		MaxConcurrentDownloads: 2,
+	}
+
+	// Set up manager with mocks
+	manager, err := New(cfg, mockCache, mockMapper, mockPackageMapper)
+	require.NoError(t, err)
+
+	// Set up test data
+	testPath := "/test-repo/nonexistent/file.deb"
+
+	// Set specific expectations for the error case
+	mockMapper.On("MapPath", testPath).Return(mapper.MappingResult{
+		Repository: "test-repo",
+		RemotePath: "nonexistent/file.deb",
+		CachePath:  "test-repo/nonexistent/file.deb",
+		IsIndex:    false,
+	}, nil).Once()
+
+	// Mock cache miss
+	mockCache.On("Get", "test-repo/nonexistent/file.deb").Return(nil, os.ErrNotExist).Once()
+
+	// Create a test HTTP client that returns errors
+	testClient := &http.Client{
+		Transport: &errorTransport{},
+	}
+
+	// Set the client for the manager
+	manager.client = testClient
+
+	// Set the client for all backends
+	for _, backend := range manager.backends {
+		backend.client = testClient
+	}
+
+	// Call the method being tested - should return an error
+	_, err = manager.Fetch(testPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "simulated error")
+
+	// Test cached data fallback
+	testPathWithCache := "/test-repo/cached/file.deb"
+	cachedData := []byte("cached data")
+
+	mockMapper.On("MapPath", testPathWithCache).Return(mapper.MappingResult{
+		Repository: "test-repo",
+		RemotePath: "cached/file.deb",
+		CachePath:  "test-repo/cached/file.deb",
+		IsIndex:    false,
+	}, nil).Once()
+
+	// This time we have cached data
+	mockCache.On("Get", "test-repo/cached/file.deb").Return(cachedData, nil).Once()
+
+	// Call Fetch - should return cached data despite download error
+	data, err := manager.Fetch(testPathWithCache)
+	require.NoError(t, err)
+	assert.Equal(t, cachedData, data)
+
+	// Verify expectations
+	mockMapper.AssertExpectations(t)
+	mockCache.AssertExpectations(t)
+}
+
+// Add a transport that simulates network errors for testing
+type errorTransport struct{}
+
+func (e *errorTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return nil, fmt.Errorf("simulated error for testing")
 }
