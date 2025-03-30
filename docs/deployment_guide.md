@@ -16,17 +16,20 @@ This guide covers various deployment options and configurations for apt-cacher-g
 ### From Source
 
 1. Clone the repository:
+
    ```
    git clone https://github.com/jdfalk/apt-cacher-go.git
    cd apt-cacher-go
    ```
 
 2. Build the binary:
+
    ```
    go build -o apt-cacher-go cmd/main.go
    ```
 
 3. Install to system:
+
    ```
    sudo mv apt-cacher-go /usr/local/bin/
    sudo mkdir -p /var/cache/apt-cacher-go
@@ -34,6 +37,7 @@ This guide covers various deployment options and configurations for apt-cacher-g
    ```
 
 4. Create configuration:
+
    ```
    sudo cp examples/config.yaml /etc/apt-cacher-go/config.yaml
    ```
@@ -41,11 +45,13 @@ This guide covers various deployment options and configurations for apt-cacher-g
 ### Using Docker
 
 1. Build Docker image:
+
    ```
    docker build -t apt-cacher-go .
    ```
 
 2. Run container:
+
    ```
    docker run -d --name apt-cacher-go \
      -p 3142:3142 \
@@ -175,6 +181,6 @@ RUN echo 'Acquire::http::Proxy "http://apt-cacher-server:3142";' > /etc/apt/apt.
 
 Access the built-in monitoring tools:
 
-- Admin interface: http://apt-cacher-server:3142/admin
-- Health check: http://apt-cacher-server:3142/health
-- Prometheus metrics: http://apt-cacher-server:3142/metrics
+- Admin interface: <http://apt-cacher-server:3142/admin>
+- Health check: <http://apt-cacher-server:3142/health>
+- Prometheus metrics: <http://apt-cacher-server:3142/metrics>
