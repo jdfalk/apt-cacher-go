@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -119,6 +120,11 @@ func New(cfg *config.Config, cache CacheProvider, mapper PathMapperProvider, pac
 		}
 
 		m.prefetcher = NewPrefetcher(m, maxConcurrent, cfg.Prefetch.Architectures)
+
+		// Set batch size if specified in config
+		if cfg.Prefetch.BatchSize > 0 {
+			m.prefetcher.SetBatchSize(cfg.Prefetch.BatchSize)
+		}
 	}
 
 	// Start the download queue with the handler function
@@ -512,5 +518,25 @@ func (m *Manager) PrefetchOnStartup(ctx context.Context) {
 		m.prefetcher.RunStartupPrefetch(ctx)
 	} else {
 		log.Printf("Prefetcher not initialized, skipping startup prefetch")
+	}
+}
+
+func (m *Manager) createHTTPClient() *http.Client {
+	// Create a transport with more conservative settings
+	transport := &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+		DisableCompression:  false,
+		Dial: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).Dial,
+		TLSHandshakeTimeout: 10 * time.Second,
+	}
+
+	return &http.Client{
+		Transport: transport,
+		Timeout:   60 * time.Second,
 	}
 }
