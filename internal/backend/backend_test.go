@@ -340,6 +340,9 @@ func TestProcessReleaseFile(t *testing.T) {
 	mockMapper := new(MockMapper)
 	mockPackageMapper := new(MockPackageMapper)
 
+	// Set up common mock expectations
+	setupBackendTestMocks(mockCache, mockMapper, mockPackageMapper)
+
 	// Create config
 	cfg := &config.Config{
 		CacheDir: t.TempDir(),
@@ -356,23 +359,23 @@ func TestProcessReleaseFile(t *testing.T) {
 
 	// Simple Release file content
 	releaseContent := `Origin: Ubuntu
-Label: Ubuntu
-Suite: focal
-Version: 20.04
-Codename: focal
-Date: Thu, 23 Apr 2020 17:33:17 UTC
-Architectures: amd64 arm64 armhf i386 ppc64el riscv64 s390x
-Components: main restricted universe multiverse
-Description: Ubuntu Focal 20.04 LTS
-MD5Sum:
- d933e72fb8d63c0941813a59fee3acab 122502 main/binary-amd64/Packages
- 3f23fd0d1a861be7c95813d4b5bb2689 37504 main/binary-amd64/Packages.gz
-SHA1:
- 5eaad1c6ade385c8b8c5d8ddb7d85433be836291 122502 main/binary-amd64/Packages
- 3cb8e2e869835f2dd6694c196be48477c8778e79 37504 main/binary-amd64/Packages.gz
-SHA256:
- d42e8455751a4c4a0c9d5af78f2acb58b7c7a11b72a478864a9c5b1db9fc9579 122502 main/binary-amd64/Packages
- 3e5b4daf0a1281f1465c2540aaa105b9efd5f5dac2226df0881e0f13863579ea 37504 main/binary-amd64/Packages.gz`
+	Label: Ubuntu
+	Suite: focal
+	Version: 20.04
+	Codename: focal
+	Date: Thu, 23 Apr 2020 17:33:17 UTC
+	Architectures: amd64 arm64 armhf i386 ppc64el riscv64 s390x
+	Components: main restricted universe multiverse
+	Description: Ubuntu Focal 20.04 LTS
+	MD5Sum:
+	 d933e72fb8d63c0941813a59fee3acab 122502 main/binary-amd64/Packages
+	 3f23fd0d1a861be7c95813d4b5bb2689 37504 main/binary-amd64/Packages.gz
+	SHA1:
+	 5eaad1c6ade385c8b8c5d8ddb7d85433be836291 122502 main/binary-amd64/Packages
+	 3cb8e2e869835f2dd6694c196be48477c8778e79 37504 main/binary-amd64/Packages.gz
+	SHA256:
+	 d42e8455751a4c4a0c9d5af78f2acb58b7c7a11b72a478864a9c5b1db9fc9579 122502 main/binary-amd64/Packages
+	 3e5b4daf0a1281f1465c2540aaa105b9efd5f5dac2226df0881e0f13863579ea 37504 main/binary-amd64/Packages.gz`
 
 	// Instead of monkey patching httpFetch, override the manager.Fetch method for testing
 	// Create a wrapped manager with our custom Fetch implementation
@@ -448,4 +451,25 @@ func TestShutdown(t *testing.T) {
 	case <-time.After(1 * time.Second):
 		t.Fatal("Shutdown timed out")
 	}
+}
+
+// setupBackendTestMocks sets up common mock expectations to avoid "unexpected call" errors
+func setupBackendTestMocks(mockCache *MockCache, mockMapper *MockMapper, mockPackageMapper *MockPackageMapper) {
+	// Common cache expectations
+	mockCache.On("Get", mock.Anything).Return(nil, os.ErrNotExist).Maybe()
+	mockCache.On("Put", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockCache.On("PutWithExpiration", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockCache.On("UpdatePackageIndex", mock.Anything).Return(nil).Maybe()
+
+	// Common mapper expectations
+	mockMapper.On("MapPath", mock.Anything).Return(mapper.MappingResult{
+		Repository: "test-repo",
+		RemotePath: "path/to/file",
+		CachePath:  "test-repo/path/to/file",
+		IsIndex:    false,
+	}, nil).Maybe()
+
+	// Common package mapper expectations
+	mockPackageMapper.On("AddHashMapping", mock.Anything, mock.Anything).Maybe()
+	mockPackageMapper.On("GetPackageNameForHash", mock.Anything).Return("").Maybe()
 }
