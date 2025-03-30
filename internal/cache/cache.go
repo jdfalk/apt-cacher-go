@@ -294,7 +294,7 @@ func (c *Cache) Stats() (int64, int64, int64, int64) {
 }
 
 // GetStats returns detailed cache statistics
-func (c *Cache) GetStats() (*CacheStats, error) {
+func (c *Cache) GetStats() CacheStats {
 	c.mutex.RLock()
 	itemCount := len(c.items)
 	currentSize := c.currentSize
@@ -314,7 +314,7 @@ func (c *Cache) GetStats() (*CacheStats, error) {
 		missRate = float64(missCount) / float64(totalRequests)
 	}
 
-	stats := &CacheStats{
+	stats := CacheStats{
 		CurrentSize: currentSize,
 		MaxSize:     c.maxSize,
 		Items:       itemCount,
@@ -324,7 +324,7 @@ func (c *Cache) GetStats() (*CacheStats, error) {
 		Misses:      missCount,
 	}
 
-	return stats, nil
+	return stats
 }
 
 // Size returns the current cache size
