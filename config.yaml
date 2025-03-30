@@ -8,7 +8,7 @@ tls_enabled: false
 tls_port: 3144
 tls_cert: "/etc/apt-cacher-go/cert.pem"
 tls_key: "/etc/apt-cacher-go/key.pem"
-log_file: "/var/log/apt-cacher-go.log"
+log_file: "/var/log/apt-cacher-go/apt-cacher-go.log"
 log_level: "info"
 
 # Cache configuration
@@ -42,7 +42,7 @@ architectures:
   - amd64
   - i386
 
-# Default repositories
+# Default repositories - set to false if you want to specify only custom repositories
 disable_default_repos: false
 
 # Key management configuration
@@ -54,20 +54,42 @@ key_management:
     - "hkp://keyserver.ubuntu.com:80"
     - "hkp://keys.gnupg.net:80"
     - "hkp://pool.sks-keyservers.net:80"
-  key_dir: "keys"
+  key_dir: "/var/cache/apt-cacher-go/keys" # Use absolute path, not relative
   key_length: 4096
 
-# New prefetch configuration structure
+# Prefetch configuration
 prefetch:
   enabled: true
-  max_concurrent: 20
+  max_concurrent: 10 # Reduced from 20 to prevent too many concurrent requests
+  skip_notfound: true # Skip files that returned 404
+  retry_limit: 1 # Only retry failed downloads once
+  fail_cache_ttl: "24h" # Remember failed URLs for 24 hours
   architectures:
     - amd64
-    - i386
   warmup_on_startup: true
 
-# Repository backends
+# Standard repository backends (will be added automatically if missing)
 backends:
+  # Standard repositories
+  - name: "ubuntu-archive"
+    url: "http://archive.ubuntu.com/ubuntu"
+    priority: 100
+  - name: "ubuntu-security"
+    url: "http://security.ubuntu.com/ubuntu"
+    priority: 95
+  - name: "debian"
+    url: "http://deb.debian.org/debian"
+    priority: 90
+  - name: "debian-security"
+    url: "http://security.debian.org/debian-security"
+    priority: 85
+  - name: "debian-backports"
+    url: "http://deb.debian.org/debian-backports"
+    priority: 80
+  - name: "ubuntu-ports"
+    url: "http://ports.ubuntu.com/ubuntu-ports"
+    priority: 75
+  # Third-party repositories
   - name: "docker"
     url: "http://download.docker.com/linux/ubuntu"
     priority: 60
@@ -84,26 +106,52 @@ backends:
     url: "http://hwraid.le-vert.net/ubuntu"
     priority: 40
 
-# Mapping rules
+# Mapping rules for repositories
 mapping_rules:
+  # Standard repository mappings
   - type: "prefix"
-    pattern: "docker/linux/ubuntu"
+    pattern: "archive.ubuntu.com/ubuntu"
+    repository: "ubuntu-archive"
+    priority: 100
+  - type: "prefix"
+    pattern: "security.ubuntu.com/ubuntu"
+    repository: "ubuntu-security"
+    priority: 95
+  - type: "prefix"
+    pattern: "deb.debian.org/debian"
+    repository: "debian"
+    priority: 90
+  - type: "prefix"
+    pattern: "security.debian.org/debian-security"
+    repository: "debian-security"
+    priority: 85
+  - type: "prefix"
+    pattern: "deb.debian.org/debian-backports"
+    repository: "debian-backports"
+    priority: 80
+  - type: "prefix"
+    pattern: "ports.ubuntu.com/ubuntu-ports"
+    repository: "ubuntu-ports"
+    priority: 75
+  # Third-party repository mappings
+  - type: "prefix"
+    pattern: "download.docker.com/linux/ubuntu"
     repository: "docker"
     priority: 60
   - type: "prefix"
-    pattern: "grafana/oss/deb"
+    pattern: "packages.grafana.com/oss/deb"
     repository: "grafana"
     priority: 55
   - type: "prefix"
-    pattern: "plex/repo/deb"
+    pattern: "downloads.plex.tv/repo/deb"
     repository: "plex"
     priority: 50
   - type: "prefix"
-    pattern: "postgresql/pub/repos/apt"
+    pattern: "apt.postgresql.org/pub/repos/apt"
     repository: "postgresql"
     priority: 45
   - type: "prefix"
-    pattern: "hwraid/ubuntu"
+    pattern: "hwraid.le-vert.net/ubuntu"
     repository: "hwraid"
     priority: 40
 
@@ -115,7 +163,7 @@ metadata:
     monitor_interval: "5s"
   cache:
     flush_interval: "5m"
-  # Add development release handling configuration
+  # Development release handling configuration
   dev_release:
     enabled: true
     codenames:
@@ -128,3 +176,7 @@ metadata:
       - "-updates"
       - "-backports"
     suppress_errors: true
+    prefetch_settings:
+      max_concurrent: 5
+      skip_notfound: true
+      retry_limit: 1
