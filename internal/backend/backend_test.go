@@ -224,12 +224,12 @@ func TestProcessPackagesFile(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, len(packages))
 
-	// Remove the specific expectations from setupBackendTestMocks since they conflict
+	// Remove the specific expectations from setupBackendTestMocks
 	mockCache.ExpectedCalls = nil
 	mockPackageMapper.ExpectedCalls = nil
 	mockMapper.ExpectedCalls = nil
 
-	// Reset with ONLY the expectations we need - with .Maybe() for flexibility
+	// Reset with ONLY the expectations we need - using .Maybe() to be flexible
 	mockCache.On("UpdatePackageIndex", mock.MatchedBy(func(pkgs []parser.PackageInfo) bool {
 		return len(pkgs) == 2 &&
 			(pkgs[0].Package == "nginx" || pkgs[1].Package == "nginx") &&
@@ -247,9 +247,10 @@ func TestProcessPackagesFile(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	// Call the method being tested in a goroutine
+	// Wrap the goroutine logic
 	go func() {
 		defer wg.Done()
+		// Call the method being tested inside the goroutine
 		manager.ProcessPackagesFile(repo, path, []byte(samplePackagesData))
 	}()
 
@@ -813,13 +814,13 @@ func TestFetchWithErrors(t *testing.T) {
         testManager := CreateManagerWithFetchOverride(manager, func(path string) ([]byte, error) {
             // Map the path to satisfy the expectation
             result, err := mockMapper.MapPath(path)
-            if err != nil {
+            if (err != nil) {
                 return nil, err
             }
 
             // Get from cache to satisfy that expectation
             data, err := mockCache.Get(result.CachePath)
-            if err != nil {
+            if (err != nil) {
                 // If cache lookup fails (shouldn't happen due to our mock setup)
                 return nil, err
             }
