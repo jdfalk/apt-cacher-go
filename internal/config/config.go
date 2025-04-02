@@ -30,6 +30,11 @@ type Config struct {
 	CacheTTLs   map[string]string `yaml:"cache_ttls"`
 	CleanupFreq string            `yaml:"cleanup_freq"`
 
+	// Memory configuration
+	DatabaseMemoryMB    int `yaml:"database_memory_mb"`    // Memory limit for database in MB
+	ApplicationMemoryMB int `yaml:"application_memory_mb"` // Memory limit for application in MB
+	MaxCacheEntries     int `yaml:"max_cache_entries"`     // Maximum number of entries in memory cache
+
 	// Backend configuration
 	Backends []Backend `yaml:"backends"`
 
