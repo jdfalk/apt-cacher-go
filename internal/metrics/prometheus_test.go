@@ -21,6 +21,26 @@ func PrometheusHandler(collector *PrometheusCollector) http.HandlerFunc {
 	}
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestPrometheusMetrics tests the basic functionality of the Prometheus metrics endpoint.
+//
+// The test verifies:
+// - The metrics handler returns a 200 OK status
+// - The response contains valid Prometheus metrics format
+// - The content type is set to text/plain
+//
+// Approach:
+// 1. Creates a new HTTP request to the metrics endpoint
+// 2. Creates a Prometheus metrics collector
+// 3. Sets up a handler that returns metrics from the collector
+// 4. Calls the handler with the request
+// 5. Verifies the response status and content
+//
+// Note: This tests the handler integration but not specific metric values
 func TestPrometheusMetrics(t *testing.T) {
 	req, err := http.NewRequest("GET", "/metrics", nil)
 	if err != nil {
@@ -48,6 +68,25 @@ func TestPrometheusMetrics(t *testing.T) {
 	assert.Contains(t, bodyText, "apt_cacher_requests_total")
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestPrometheusCollectorCreation tests the creation of a new Prometheus metrics collector.
+//
+// The test verifies:
+// - The collector is properly initialized
+// - All metrics counters start with zero values
+// - The response time counter map is initialized
+//
+// Approach:
+// 1. Creates a new Prometheus collector
+// 2. Verifies the collector is not nil
+// 3. Checks that all metrics are initialized to zero
+// 4. Verifies that the response time tracking map is initialized
+//
+// Note: This test focuses only on initialization, not on recording metrics
 func TestPrometheusCollectorCreation(t *testing.T) {
 	collector := NewPrometheusCollector()
 
@@ -61,6 +100,26 @@ func TestPrometheusCollectorCreation(t *testing.T) {
 	assert.NotNil(t, collector.responseTimeCount)
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestPrometheusRecordRequest tests the RecordRequest method for tracking
+// HTTP requests and their results.
+//
+// The test verifies:
+// - Total requests counter is incremented for all status codes
+// - Cache hits counter is incremented for 200 status codes
+// - Cache misses counter is incremented for 404 status codes
+// - Other status codes only increment the total counter
+//
+// Approach:
+// 1. Creates a new Prometheus collector
+// 2. Records requests with different status codes (200, 404, 500)
+// 3. Verifies each counter is incremented correctly
+//
+// Note: This test uses status code strings to simulate HTTP responses
 func TestPrometheusRecordRequest(t *testing.T) {
 	collector := NewPrometheusCollector()
 
@@ -86,6 +145,28 @@ func TestPrometheusRecordRequest(t *testing.T) {
 	assert.Equal(t, int64(1), collector.cacheMisses)
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestRecordResponseTime tests the RecordResponseTime method for tracking
+// response times by path type.
+//
+// The test verifies:
+// - Response times for package paths are correctly accumulated
+// - Response times for index paths are correctly accumulated
+// - Response times for admin paths are correctly accumulated
+// - Response time counter map is updated for each path type
+//
+// Approach:
+// 1. Creates a new Prometheus collector
+// 2. Records response times for different path types
+// 3. Verifies accumulated response times for each path type
+// 4. Checks that response time counter map is updated correctly
+//
+// Note: This test ensures that response time metrics are correctly
+// categorized by path type for more useful monitoring
 func TestRecordResponseTime(t *testing.T) {
 	collector := NewPrometheusCollector()
 
@@ -110,6 +191,27 @@ func TestRecordResponseTime(t *testing.T) {
 	assert.Equal(t, int64(1), collector.responseTimeCount["admin"])
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestRecordBytesServed tests the RecordBytesServed method for tracking
+// the total bytes sent to clients.
+//
+// The test verifies:
+// - Bytes served counter is correctly incremented with a single call
+// - Bytes served counter accumulates correctly with multiple calls
+//
+// Approach:
+// 1. Creates a new Prometheus collector
+// 2. Records bytes served with a specific value
+// 3. Verifies the counter matches the recorded value
+// 4. Records additional bytes served
+// 5. Verifies the counter reflects the total
+//
+// Note: This test ensures that byte volume metrics are correctly tracked
+// for monitoring network usage
 func TestRecordBytesServed(t *testing.T) {
 	collector := NewPrometheusCollector()
 
@@ -120,6 +222,26 @@ func TestRecordBytesServed(t *testing.T) {
 	assert.Equal(t, int64(1024+2048), collector.bytesServed)
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestRequestsInProgress tests the in-progress request counter methods.
+//
+// The test verifies:
+// - IncRequestsInProgress correctly increments the counter
+// - DecRequestsInProgress correctly decrements the counter
+// - Multiple increments and decrements work as expected
+//
+// Approach:
+// 1. Creates a new Prometheus collector
+// 2. Calls IncRequestsInProgress multiple times
+// 3. Verifies counter matches expected value
+// 4. Calls DecRequestsInProgress
+// 5. Verifies counter is decremented correctly
+//
+// Note: These metrics help monitor server load and detect potential request leaks
 func TestRequestsInProgress(t *testing.T) {
 	collector := NewPrometheusCollector()
 
