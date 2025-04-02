@@ -453,7 +453,7 @@ func (ds *DatabaseStore) Put(path string, data []byte) error {
 	}
 
 	// Create filesystem directory if needed
-	dir := filepath.Dir(absPath)
+	dir := filepath.Dir(absPath) // Use absPath instead of path
 	if dir != "" {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return err
