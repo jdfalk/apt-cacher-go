@@ -211,6 +211,7 @@ func TestCacheCleanup(t *testing.T) {
 	// Create a cache with very small max size (1KB)
 	cache, err := New(tempDir, 1024) // 1KB
 	require.NoError(t, err)
+	defer cache.Close()
 
 	// Put some data that exceeds the cache size
 	testData := make([]byte, 1024) // 1KB
@@ -222,7 +223,17 @@ func TestCacheCleanup(t *testing.T) {
 	require.NoError(t, cache.Put("test/file1.deb", testData))
 	require.NoError(t, cache.Put("test/file2.deb", testData))
 
+	// Wait a moment for cleanup to occur
+	time.Sleep(100 * time.Millisecond)
+
 	// Verify that only one file is still in cache - due to LRU eviction
 	stats := cache.GetStats()
-	assert.LessOrEqual(t, stats.CurrentSize, int64(1024))
+	assert.LessOrEqual(t, stats.CurrentSize, int64(1024),
+		"Cache size should be limited to 1KB")
+
+	// Either file1 or file2 should exist, but not both
+	exists1 := cache.Exists("test/file1.deb")
+	exists2 := cache.Exists("test/file2.deb")
+	assert.True(t, exists1 || exists2, "At least one file should exist")
+	assert.False(t, exists1 && exists2, "Both files should not exist")
 }

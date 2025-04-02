@@ -131,6 +131,32 @@ func (c *Cache) Add(path string, data []byte) error {
 		return fmt.Errorf("failed to write file to disk: %w", err)
 	}
 
+	// Check if adding this file would exceed max size and prune if needed
+	stats, err := c.db.GetStats()
+	if err == nil {
+		currentSize := stats["currentSize"].(int64)
+		newSize := currentSize + int64(len(data))
+
+		if newSize > c.maxSize {
+			// Need to prune old items before adding new one
+			itemsToPrune := c.GetLRUItems(10) // Get 10 oldest items
+			for _, item := range itemsToPrune {
+				if newSize <= c.maxSize {
+					break
+				}
+				// Remove old item
+				itemPath := filepath.Join(c.rootDir, item.Path)
+				if err := os.Remove(itemPath); err == nil {
+					if dbErr := c.db.DeleteCacheEntry(item.Path); dbErr == nil {
+						newSize -= item.Size
+					} else {
+						log.Printf("Failed to delete cache entry for %s: %v", item.Path, dbErr)
+					}
+				}
+			}
+		}
+	}
+
 	// Delegate metadata to DatabaseStore
 	return c.db.Put(path, data)
 }
