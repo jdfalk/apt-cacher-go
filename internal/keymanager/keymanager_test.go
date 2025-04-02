@@ -239,3 +239,83 @@ func TestKeyManagerWithExistingKeys(t *testing.T) {
 	assert.True(t, km.HasKey(key2ID))
 	assert.False(t, km.HasKey("nonexistent"))
 }
+
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestVerifySignature tests the VerifySignature method which validates digital
+// signatures using GPG keys.
+//
+// The test verifies:
+// - Signatures can be verified when the corresponding key is present
+// - Unknown signatures are properly identified
+// - Key detection works correctly from signature data
+//
+// Approach:
+// 1. Creates a key manager with test configuration
+// 2. Creates mock key data and signature data
+// 3. Tests signature verification with existing keys
+// 4. Tests signature verification with missing keys
+// 5. Tests key detection from signature data
+//
+// Note: Uses a mock key repository to avoid external dependencies
+func TestVerifySignature(t *testing.T) {
+	// Create temp directory
+	tempDir, err := os.MkdirTemp("", "keymanager-test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
+	// Create key directory
+	keyDir := filepath.Join(tempDir, "keys")
+	require.NoError(t, os.MkdirAll(keyDir, 0755))
+
+	// Create key manager
+	cfg := &config.KeyManagementConfig{
+		Enabled:      true,
+		AutoRetrieve: true,
+		KeyDir:       keyDir,
+	}
+
+	km, err := New(cfg, tempDir)
+	require.NoError(t, err)
+
+	// Create a mock key file
+	keyID := "648ACFD622F3D138"
+	keyFile := filepath.Join(keyDir, keyID+".gpg")
+	require.NoError(t, os.WriteFile(keyFile, []byte("mock key data"), 0644))
+
+	// Recreate the key manager to detect existing files
+	km, err = New(cfg, tempDir)
+	require.NoError(t, err)
+
+	// Test DetectKeySignature
+	t.Run("detect_key_signature", func(t *testing.T) {
+		signedData := []byte("This data is signed with key ID 648ACFD622F3D138")
+		detectedKeyID, hasKeyID := km.DetectKeySignature(signedData)
+
+		assert.True(t, hasKeyID)
+		assert.Equal(t, keyID, detectedKeyID)
+	})
+
+	// Test VerifySignature with key present
+	t.Run("verify_with_key_present", func(t *testing.T) {
+		signedData := []byte("This data is signed with key ID 648ACFD622F3D138")
+		signature := []byte("mock signature")
+
+		result, err := km.VerifySignature(signedData, signature)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	// Test VerifySignature with key missing
+	t.Run("verify_with_key_missing", func(t *testing.T) {
+		signedData := []byte("This data is signed with key ID ABCD1234ABCD1234")
+		signature := []byte("mock signature")
+
+		result, err := km.VerifySignature(signedData, signature)
+		assert.NoError(t, err)
+		assert.False(t, result)
+	})
+}
