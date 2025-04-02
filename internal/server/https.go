@@ -3,10 +3,13 @@ package server
 import (
 	"crypto/tls"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // handleHTTPSRequest handles HTTPS repository requests by remapping them to HTTP
@@ -108,4 +111,74 @@ func (s *Server) setupHTTPSServer(mainMux *http.ServeMux) {
 			TLSConfig: tlsConfig,
 		}
 	}
+}
+
+// Add this new method to handle CONNECT requests
+func (s *Server) handleConnectRequest(w http.ResponseWriter, r *http.Request) {
+	// Only accept CONNECT method
+	if r.Method != http.MethodConnect {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Check if the host is a known keyserver
+	host := r.Host
+	isKeyserver := false
+	knownKeyservers := []string{
+		"keyserver.ubuntu.com",
+		"keys.gnupg.net",
+		"pool.sks-keyservers.net",
+		"hkps.pool.sks-keyservers.net",
+		"keys.openpgp.org",
+	}
+
+	for _, ks := range knownKeyservers {
+		if strings.Contains(host, ks) {
+			isKeyserver = true
+			break
+		}
+	}
+
+	// Log the connection attempt
+	if isKeyserver {
+		log.Printf("Tunneling connection to keyserver: %s", host)
+	} else {
+		log.Printf("Tunneling connection to: %s", host)
+	}
+
+	// Get the underlying connection
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "Hijacking not supported", http.StatusInternalServerError)
+		return
+	}
+	clientConn, _, err := hijacker.Hijack()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+
+	// Connect to the remote host
+	remoteConn, err := net.DialTimeout("tcp", r.Host, 10*time.Second)
+	if err != nil {
+		clientConn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
+		clientConn.Close()
+		return
+	}
+
+	// Tell the client everything is OK
+	clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+
+	// Start copying data back and forth
+	go func() {
+		defer clientConn.Close()
+		defer remoteConn.Close()
+		io.Copy(remoteConn, clientConn)
+	}()
+
+	go func() {
+		defer clientConn.Close()
+		defer remoteConn.Close()
+		io.Copy(clientConn, remoteConn)
+	}()
 }
