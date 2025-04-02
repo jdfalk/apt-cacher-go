@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices" // Add this import
 	"sort"
 	"strconv"
 	"strings"
@@ -750,7 +751,7 @@ func (ds *DatabaseStore) ListPackages(pattern string) ([]parser.PackageInfo, err
 		}
 
 		// Make a copy of the value since it will be invalidated after Next()
-		valueCopy := append([]byte(nil), iter.Value()...)
+		valueCopy := slices.Clone(iter.Value())
 
 		var pkg parser.PackageInfo
 		if err := json.Unmarshal(valueCopy, &pkg); err != nil {
