@@ -1,14 +1,18 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path"
+	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -222,55 +226,60 @@ func (s *Server) setupHTTPHandlers() {
 	adminMux := http.NewServeMux()
 
 	// Set up main server handlers
-	mainMux.HandleFunc("/", s.handlePackageRequest)
+	mainMux.HandleFunc("/", s.handleRootRequest)
 	mainMux.HandleFunc("/acng-report.html", s.handleReportRequest)
 	mainMux.HandleFunc("/health", s.handleHealth)
 	mainMux.HandleFunc("/ready", s.handleReady)
 	mainMux.HandleFunc("/metrics", s.handleMetrics)
 
-	// Add key endpoint - NEW
+	// Add direct key endpoint for GPG keys
 	mainMux.HandleFunc("/gpg-key/", s.handleKeyRequest)
 
-	// Fix the CONNECT handler by using method checking in the default handler
-	// instead of direct method registration which causes the panic
-	mainMux.HandleFunc("/connect-tunnel", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodConnect {
-			s.handleConnectRequest(w, r)
-			return
-		}
-		http.NotFound(w, r)
-	})
+	// Add keyserver emulation paths
+	mainMux.HandleFunc("/pks/lookup", s.handleKeyRequest)
 
-	// Set up admin handlers on the adminMux - adminHome is used for the root path
+	// Set up admin server handlers
 	s.setupAdminHandlers(adminMux)
 
-	// Configure the HTTP server to use mainMux
+	// Use http.Server directly with the configured mux
 	s.httpServer = &http.Server{
-		Addr:         fmt.Sprintf("%s:%d", s.cfg.ListenAddress, s.cfg.Port),
-		Handler:      mainMux,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 60 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		Addr:    fmt.Sprintf("%s:%d", s.cfg.ListenAddress, s.cfg.Port),
+		Handler: mainMux,
 	}
 
-	// Configure the admin server to use adminMux
+	// Set up admin server if configured
 	if s.cfg.AdminPort > 0 {
 		adminAddr := fmt.Sprintf("%s:%d", s.cfg.ListenAddress, s.cfg.AdminPort)
 		s.adminServer = &http.Server{
 			Addr:    adminAddr,
 			Handler: adminMux,
 		}
-		s.logger.Printf("Admin interface will be available at http://%s/\n", adminAddr)
-	} else {
-		// If admin port not configured, use a path-based approach on the main server
-		// FIX: Use "/admin/" path prefix to avoid conflict with root handler
-		mainMux.Handle("/admin/", http.StripPrefix("/admin", adminMux))
-		s.logger.Printf("Admin interface will be available at http://%s:%d/admin/\n",
-			s.cfg.ListenAddress, s.cfg.Port)
+	}
+}
+
+// Add this new handler that routes all requests appropriately
+func (s *Server) handleRootRequest(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+
+	// Route key-related requests to key handler
+	if strings.Contains(path, "/pks/lookup") ||
+		strings.Contains(path, "/keys/") ||
+		strings.Contains(path, "keyserver.ubuntu.com") {
+		s.handleKeyRequest(w, r)
+		return
 	}
 
-	// Set up HTTPS server if enabled (function is now in https.go)
-	s.setupHTTPSServer(mainMux)
+	// Special case for keyserver domains
+	host := r.Host
+	if strings.Contains(host, "keyserver.ubuntu.com") ||
+		strings.Contains(host, "keys.gnupg.net") ||
+		strings.Contains(host, "keyserver") {
+		s.handleKeyRequest(w, r)
+		return
+	}
+
+	// Handle normal package requests
+	s.handlePackageRequest(w, r)
 }
 
 // setupAdminHandlers configures admin-related HTTP handlers
@@ -548,38 +557,15 @@ func (rw *responseWriter) WriteHeader(code int) {
 
 // handlePackageRequest handles package download requests
 func (s *Server) handlePackageRequest(w http.ResponseWriter, r *http.Request) {
-	// Start timing for this request
 	start := time.Now()
-
-	// Check if this is an HTTPS request
-	if r.URL.Scheme == "https" || strings.HasPrefix(r.URL.Path, "/https/") {
-		s.handleHTTPSRequest(w, r)
-		return
-	}
-
-	// Extract request information
 	requestPath := r.URL.Path
+
+	// Extract client IP for metrics
 	clientIP := extractClientIP(r)
 
-	// Check for conditional request
-	if r.Header.Get("If-Modified-Since") != "" {
-		if s.handleConditionalRequest(w, r, requestPath) {
-			return // Request was handled conditionally
-		}
-	}
-
-	// Record client information
+	// Track metrics if enabled
 	s.mutex.Lock()
 	s.metrics.SetLastClientIP(clientIP)
-	// Get package name for metrics and logging
-	packageName := ""
-	if s.packageMapper != nil {
-		packageName = s.packageMapper.GetPackageNameForHash(requestPath)
-		// Send package name to metrics if available
-		if packageName != "" {
-			s.metrics.RecordRequest(requestPath, time.Since(start), clientIP, packageName)
-		}
-	}
 	s.mutex.Unlock()
 
 	// Fetch the package data
@@ -590,65 +576,151 @@ func (s *Server) handlePackageRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// NEW: Check for GPG key errors before sending response
-	s.mutex.Lock()
-	keyManager := s.backend.KeyManager()
-	s.mutex.Unlock()
+	// Check for InRelease/Release files which might need key handling
+	isReleaseFile := strings.HasSuffix(requestPath, "InRelease") ||
+		strings.HasSuffix(requestPath, "Release") ||
+		strings.HasSuffix(requestPath, "Release.gpg")
 
-	// Type assertion to check if it's our KeyManager interface
-	if keyM, ok := keyManager.(KeyManager); ok {
-		keyID, hasKeyError := keyM.DetectKeyError(data)
-		if hasKeyError {
-			log.Printf("Detected missing GPG key: %s in response, attempting to fetch", keyID)
+	if isReleaseFile {
+		// For release files, verify if we have the necessary keys
+		s.mutex.Lock()
+		keyManager := s.backend.KeyManager()
+		s.mutex.Unlock()
 
-			// Try to fetch the key
-			err := keyM.FetchKey(keyID)
-			if err != nil {
-				log.Printf("Failed to fetch key %s: %v", keyID, err)
-			} else {
-				log.Printf("Successfully fetched key %s", keyID)
+		if km, ok := keyManager.(KeyManager); ok {
+			// Look for key references in the data
+			keyIDs := extractKeyReferences(data)
 
-				// Check if this is a direct key request
-				if strings.Contains(requestPath, "/keys/") || strings.Contains(requestPath, ".gpg") {
-					// If client is requesting a key directly, serve it
-					keyPath := keyM.GetKeyPath(keyID)
-					if keyPath != "" {
-						keyData, err := os.ReadFile(keyPath)
-						if err == nil {
-							// Serve the key directly
-							w.Header().Set("Content-Type", "application/pgp-keys")
-							w.Write(keyData)
-							return
-						}
+			// Fetch any keys we don't have
+			for _, keyID := range keyIDs {
+				if !km.HasKey(keyID) {
+					log.Printf("Pre-emptively fetching key %s referenced in %s", keyID, requestPath)
+					if err := km.FetchKey(keyID); err != nil {
+						log.Printf("Failed to fetch key %s: %v", keyID, err)
+					} else {
+						log.Printf("Successfully pre-fetched key %s", keyID)
 					}
 				}
-
-				// For non-key requests with key errors, we'll still send the original response
-				// but the next client request should succeed with the key now available
 			}
 		}
 	}
 
-	// Update last file size
+	// Check for GPG key errors in the response
+	s.mutex.Lock()
+	keyManager := s.backend.KeyManager()
+	s.mutex.Unlock()
+
+	// Process response for key errors
+	if km, ok := keyManager.(KeyManager); ok {
+		keyID, hasKeyError := km.DetectKeyError(data)
+		if hasKeyError {
+			log.Printf("Detected missing GPG key: %s in response for %s", keyID, requestPath)
+
+			// Try to fetch the key
+			err := km.FetchKey(keyID)
+			if err != nil {
+				log.Printf("Failed to fetch key %s: %v", keyID, err)
+
+				// If direct fetch failed, try via keyserver proxy
+				if isReleaseFile {
+					log.Printf("Attempting to fetch key %s via keyserver proxy", keyID)
+
+					// Create a request for the proxy
+					keyserverURL := fmt.Sprintf("http://keyserver.ubuntu.com/pks/lookup?op=get&search=0x%s", keyID)
+					proxyReq, proxyErr := http.NewRequest("GET", keyserverURL, nil)
+					if proxyErr == nil {
+						// Execute in a separate goroutine to avoid blocking
+						go func() {
+							var buf bytes.Buffer
+							proxyResp := httptest.NewRecorder()
+							proxyResp.Body = &buf
+
+							s.proxyKeyServerRequest(proxyResp, proxyReq)
+
+							// Check if we got a successful response
+							if proxyResp.Code == http.StatusOK {
+								log.Printf("Successfully fetched key %s via proxy", keyID)
+								// Try refetching the original content after proxy key fetch
+								time.Sleep(100 * time.Millisecond) // Small delay to ensure key is processed
+								s.backend.RefreshReleaseData(requestPath)
+							}
+						}()
+					}
+				}
+			} else {
+				log.Printf("Successfully fetched key %s", keyID)
+
+				// If this is a Release file or similar, we could refetch it
+				if isReleaseFile {
+					log.Printf("Refetching %s after key retrieval", requestPath)
+					updatedData, err := s.backend.Fetch(requestPath)
+					if err == nil {
+						// Check if the key error is resolved
+						_, stillHasError := km.DetectKeyError(updatedData)
+						if !stillHasError {
+							log.Printf("Successfully refetched %s without key errors", requestPath)
+							data = updatedData
+						} else {
+							log.Printf("Still has key error after refetch, using original data")
+						}
+					} else {
+						log.Printf("Error refetching %s: %v", requestPath, err)
+					}
+				}
+			}
+		}
+	}
+
+	// Update metrics and send response
 	s.mutex.Lock()
 	s.metrics.SetLastFileSize(int64(len(data)))
 	s.mutex.Unlock()
 
-	// Set response headers
+	// Write the response with error checking
 	w.Header().Set("Content-Type", getContentType(requestPath))
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
-
-	// Add cache control headers
-	if isIndexFile(requestPath) {
-		w.Header().Set("Cache-Control", "max-age=1800") // 30 minutes
-	} else {
-		w.Header().Set("Cache-Control", "max-age=2592000") // 30 days
-	}
-
-	// Send the response
 	if _, err := w.Write(data); err != nil {
-		s.logger.Printf("Error writing package data: %v", err)
+		log.Printf("Error writing response for %s: %v", requestPath, err)
+		// Headers already sent, can't send error response
+		return
 	}
+
+	// Record request metrics
+	elapsed := time.Since(start)
+	s.mutex.Lock()
+	s.metrics.RecordRequest(requestPath, elapsed, clientIP, filepath.Base(requestPath))
+	s.mutex.Unlock()
+}
+
+// Helper function to extract key references
+func extractKeyReferences(data []byte) []string {
+	content := string(data)
+	keyIDs := make([]string, 0)
+
+	// Look for common key reference formats
+	patterns := []string{
+		`Key ID: ([0-9A-F]{8,})`,
+		`keyid ([0-9A-F]{8,})`,
+		`fingerprint: ([0-9A-F]{40})`,
+		`NO_PUBKEY ([0-9A-F]{8,})`,
+	}
+
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		matches := re.FindAllStringSubmatch(content, -1)
+		for _, match := range matches {
+			if len(match) > 1 {
+				// For fingerprints, use the last 8+ characters as keyID
+				keyID := match[1]
+				if len(keyID) > 16 {
+					keyID = keyID[len(keyID)-16:]
+				}
+				keyIDs = append(keyIDs, keyID)
+			}
+		}
+	}
+
+	return keyIDs
 }
 
 // handleConditionalRequest handles If-Modified-Since requests
@@ -740,6 +812,7 @@ func (s *Server) handleReportRequest(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
 	if _, err := w.Write([]byte(html)); err != nil {
 		log.Printf("Error writing report HTML: %v", err)
+		return
 	}
 }
 
@@ -1053,42 +1126,91 @@ func (s *Server) adminMemoryStats(w http.ResponseWriter, r *http.Request) {
 
 // Add this new handler function
 func (s *Server) handleKeyRequest(w http.ResponseWriter, r *http.Request) {
-	// Extract key ID from URL path
-	pathParts := strings.Split(r.URL.Path, "/")
-	if len(pathParts) < 3 {
-		http.Error(w, "Invalid key request", http.StatusBadRequest)
-		return
+	// Extract key ID from various request formats
+	var keyID string
+
+	// Try to extract from URL
+	path := r.URL.Path
+	query := r.URL.Query()
+
+	if strings.Contains(path, "/pks/lookup") {
+		// Format: /pks/lookup?op=get&search=0xKEYID
+		search := query.Get("search")
+		if strings.HasPrefix(search, "0x") {
+			keyID = search[2:]
+		} else {
+			keyID = search
+		}
+	} else if strings.Contains(path, "/gpg-key/") || strings.Contains(path, "/keys/") {
+		// Format: /gpg-key/KEYID.gpg or /keys/KEYID.gpg
+		parts := strings.Split(path, "/")
+		if len(parts) > 0 {
+			fileName := parts[len(parts)-1]
+			keyID = strings.TrimSuffix(fileName, ".gpg")
+			keyID = strings.TrimSuffix(keyID, ".asc")
+		}
 	}
 
-	keyID := pathParts[len(pathParts)-1]
-	// Remove .gpg extension if present
-	keyID = strings.TrimSuffix(keyID, ".gpg")
+	// If keyID is empty, try to handle as a direct keyserver request
+	if keyID == "" {
+		// Check if this is a keyserver request that should be proxied
+		host := r.Host
+		if strings.Contains(host, "keyserver") ||
+			strings.Contains(path, "/pks/lookup") {
+			log.Printf("Proxying keyserver request: %s", r.URL.String())
+			s.proxyKeyServerRequest(w, r)
+			return
+		}
+
+		log.Printf("Invalid key request format: %s", r.URL.String())
+		http.Error(w, "Invalid key request format", http.StatusBadRequest)
+		return
+	}
 
 	s.mutex.Lock()
 	keyManager := s.backend.KeyManager()
 	s.mutex.Unlock()
 
 	// Type assertion to check if it's our KeyManager interface
-	if keyM, ok := keyManager.(KeyManager); ok {
+	if km, ok := keyManager.(KeyManager); ok {
 		// Check if we have the key
-		if !keyM.HasKey(keyID) {
+		if !km.HasKey(keyID) {
 			// Try to fetch it
-			err := keyM.FetchKey(keyID)
+			log.Printf("Fetching key: %s", keyID)
+			err := km.FetchKey(keyID)
 			if err != nil {
-				log.Printf("Failed to fetch key %s: %v", keyID, err)
-				http.Error(w, "Key not found", http.StatusNotFound)
+				log.Printf("Failed to fetch key directly %s: %v, trying keyserver proxy", keyID, err)
+
+				// Try to get it via keyserver proxy as a fallback
+				keyserverURL := fmt.Sprintf("http://keyserver.ubuntu.com/pks/lookup?op=get&search=0x%s", keyID)
+				proxyReq, err := http.NewRequest("GET", keyserverURL, nil)
+				if err != nil {
+					log.Printf("Error creating proxy request: %v", err)
+					http.Error(w, "Key not found", http.StatusNotFound)
+					return
+				}
+
+				// Copy the original request headers
+				for name, values := range r.Header {
+					for _, value := range values {
+						proxyReq.Header.Add(name, value)
+					}
+				}
+
+				// Use the proxy method to fetch from keyserver
+				s.proxyKeyServerRequest(w, proxyReq)
 				return
 			}
 		}
 
 		// Get key path
-		keyPath := keyM.GetKeyPath(keyID)
+		keyPath := km.GetKeyPath(keyID)
 		if keyPath == "" {
 			http.Error(w, "Key not available", http.StatusNotFound)
 			return
 		}
 
-		// Read and serve the key
+		// Read and serve the key with error checking
 		keyData, err := os.ReadFile(keyPath)
 		if err != nil {
 			log.Printf("Error reading key file: %v", err)
@@ -1096,9 +1218,91 @@ func (s *Server) handleKeyRequest(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/pgp-keys")
-		w.Write(keyData)
+		// Determine content type based on request
+		contentType := "application/pgp-keys"
+		if strings.Contains(r.URL.Path, ".asc") ||
+			(r.Header.Get("Accept") != "" && strings.Contains(r.Header.Get("Accept"), "text/plain")) {
+			contentType = "text/plain"
+		}
+
+		w.Header().Set("Content-Type", contentType)
+		if _, err := w.Write(keyData); err != nil {
+			log.Printf("Error writing key data: %v", err)
+			// Headers already sent, can't send error response
+			return
+		}
 	} else {
 		http.Error(w, "Key management not available", http.StatusServiceUnavailable)
 	}
+}
+
+// Add method to proxy keyserver requests when needed
+func (s *Server) proxyKeyServerRequest(w http.ResponseWriter, r *http.Request) {
+	// Create a new request to the target server
+	target := r.URL
+
+	// Ensure it uses HTTP
+	if target.Scheme == "" {
+		target.Scheme = "http"
+	}
+
+	// Create new request
+	req, err := http.NewRequest(r.Method, target.String(), r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Copy headers
+	for name, values := range r.Header {
+		for _, value := range values {
+			req.Header.Add(name, value)
+		}
+	}
+
+	// Send the request
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	// Forward the response
+	for name, values := range resp.Header {
+		for _, value := range values {
+			w.Header().Add(name, value)
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+
+	// Add error handling for io.Copy
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		log.Printf("Error copying response body: %v", err)
+		// Headers already sent, can't return an error status code
+		return
+	}
+}
+
+// Helper to extract key ID from key data
+func (s *Server) extractKeyIDFromKeyData(data []byte) string {
+	// This is a simplified version - real implementation would parse the key properly
+	content := string(data)
+	// Look for lines that might contain the key ID
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "Key ID") || strings.Contains(line, "keyid") {
+			// Extract what looks like a key ID (8+ hex characters)
+			re := regexp.MustCompile(`[0-9A-F]{8,}`)
+			matches := re.FindStringSubmatch(strings.ToUpper(line))
+			if len(matches) > 0 {
+				return matches[0]
+			}
+		}
+	}
+	return ""
 }
