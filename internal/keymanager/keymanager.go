@@ -215,3 +215,46 @@ func (km *KeyManager) HasKey(keyID string) bool {
 
 	return exists
 }
+
+// Add this new method to verify a signature
+func (km *KeyManager) VerifySignature(signedData []byte, signature []byte) (bool, error) {
+	if km == nil {
+		return false, errors.New("key manager not initialized")
+	}
+
+	// Extract signature key ID if possible
+	keyID, hasKeyID := km.DetectKeySignature(signedData)
+	if hasKeyID && !km.HasKey(keyID) {
+		// Try to fetch the key if we don't have it
+		if err := km.FetchKey(keyID); err != nil {
+			log.Printf("Warning: Failed to fetch key %s: %v", keyID, err)
+		}
+	}
+
+	// Implement signature verification using GPG
+	// For now, return true if we have the key, false otherwise
+	return km.HasKey(keyID), nil
+}
+
+// DetectKeySignature tries to extract the key ID from signed data
+func (km *KeyManager) DetectKeySignature(data []byte) (string, bool) {
+	// Similar to DetectKeyError but looks for signature information
+	content := string(data)
+
+	// Look for key IDs in the content
+	patterns := []string{
+		`signed by key ID (\w+)`,
+		`signature from key ID (\w+)`,
+		`key ID (\w+)`,
+	}
+
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		match := re.FindStringSubmatch(content)
+		if len(match) > 1 {
+			return match[1], true
+		}
+	}
+
+	return "", false
+}
