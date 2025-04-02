@@ -635,13 +635,30 @@ func (c *Cache) UpdatePackageIndex(packages []parser.PackageInfo) error {
 	c.packageMutex.Lock()
 	defer c.packageMutex.Unlock()
 
+	// Skip if no packages provided
+	if len(packages) == 0 {
+		// Get the current count more reliably
+		count, err := c.db.GetPackageCount()
+		if err != nil {
+			log.Printf("Error getting package count: %v", err)
+			count = 0
+		}
+		log.Printf("Package index update: no packages to add (index contains %d packages)", count)
+		return nil
+	}
+
 	existingCount := 0
 	addedCount := 0
 
-	// Get count of existing packages from PebbleDB
-	entries, err := c.db.ListPackages("")
-	if err == nil {
-		existingCount = len(entries)
+	// Get count of existing packages from PebbleDB using the new method
+	existingCount, err := c.db.GetPackageCount()
+	if err != nil {
+		log.Printf("Error getting initial package count: %v", err)
+		// Fall back to listing all packages
+		entries, err := c.db.ListPackages("")
+		if err == nil {
+			existingCount = len(entries)
+		}
 	}
 
 	// Add packages to index
@@ -651,9 +668,12 @@ func (c *Cache) UpdatePackageIndex(packages []parser.PackageInfo) error {
 			continue
 		}
 
-		// Skip if already exists with same version
-		existing, exists, err := c.db.GetPackageInfo(pkg.Package)
-		if err == nil && exists && existing.Version == pkg.Version {
+		// Skip if already exists with same version and architecture
+		key := fmt.Sprintf("p:%s:%s:%s", pkg.Package, pkg.Version, pkg.Architecture)
+		_, closer, err := c.db.db.Get([]byte(key))
+		if err == nil {
+			// Package exists with this exact version and architecture
+			closer.Close()
 			continue
 		}
 
@@ -673,13 +693,13 @@ func (c *Cache) UpdatePackageIndex(packages []parser.PackageInfo) error {
 		}
 	}
 
-	// Get updated count
-	entries, err = c.db.ListPackages("")
+	// Get updated count more reliably
 	currentCount := 0
-	if err == nil {
-		currentCount = len(entries)
-	} else {
-		currentCount = existingCount + addedCount // Fallback if we can't get actual count
+	currentCount, err = c.db.GetPackageCount()
+	if err != nil {
+		log.Printf("Error getting final package count: %v", err)
+		// Fall back to calculated count
+		currentCount = existingCount + addedCount
 	}
 
 	// Log results
