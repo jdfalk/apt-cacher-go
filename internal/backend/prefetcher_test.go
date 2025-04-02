@@ -65,6 +65,26 @@ func setupBasicMockExpectations(mockManager *MockManager) {
 	mockManager.On("GetAllBackends").Return([]*Backend{}, nil).Maybe()
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestNewPrefetcher tests the creation of a new Prefetcher instance with
+// various configuration options.
+//
+// The test verifies:
+// - Prefetcher can be created with default settings
+// - Prefetcher can be created with custom architectures
+// - Verbose logging can be enabled and disabled
+//
+// Approach:
+// 1. Creates a mock prefetcher manager
+// 2. Tests creation with default settings
+// 3. Tests creation with custom architecture filters
+// 4. Tests verbose logging configuration
+//
+// Note: Uses mock implementations to avoid external dependencies
 func TestNewPrefetcher(t *testing.T) {
 	mockManager := new(MockManager)
 	archs := []string{"amd64", "i386"}
@@ -122,6 +142,25 @@ func TestFilterByArchitecture(t *testing.T) {
 	assert.Equal(t, len(urls), len(allFiltered))
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestFilterURLsByArchitecture tests the architecture filtering functionality
+// in the prefetcher.
+//
+// The test verifies:
+// - URLs with matching architectures are included
+// - URLs with non-matching architectures are excluded
+// - URLs with no architecture specification are always included
+//
+// Approach:
+// 1. Creates a prefetcher with specific architecture filters
+// 2. Tests filtering with various URL patterns
+// 3. Verifies correct inclusion/exclusion behavior
+//
+// Note: Tests both positive and negative cases for thorough coverage
 func TestFilterURLsByArchitecture(t *testing.T) {
 	mockManager := new(MockManager)
 
@@ -135,6 +174,7 @@ func TestFilterURLsByArchitecture(t *testing.T) {
 		"/debian/pool/main/a/apt/apt_2.2.4_i386.deb",
 	}
 
+	// Filter URLs
 	filtered := prefetcher.FilterURLsByArchitecture(urls)
 
 	assert.Equal(t, 1, len(filtered))
@@ -361,4 +401,22 @@ func TestPrefetchStartupCancellation(t *testing.T) {
 
 	// Verify context cancellation was handled properly
 	assert.True(t, prefetcher.startupDone, "Prefetcher should mark startup as done even when cancelled")
+}
+
+// MockPrefetcherManager implements PrefetcherManager interface for testing
+type MockPrefetcherManager struct {
+	mock.Mock
+}
+
+func NewMockPrefetcherManager(t *testing.T) *MockPrefetcherManager {
+	return &MockPrefetcherManager{}
+}
+
+func (m *MockPrefetcherManager) Fetch(url string) ([]byte, error) {
+	args := m.Called(url)
+	return args.Get(0).([]byte), args.Error(1)
+}
+
+func (m *MockPrefetcherManager) EXPECT() *MockPrefetcherManager {
+	return m
 }
