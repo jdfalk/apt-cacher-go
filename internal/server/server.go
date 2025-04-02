@@ -228,6 +228,9 @@ func (s *Server) setupHTTPHandlers() {
 	mainMux.HandleFunc("/ready", s.handleReady)
 	mainMux.HandleFunc("/metrics", s.handleMetrics)
 
+	// Add key endpoint - NEW
+	mainMux.HandleFunc("/gpg-key/", s.handleKeyRequest)
+
 	// Fix the CONNECT handler by using method checking in the default handler
 	// instead of direct method registration which causes the panic
 	mainMux.HandleFunc("/connect-tunnel", func(w http.ResponseWriter, r *http.Request) {
@@ -585,6 +588,45 @@ func (s *Server) handlePackageRequest(w http.ResponseWriter, r *http.Request) {
 		s.logger.Printf("Error fetching %s: %v", requestPath, err)
 		http.Error(w, "Package not found", http.StatusNotFound)
 		return
+	}
+
+	// NEW: Check for GPG key errors before sending response
+	s.mutex.Lock()
+	keyManager := s.backend.KeyManager()
+	s.mutex.Unlock()
+
+	// Type assertion to check if it's our KeyManager interface
+	if keyM, ok := keyManager.(KeyManager); ok {
+		keyID, hasKeyError := keyM.DetectKeyError(data)
+		if hasKeyError {
+			log.Printf("Detected missing GPG key: %s in response, attempting to fetch", keyID)
+
+			// Try to fetch the key
+			err := keyM.FetchKey(keyID)
+			if err != nil {
+				log.Printf("Failed to fetch key %s: %v", keyID, err)
+			} else {
+				log.Printf("Successfully fetched key %s", keyID)
+
+				// Check if this is a direct key request
+				if strings.Contains(requestPath, "/keys/") || strings.Contains(requestPath, ".gpg") {
+					// If client is requesting a key directly, serve it
+					keyPath := keyM.GetKeyPath(keyID)
+					if keyPath != "" {
+						keyData, err := os.ReadFile(keyPath)
+						if err == nil {
+							// Serve the key directly
+							w.Header().Set("Content-Type", "application/pgp-keys")
+							w.Write(keyData)
+							return
+						}
+					}
+				}
+
+				// For non-key requests with key errors, we'll still send the original response
+				// but the next client request should succeed with the key now available
+			}
+		}
 	}
 
 	// Update last file size
@@ -1006,5 +1048,57 @@ func (s *Server) adminMemoryStats(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(memStats); err != nil {
 		http.Error(w, "Error encoding memory stats", http.StatusInternalServerError)
+	}
+}
+
+// Add this new handler function
+func (s *Server) handleKeyRequest(w http.ResponseWriter, r *http.Request) {
+	// Extract key ID from URL path
+	pathParts := strings.Split(r.URL.Path, "/")
+	if len(pathParts) < 3 {
+		http.Error(w, "Invalid key request", http.StatusBadRequest)
+		return
+	}
+
+	keyID := pathParts[len(pathParts)-1]
+	// Remove .gpg extension if present
+	keyID = strings.TrimSuffix(keyID, ".gpg")
+
+	s.mutex.Lock()
+	keyManager := s.backend.KeyManager()
+	s.mutex.Unlock()
+
+	// Type assertion to check if it's our KeyManager interface
+	if keyM, ok := keyManager.(KeyManager); ok {
+		// Check if we have the key
+		if !keyM.HasKey(keyID) {
+			// Try to fetch it
+			err := keyM.FetchKey(keyID)
+			if err != nil {
+				log.Printf("Failed to fetch key %s: %v", keyID, err)
+				http.Error(w, "Key not found", http.StatusNotFound)
+				return
+			}
+		}
+
+		// Get key path
+		keyPath := keyM.GetKeyPath(keyID)
+		if keyPath == "" {
+			http.Error(w, "Key not available", http.StatusNotFound)
+			return
+		}
+
+		// Read and serve the key
+		keyData, err := os.ReadFile(keyPath)
+		if err != nil {
+			log.Printf("Error reading key file: %v", err)
+			http.Error(w, "Error reading key", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/pgp-keys")
+		w.Write(keyData)
+	} else {
+		http.Error(w, "Key management not available", http.StatusServiceUnavailable)
 	}
 }
