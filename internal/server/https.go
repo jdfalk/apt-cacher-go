@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -157,43 +158,64 @@ func (s *Server) handleConnectRequest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
+	defer clientConn.Close()
 
 	// Connect to the remote host
-	remoteConn, err := net.DialTimeout("tcp", r.Host, 10*time.Second)
-	if err != nil {
+	var remoteConn net.Conn
+	var dialErr error
+
+	// More robust connection attempt with multiple attempts for keyservers
+	if isKeyserver {
+		// Try with timeout and retry
+		for attempts := 0; attempts < 3; attempts++ {
+			remoteConn, dialErr = net.DialTimeout("tcp", r.Host, 10*time.Second)
+			if dialErr == nil {
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	} else {
+		remoteConn, dialErr = net.DialTimeout("tcp", r.Host, 10*time.Second)
+	}
+
+	if dialErr != nil {
 		_, writeErr := clientConn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
 		if writeErr != nil {
 			log.Printf("Error writing to client: %v", writeErr)
 		}
-		clientConn.Close()
 		return
 	}
+	defer remoteConn.Close()
 
 	// Tell the client everything is OK
 	_, err = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
 	if err != nil {
 		log.Printf("Error writing to client: %v", err)
-		clientConn.Close()
-		remoteConn.Close()
 		return
 	}
 
-	// Start copying data back and forth
+	// Start copying data back and forth with proper error handling
+	// Create WaitGroup to ensure both copying goroutines complete
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Client to remote
 	go func() {
-		defer clientConn.Close()
-		defer remoteConn.Close()
+		defer wg.Done()
 		_, err := io.Copy(remoteConn, clientConn)
 		if err != nil && err != io.EOF {
 			log.Printf("Error copying from client to remote: %v", err)
 		}
 	}()
 
+	// Remote to client
 	go func() {
-		defer clientConn.Close()
-		defer remoteConn.Close()
+		defer wg.Done()
 		_, err := io.Copy(clientConn, remoteConn)
 		if err != nil && err != io.EOF {
 			log.Printf("Error copying from remote to client: %v", err)
 		}
 	}()
+
+	wg.Wait()
 }
