@@ -19,6 +19,11 @@ cache_ttls:
   package: "30d"
 cleanup_freq: "1h"
 
+# Memory configuration
+database_memory_mb: 1024 # Memory limit for PebbleDB database (1GB)
+application_memory_mb: 6144 # Memory limit for application overall (6GB)
+max_cache_entries: 10000 # Maximum number of entries in memory cache
+
 # Security settings
 allowed_ips:
   - "0.0.0.0/0" # Allow all IPv4
