@@ -11,7 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jdfalk/apt-cacher-go/internal/config"
 	"github.com/jdfalk/apt-cacher-go/internal/parser"
+	"github.com/jdfalk/apt-cacher-go/internal/storage"
 )
 
 // CacheStats contains cache statistics
@@ -39,24 +41,9 @@ type CacheSearchResult struct {
 type Cache struct {
 	rootDir      string
 	maxSize      int64
-	currentSize  int64
-	items        map[string]*cacheEntry
-	mutex        sync.RWMutex // Added for thread safety
-	lruCache     *LRUCache    // Changed from lru.LRUCache to LRUCache
-	hitCount     int64
-	missCount    int64
-	statsMutex   sync.RWMutex // Separate mutex for statistics
+	db           *storage.DatabaseStore
 	packageIndex map[string]parser.PackageInfo
 	packageMutex sync.RWMutex
-}
-
-// cacheEntry represents a single file in the cache
-type cacheEntry struct {
-	Path         string    `json:"path"`
-	Size         int64     `json:"size"`
-	LastAccessed time.Time `json:"last_accessed"`
-	LastModified time.Time `json:"last_modified"`
-	HitCount     int       `json:"hit_count"`
 }
 
 // New creates a new Cache instance
@@ -72,30 +59,44 @@ func New(rootDir string, maxSize int64) (*Cache, error) {
 		log.Printf("Cache directory already exists: %s", rootDir)
 	}
 
+	// Create config for the DatabaseStore
+	cfg := &config.Config{
+		CacheDir:  rootDir,
+		CacheSize: fmt.Sprintf("%d", maxSize),
+		Metadata:  make(map[string]any),
+	}
+
+	// Initialize the database store
+	db, err := storage.NewDatabaseStore(rootDir, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize database: %w", err)
+	}
+
 	cache := &Cache{
 		rootDir:      rootDir,
 		maxSize:      maxSize,
-		currentSize:  0,
-		items:        make(map[string]*cacheEntry),
-		lruCache:     NewLRUCache(10000), // Track up to 10k items
+		db:           db,
 		packageIndex: make(map[string]parser.PackageInfo),
 	}
 
-	// Load cache state if available
-	err := cache.loadState()
-	if err != nil {
-		log.Printf("Failed to load cache state: %v", err)
-		// Calculate current cache size from disk
-		size, err := getDirSize(rootDir)
-		if err != nil {
-			log.Printf("Failed to calculate cache size: %v", err)
-		} else {
-			cache.currentSize = size
-		}
+	// Check if we need to migrate from old JSON state
+	if err := cache.migrateFromJSON(); err != nil {
+		log.Printf("Warning: failed to migrate from JSON state: %v", err)
 	}
 
-	log.Printf("Cache initialized successfully: %s (current size: %d bytes, max: %d bytes)",
-		rootDir, cache.currentSize, maxSize)
+	// Load package index from disk
+	if err := cache.loadPackageIndex(); err != nil {
+		log.Printf("Warning: failed to load package index: %v", err)
+	}
+
+	// Get current stats
+	stats, err := db.GetStats()
+	if err != nil {
+		log.Printf("Warning: failed to get database stats: %v", err)
+	} else {
+		log.Printf("Cache initialized successfully: %s (current size: %d bytes, max: %d bytes, items: %d)",
+			rootDir, stats["currentSize"], maxSize, len(cache.packageIndex))
+	}
 
 	return cache, nil
 }
@@ -106,53 +107,8 @@ func (c *Cache) Get(path string) ([]byte, error) {
 		return nil, fmt.Errorf("path not allowed: %s", path)
 	}
 
-	c.mutex.RLock() // Read lock for checking
-	entry, exists := c.items[path]
-	c.mutex.RUnlock()
-
-	if !exists {
-		c.statsMutex.Lock()
-		c.missCount++
-		c.statsMutex.Unlock()
-		return nil, fmt.Errorf("item not found in cache: %s", path)
-	}
-
-	// Get the data
-	data, err := c.getFromCache(entry, path)
-	if err != nil {
-		return nil, err
-	}
-
-	return data, nil
-}
-
-// getFromCache retrieves a file from the cache filesystem
-func (c *Cache) getFromCache(entry *cacheEntry, path string) ([]byte, error) {
-	c.mutex.Lock()         // Lock for update
-	defer c.mutex.Unlock() // Ensure unlock even on error
-
-	// Update last accessed time and hit count
-	entry.LastAccessed = time.Now()
-	entry.HitCount++
-
-	// Update LRU status
-	c.lruCache.Add(path, entry.Size)
-
-	// Update stats
-	c.statsMutex.Lock()
-	c.hitCount++
-	c.statsMutex.Unlock()
-
-	// Read the file
-	absPath := filepath.Join(c.rootDir, entry.Path)
-	data, err := os.ReadFile(absPath)
-	if err != nil {
-		// File might have been deleted externally
-		delete(c.items, path)
-		return nil, fmt.Errorf("failed to read file from cache: %w", err)
-	}
-
-	return data, nil
+	// Delegate to DatabaseStore
+	return c.db.Get(path)
 }
 
 // Add adds a file to the cache
@@ -161,82 +117,27 @@ func (c *Cache) Add(path string, data []byte) error {
 		return fmt.Errorf("path not allowed: %s", path)
 	}
 
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
+	// Create the full path to the cached file
+	fullPath := filepath.Join(c.rootDir, path)
 
-	// Check if already exists
-	if entry, exists := c.items[path]; exists {
-		// Update the existing entry
-		entry.LastAccessed = time.Now()
-		entry.LastModified = time.Now()
-		entry.HitCount++
-
-		// Save the file
-		absPath := filepath.Join(c.rootDir, entry.Path)
-		err := os.WriteFile(absPath, data, 0644)
-		if err != nil {
-			return fmt.Errorf("failed to write file to cache: %w", err)
-		}
-
-		// Update size if changed
-		newSize := int64(len(data))
-		c.currentSize = c.currentSize - entry.Size + newSize
-		entry.Size = newSize
-
-		// Update LRU cache
-		c.lruCache.Add(path, entry.Size)
-
-		return nil
+	// Ensure the directory structure exists
+	dir := filepath.Dir(fullPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory structure: %w", err)
 	}
 
-	// Ensure size stays within limits
-	if c.currentSize+int64(len(data)) > c.maxSize {
-		err := c.evictItems(int64(len(data)))
-		if err != nil {
-			return fmt.Errorf("failed to make space in cache: %w", err)
-		}
+	// Write the file to disk
+	if err := os.WriteFile(fullPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write file to disk: %w", err)
 	}
 
-	// Create directory structure if needed
-	dir := filepath.Dir(path)
-	if dir != "" {
-		absDir := filepath.Join(c.rootDir, dir)
-		if _, err := os.Stat(absDir); os.IsNotExist(err) {
-			log.Printf("Creating cache directory: %s", absDir)
-			err = os.MkdirAll(absDir, 0755)
-			if err != nil {
-				return fmt.Errorf("failed to create cache directory: %w", err)
-			}
-			log.Printf("Created cache directory successfully: %s", absDir)
-		} else if err == nil {
-			log.Printf("Cache directory already exists: %s", absDir)
-		} else {
-			return fmt.Errorf("failed to check cache directory: %w", err)
-		}
-	}
+	// Delegate metadata to DatabaseStore
+	return c.db.Put(path, data)
+}
 
-	// Save the file
-	absPath := filepath.Join(c.rootDir, path)
-	err := os.WriteFile(absPath, data, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to write file to cache: %w", err)
-	}
-
-	// Add to cache
-	entry := &cacheEntry{
-		Path:         path,
-		Size:         int64(len(data)),
-		LastAccessed: time.Now(),
-		LastModified: time.Now(),
-		HitCount:     1,
-	}
-	c.items[path] = entry
-	c.currentSize += entry.Size
-
-	// Update LRU cache
-	c.lruCache.Add(path, entry.Size)
-
-	return nil
+// Put adds a file to the cache (alias for Add for test compatibility)
+func (c *Cache) Put(path string, data []byte) error {
+	return c.Add(path, data)
 }
 
 // Remove removes a file from the cache
@@ -245,27 +146,23 @@ func (c *Cache) Remove(path string) error {
 		return fmt.Errorf("path not allowed: %s", path)
 	}
 
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-
-	entry, exists := c.items[path]
+	// Delegate to DatabaseStore
+	entry, exists, err := c.db.GetCacheEntry(path)
+	if err != nil {
+		return fmt.Errorf("error checking cache entry: %w", err)
+	}
 	if !exists {
 		return fmt.Errorf("item not found in cache: %s", path)
 	}
 
-	// Remove from filesystem
+	// Remove the file from filesystem
 	absPath := filepath.Join(c.rootDir, entry.Path)
-	err := os.Remove(absPath)
-	if err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(absPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove file from cache: %w", err)
 	}
 
-	// Update cache state
-	c.currentSize -= entry.Size
-	delete(c.items, path)
-	c.lruCache.Remove(path)
-
-	return nil
+	// Remove the entry from database
+	return c.db.DeleteCacheEntry(path)
 }
 
 // Exists checks if a file exists in the cache
@@ -274,285 +171,152 @@ func (c *Cache) Exists(path string) bool {
 		return false
 	}
 
-	c.mutex.RLock()
-	defer c.mutex.RUnlock()
-
-	_, exists := c.items[path]
-	return exists
+	return c.db.Exists(path)
 }
 
 // Stats returns cache statistics
 // Deprecated: Use GetStats() instead which returns a structured CacheStats object
-func (c *Cache) Stats() (int64, int64, int64, int64) {
-	c.mutex.RLock()
-	itemCount := int64(len(c.items))
-	currentSize := c.currentSize
-	c.mutex.RUnlock()
+func (c *Cache) Stats() (int64, int64, int64, int64, int64) {
+	// Get data from the database store
+	stats, err := c.db.GetStats()
+	if err != nil {
+		log.Printf("Error getting stats: %v", err)
+		return 0, 0, 0, 0, 0
+	}
 
-	c.statsMutex.RLock()
-	hitCount := c.hitCount
-	missCount := c.missCount
-	c.statsMutex.RUnlock()
+	// Extract values from the stats map
+	currentSize := stats["currentSize"].(int64)
+	maxSize := stats["maxSize"].(int64)
+	hitCount := stats["hitCount"].(int64)
+	missCount := stats["missCount"].(int64)
 
-	return itemCount, currentSize, hitCount, missCount
+	// Return as itemCount, currentSize, hitCount, missCount
+	// The first value is an approximation since we don't track item count directly
+	entries, err := c.db.ListCacheEntries("")
+	itemCount := int64(len(entries))
+	if err != nil {
+		itemCount = 0 // Default if we can't get the count
+	}
+
+	// Modified return statement to use maxSize instead of currentSize (showing both values)
+	return itemCount, maxSize, hitCount, missCount, currentSize
 }
 
 // GetStats returns detailed cache statistics
 func (c *Cache) GetStats() CacheStats {
-	c.mutex.RLock()
-	itemCount := len(c.items)
-	currentSize := c.currentSize
-	c.mutex.RUnlock()
-
-	c.statsMutex.RLock()
-	hitCount := c.hitCount
-	missCount := c.missCount
-	c.statsMutex.RUnlock()
-
-	// Calculate hit/miss rates
-	totalRequests := hitCount + missCount
-	hitRate := 0.0
-	missRate := 0.0
-	if totalRequests > 0 {
-		hitRate = float64(hitCount) / float64(totalRequests)
-		missRate = float64(missCount) / float64(totalRequests)
+	stats, err := c.db.GetStats()
+	if err != nil {
+		log.Printf("Error getting stats: %v", err)
+		// Return empty stats on error
+		return CacheStats{}
 	}
 
-	stats := CacheStats{
+	// Convert the generic map to our specific struct
+	currentSize := stats["currentSize"].(int64)
+	dbMaxSize := stats["maxSize"].(int64) // Renamed to avoid confusion with the struct field
+	hitCount := stats["hitCount"].(int64)
+	missCount := stats["missCount"].(int64)
+	hitRate := stats["hitRate"].(float64)
+
+	// Count entries
+	entries, err := c.db.ListCacheEntries("")
+	itemCount := 0
+	if err == nil {
+		itemCount = len(entries)
+	}
+
+	return CacheStats{
 		CurrentSize: currentSize,
-		MaxSize:     c.maxSize,
+		MaxSize:     dbMaxSize, // Use the renamed variable here
 		Items:       itemCount,
 		HitRate:     hitRate,
-		MissRate:    missRate,
+		MissRate:    1.0 - hitRate,
 		Hits:        hitCount,
 		Misses:      missCount,
 	}
-
-	return stats
 }
 
 // Size returns the current cache size
 func (c *Cache) Size() int64 {
-	c.mutex.RLock()
-	defer c.mutex.RUnlock()
-	return c.currentSize
+	stats, err := c.db.GetStats()
+	if err != nil {
+		log.Printf("Error getting size: %v", err)
+		return 0
+	}
+	return stats["currentSize"].(int64)
 }
 
 // MaxSize returns the maximum cache size
 func (c *Cache) MaxSize() int64 {
-	// No need for mutex as this is immutable
 	return c.maxSize
 }
 
 // RootDir returns the cache root directory
 func (c *Cache) RootDir() string {
-	// No need for mutex as this is immutable
 	return c.rootDir
 }
 
 // GetLRUItems returns the least recently used items
-func (c *Cache) GetLRUItems(count int) []cacheEntry {
-	c.mutex.RLock()
-	defer c.mutex.RUnlock()
+func (c *Cache) GetLRUItems(count int) []storage.CacheEntry {
+	// Get all entries from db
+	entries, err := c.db.ListCacheEntries("")
+	if err != nil {
+		log.Printf("Error listing cache entries: %v", err)
+		return []storage.CacheEntry{}
+	}
 
-	lruItems := c.lruCache.GetLRUItems(count)
-	result := make([]cacheEntry, 0, len(lruItems))
-
-	for _, item := range lruItems {
-		if entry, exists := c.items[item.Key]; exists {
-			result = append(result, *entry)
+	// Sort entries by last accessed time (oldest first)
+	for i := 0; i < len(entries); i++ {
+		for j := i + 1; j < len(entries); j++ {
+			if entries[i].LastAccessed.After(entries[j].LastAccessed) {
+				entries[i], entries[j] = entries[j], entries[i]
+			}
 		}
 	}
 
-	return result
+	// Take the oldest N entries
+	if len(entries) > count {
+		entries = entries[:count]
+	}
+
+	return entries
 }
 
 // GetMostPopularItems returns the most frequently accessed items
-func (c *Cache) GetMostPopularItems(count int) []cacheEntry {
-	c.mutex.RLock()
-	defer c.mutex.RUnlock()
-
-	// Sort by hit count
-	type itemPair struct {
-		path  string
-		entry *cacheEntry
+func (c *Cache) GetMostPopularItems(count int) []storage.CacheEntry {
+	// Get all entries from db
+	entries, err := c.db.ListCacheEntries("")
+	if err != nil {
+		log.Printf("Error listing cache entries: %v", err)
+		return []storage.CacheEntry{}
 	}
 
-	items := make([]itemPair, 0, len(c.items))
-	for path, entry := range c.items {
-		items = append(items, itemPair{path, entry})
-	}
-
-	// Sort items by hit count descending
-	// Using modernized for loop with range
-	for i := range items {
-		for j := i + 1; j < len(items); j++ {
-			if items[i].entry.HitCount < items[j].entry.HitCount {
-				items[i], items[j] = items[j], items[i]
+	// Sort by hit count (highest first)
+	for i := 0; i < len(entries); i++ {
+		for j := i + 1; j < len(entries); j++ {
+			if entries[i].HitCount < entries[j].HitCount {
+				entries[i], entries[j] = entries[j], entries[i]
 			}
 		}
 	}
 
 	// Take top N items
-	result := make([]cacheEntry, 0, count)
-	for i := 0; i < count && i < len(items); i++ {
-		result = append(result, *items[i].entry)
+	if len(entries) > count {
+		entries = entries[:count]
 	}
 
-	return result
-}
-
-// evictItems removes items from the cache to free up the specified amount of space
-func (c *Cache) evictItems(requiredSpace int64) error {
-	// No need to re-lock, caller already holds the mutex
-
-	// If the required space is larger than the max cache size, we can't cache it
-	if requiredSpace > c.maxSize {
-		return fmt.Errorf("required space (%d) exceeds maximum cache size (%d)",
-			requiredSpace, c.maxSize)
-	}
-
-	// Get list of LRU items
-	lruItems := c.lruCache.GetLRUItems(100)
-	freedSpace := int64(0)
-
-	for _, item := range lruItems {
-		if entry, exists := c.items[item.Key]; exists {
-			// Remove the file
-			absPath := filepath.Join(c.rootDir, entry.Path)
-			err := os.Remove(absPath)
-			if err != nil && !os.IsNotExist(err) {
-				log.Printf("Failed to remove file during eviction: %v", err)
-				continue
-			}
-
-			// Update cache state
-			freedSpace += entry.Size
-			c.currentSize -= entry.Size
-			delete(c.items, item.Key)
-
-			// Check if we've freed enough space
-			if c.currentSize+requiredSpace <= c.maxSize {
-				return nil
-			}
-		}
-	}
-
-	// If we've gone through all LRU items and still don't have enough space
-	if c.currentSize+requiredSpace > c.maxSize {
-		return fmt.Errorf("failed to free enough space in cache")
-	}
-
-	return nil
-}
-
-// saveState persists the cache state to disk
-func (c *Cache) saveState() error {
-	// Use a local copy of data to avoid holding locks during file operations
-	c.mutex.RLock()
-	localItems := make(map[string]*cacheEntry, len(c.items))
-	for k, v := range c.items {
-		copiedEntry := *v // Make a copy
-		localItems[k] = &copiedEntry
-	}
-	c.mutex.RUnlock()
-
-	statePath := filepath.Join(c.rootDir, "cache_state.json")
-	file, err := os.Create(statePath)
-	if err != nil {
-		return fmt.Errorf("failed to create state file: %w", err)
-	}
-	defer file.Close()
-
-	encoder := json.NewEncoder(file)
-	err = encoder.Encode(localItems)
-	if err != nil {
-		return fmt.Errorf("failed to encode cache state: %w", err)
-	}
-
-	return nil
-}
-
-// loadState loads the cache state from disk
-func (c *Cache) loadState() error {
-	statePath := filepath.Join(c.rootDir, "cache_state.json")
-	file, err := os.Open(statePath)
-	if err != nil {
-		return fmt.Errorf("failed to open state file: %w", err)
-	}
-	defer file.Close()
-
-	decoder := json.NewDecoder(file)
-	err = decoder.Decode(&c.items)
-	if err != nil {
-		return fmt.Errorf("failed to decode cache state: %w", err)
-	}
-
-	// Calculate current size and update LRU cache
-	var totalSize int64
-	for path, entry := range c.items {
-		// Validate that files actually exist
-		absPath := filepath.Join(c.rootDir, entry.Path)
-		info, err := os.Stat(absPath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				// File has been deleted externally
-				delete(c.items, path)
-				continue
-			}
-			return fmt.Errorf("failed to stat cache file: %w", err)
-		}
-
-		// Update size if it has changed
-		if info.Size() != entry.Size {
-			entry.Size = info.Size()
-		}
-
-		totalSize += entry.Size
-		c.lruCache.Add(path, entry.Size)
-	}
-
-	c.currentSize = totalSize
-	return nil
+	return entries
 }
 
 // Close safely shuts down the cache
 func (c *Cache) Close() error {
-	// Add timeout to avoid deadlock
-	done := make(chan struct{})
-
-	go func() {
-		// Try to save state with timeout protection
-		if err := c.saveState(); err != nil {
-			log.Printf("Error saving cache state: %v", err)
-		}
-		close(done)
-	}()
-
-	// Wait with timeout
-	select {
-	case <-done:
-		return nil
-	case <-time.After(2 * time.Second):
-		// Log warning but continue
-		log.Println("Cache state save timed out, continuing shutdown")
-		return nil
+	// Save package index before shutdown
+	if err := c.savePackageIndex(); err != nil {
+		log.Printf("Error saving package index during shutdown: %v", err)
 	}
-}
 
-// getDirSize calculates the total size of all files in a directory recursively
-func getDirSize(path string) (int64, error) {
-	var size int64
-	err := filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() {
-			size += info.Size()
-		}
-		return nil
-	})
-	return size, err
+	// Close the database
+	return c.db.Close()
 }
 
 // pathIsAllowed checks if a path is allowed to be stored in the cache
@@ -569,18 +333,27 @@ func (c *Cache) pathIsAllowed(path string) bool {
 
 // SyncToDisk ensures all cache state is written to disk
 func (c *Cache) SyncToDisk() error {
-	return c.saveState()
+	// Save the package index
+	if err := c.savePackageIndex(); err != nil {
+		return err
+	}
+
+	// In the new implementation, syncing happens automatically through PebbleDB
+	return nil
 }
 
 // PruneStaleItems removes items that haven't been accessed in a while
 func (c *Cache) PruneStaleItems(olderThan time.Duration) error {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
+	// Get all entries
+	entries, err := c.db.ListCacheEntries("")
+	if err != nil {
+		return fmt.Errorf("error listing cache entries: %w", err)
+	}
 
 	cutoff := time.Now().Add(-olderThan)
 	prunedCount := 0
 
-	for path, entry := range c.items {
+	for _, entry := range entries {
 		if entry.LastAccessed.Before(cutoff) {
 			// Remove the file
 			absPath := filepath.Join(c.rootDir, entry.Path)
@@ -590,10 +363,12 @@ func (c *Cache) PruneStaleItems(olderThan time.Duration) error {
 				continue
 			}
 
-			// Update cache state
-			c.currentSize -= entry.Size
-			delete(c.items, path)
-			c.lruCache.Remove(path)
+			// Remove the entry from the database
+			if err := c.db.DeleteCacheEntry(entry.Path); err != nil {
+				log.Printf("Error removing entry from database: %v", err)
+				continue
+			}
+
 			prunedCount++
 		}
 	}
@@ -604,12 +379,15 @@ func (c *Cache) PruneStaleItems(olderThan time.Duration) error {
 
 // ListRepos lists all repositories in the cache
 func (c *Cache) ListRepos() []string {
-	c.mutex.RLock()
-	defer c.mutex.RUnlock()
+	entries, err := c.db.ListCacheEntries("")
+	if err != nil {
+		log.Printf("Error listing cache entries: %v", err)
+		return []string{}
+	}
 
 	repos := make(map[string]bool)
-	for path := range c.items {
-		parts := strings.SplitN(path, "/", 2)
+	for _, entry := range entries {
+		parts := strings.SplitN(entry.Path, "/", 2)
 		if len(parts) > 0 {
 			repos[parts[0]] = true
 		}
@@ -628,20 +406,12 @@ func (c *Cache) GetLastModified(path string) time.Time {
 		return time.Time{} // Return zero time for invalid paths
 	}
 
-	c.mutex.RLock()
-	defer c.mutex.RUnlock()
-
-	entry, exists := c.items[path]
-	if !exists {
+	entry, exists, err := c.db.GetCacheEntry(path)
+	if err != nil || !exists {
 		return time.Time{} // Return zero time if not found
 	}
 
 	return entry.LastModified
-}
-
-// Put adds a file to the cache (alias for Add for test compatibility)
-func (c *Cache) Put(path string, data []byte) error {
-	return c.Add(path, data)
 }
 
 // PutWithExpiration adds a file to the cache with an expiration time
@@ -655,17 +425,18 @@ func (c *Cache) PutWithExpiration(path string, data []byte, expiration time.Dura
 		return err
 	}
 
-	// In a real implementation, we would store the expiration time
-	// For simplicity, we'll just use the basic Add and track expiration separately
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-
-	if entry, exists := c.items[path]; exists {
-		// This is where you would set expiration
-		entry.LastModified = time.Now()
+	// Get the entry and update with expiration info
+	entry, exists, err := c.db.GetCacheEntry(path)
+	if err != nil || !exists {
+		return fmt.Errorf("failed to get cache entry after adding: %w", err)
 	}
 
-	return nil
+	// Set expiration as a custom field in LastModified
+	// This is a hack but works for test compatibility
+	entry.LastModified = time.Now().Add(expiration)
+
+	// Save updated entry
+	return c.db.SaveCacheEntry(entry)
 }
 
 // IsFresh checks if a cached item is still fresh (not expired)
@@ -674,49 +445,48 @@ func (c *Cache) IsFresh(path string) bool {
 		return false
 	}
 
-	c.mutex.RLock()
-	defer c.mutex.RUnlock()
-
-	entry, exists := c.items[path]
-	if !exists {
+	entry, exists, err := c.db.GetCacheEntry(path)
+	if err != nil || !exists {
 		return false
 	}
 
 	// For PutWithExpiration, we need to make the check more sensitive to short durations
 	// Since we're using this in tests with very short durations (10ms)
-	return time.Since(entry.LastModified) < time.Millisecond*20
+	return time.Now().Before(entry.LastModified)
 }
 
 // Clear removes all items from the cache
 func (c *Cache) Clear() int {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
+	entries, err := c.db.ListCacheEntries("")
+	if err != nil {
+		log.Printf("Error listing cache entries: %v", err)
+		return 0
+	}
 
-	count := len(c.items)
-
-	// Remove all items from filesystem
-	for path, entry := range c.items {
+	count := 0
+	for _, entry := range entries {
+		// Remove the file
 		absPath := filepath.Join(c.rootDir, entry.Path)
 		os.Remove(absPath) // Ignore errors, just try to clean up
 
-		// Remove from LRU cache
-		c.lruCache.Remove(path)
+		// Remove the entry
+		if err := c.db.DeleteCacheEntry(entry.Path); err == nil {
+			count++
+		}
 	}
-
-	// Reset tracking data structures
-	c.items = make(map[string]*cacheEntry)
-	c.currentSize = 0
 
 	return count
 }
 
 // FlushExpired removes all expired items from the cache
 func (c *Cache) FlushExpired() (int, error) {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
+	entries, err := c.db.ListCacheEntries("")
+	if err != nil {
+		return 0, fmt.Errorf("error listing cache entries: %w", err)
+	}
 
 	count := 0
-	for path, entry := range c.items {
+	for _, entry := range entries {
 		// Consider items older than 24 hours expired
 		if time.Since(entry.LastAccessed) > 24*time.Hour {
 			// Remove file
@@ -726,10 +496,12 @@ func (c *Cache) FlushExpired() (int, error) {
 				continue
 			}
 
-			// Update cache state
-			c.currentSize -= entry.Size
-			delete(c.items, path)
-			c.lruCache.Remove(path)
+			// Remove entry
+			if err := c.db.DeleteCacheEntry(entry.Path); err != nil {
+				log.Printf("Error removing expired entry %s: %v", entry.Path, err)
+				continue
+			}
+
 			count++
 		}
 	}
@@ -739,14 +511,14 @@ func (c *Cache) FlushExpired() (int, error) {
 
 // Search finds cache entries matching a pattern
 func (c *Cache) Search(pattern string) ([]string, error) {
-	c.mutex.RLock()
-	defer c.mutex.RUnlock()
+	entries, err := c.db.ListCacheEntries(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("error searching cache: %w", err)
+	}
 
-	results := []string{}
-	for path := range c.items {
-		if strings.Contains(path, pattern) {
-			results = append(results, path)
-		}
+	results := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		results = append(results, entry.Path)
 	}
 
 	return results, nil
@@ -850,6 +622,13 @@ func (c *Cache) UpdatePackageIndex(packages []parser.PackageInfo) error {
 
 		c.packageIndex[pkg.Package] = pkg
 		addedCount++
+
+		// Also store hash mapping if available
+		if pkg.SHA256 != "" {
+			if err := c.db.AddHashMapping(pkg.SHA256, pkg.Package); err != nil {
+				log.Printf("Warning: failed to add hash mapping for %s: %v", pkg.Package, err)
+			}
+		}
 	}
 
 	// Only log at debug level for no changes
@@ -896,5 +675,102 @@ func (c *Cache) savePackageIndex() error {
 	}
 
 	log.Printf("Package index saved to %s (%d packages)", indexPath, len(localIndex))
+	return nil
+}
+
+// loadPackageIndex loads the package index from disk
+func (c *Cache) loadPackageIndex() error {
+	indexPath := filepath.Join(c.rootDir, "package_index.json")
+	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
+		// No index file exists yet
+		return nil
+	}
+
+	file, err := os.Open(indexPath)
+	if err != nil {
+		return fmt.Errorf("failed to open package index: %w", err)
+	}
+	defer file.Close()
+
+	c.packageMutex.Lock()
+	defer c.packageMutex.Unlock()
+
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&c.packageIndex); err != nil {
+		return fmt.Errorf("failed to decode package index: %w", err)
+	}
+
+	log.Printf("Loaded package index with %d packages", len(c.packageIndex))
+	return nil
+}
+
+// migrateFromJSON attempts to migrate from the old JSON-based state
+func (c *Cache) migrateFromJSON() error {
+	statePath := filepath.Join(c.rootDir, "cache_state.json")
+
+	// Check if the old state file exists
+	if _, err := os.Stat(statePath); os.IsNotExist(err) {
+		// No migration needed
+		return nil
+	}
+
+	log.Printf("Migrating cache state from JSON to PebbleDB")
+
+	// Open the JSON file
+	file, err := os.Open(statePath)
+	if err != nil {
+		return fmt.Errorf("failed to open state file: %w", err)
+	}
+	defer file.Close()
+
+	// Decode the JSON
+	type oldCacheEntry struct {
+		Path         string    `json:"path"`
+		Size         int64     `json:"size"`
+		LastAccessed time.Time `json:"last_accessed"`
+		LastModified time.Time `json:"last_modified"`
+		HitCount     int       `json:"hit_count"`
+	}
+
+	var items map[string]*oldCacheEntry
+
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&items); err != nil {
+		return fmt.Errorf("failed to decode cache state: %w", err)
+	}
+
+	// Migrate each item to PebbleDB
+	for path, item := range items {
+		// Verify the file exists
+		absPath := filepath.Join(c.rootDir, item.Path)
+		if _, err := os.Stat(absPath); os.IsNotExist(err) {
+			log.Printf("Skipping missing file during migration: %s", absPath)
+			continue
+		}
+
+		// Create a new cache entry
+		entry := storage.CacheEntry{
+			Path:         path,
+			Size:         item.Size,
+			LastAccessed: item.LastAccessed,
+			LastModified: item.LastModified,
+			HitCount:     item.HitCount,
+		}
+
+		// Save to database
+		if err := c.db.SaveCacheEntry(entry); err != nil {
+			log.Printf("Error migrating entry %s: %v", path, err)
+			continue
+		}
+	}
+
+	log.Printf("Migration complete, migrated %d items", len(items))
+
+	// Rename the old state file to create a backup
+	backupPath := filepath.Join(c.rootDir, "cache_state.json.bak")
+	if err := os.Rename(statePath, backupPath); err != nil {
+		log.Printf("Warning: could not rename old state file: %v", err)
+	}
+
 	return nil
 }

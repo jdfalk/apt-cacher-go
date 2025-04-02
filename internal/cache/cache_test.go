@@ -71,7 +71,28 @@ func (m *MockCache) FlushExpired() (int, error) {
 	return args.Int(0), args.Error(1)
 }
 
-// TestCacheOperations test
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestCacheOperations tests the basic cache operations including:
+// - Adding files to the cache
+// - Retrieving files from the cache
+// - Checking file existence
+// - Cache expiration functionality
+//
+// The test verifies:
+// - Files can be successfully stored and retrieved
+// - Cache metadata is properly maintained
+// - Expiration works as expected
+//
+// Approach:
+// 1. Creates a temporary directory for test cache storage
+// 2. Initializes a cache with specified size limit
+// 3. Tests basic cache operations with real file I/O
+//
+// Note: Uses temporary directories that are cleaned up after tests
 func TestCacheOperations(t *testing.T) {
 	// Create a temporary directory for testing
 	tempDir, err := os.MkdirTemp("", "cache-test")
@@ -85,6 +106,7 @@ func TestCacheOperations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
 	}
+	defer cache.Close()
 
 	// Test putting data in the cache
 	testData := []byte("This is test data")
