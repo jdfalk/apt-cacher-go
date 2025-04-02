@@ -706,8 +706,7 @@ func (c *Cache) UpdatePackageIndex(packages []parser.PackageInfo) error {
 	}
 
 	// Get updated count more reliably
-	currentCount := 0
-	currentCount, err = c.db.GetPackageCount()
+	currentCount, err := c.db.GetPackageCount()
 	if err != nil {
 		log.Printf("Error getting final package count: %v", err)
 		// Fall back to calculated count
