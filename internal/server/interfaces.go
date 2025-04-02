@@ -75,6 +75,9 @@ type BackendManager interface {
 
 	// KeyManager returns the key manager instance
 	KeyManager() interface{}
+
+	// RefreshReleaseData refreshes and reprocesses a release file after key changes
+	RefreshReleaseData(path string) error
 }
 
 // PathMapper defines the interface for path mapping
