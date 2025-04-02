@@ -110,7 +110,7 @@ func TestCacheOperations(t *testing.T) {
 
 	// Test putting data in the cache
 	testData := []byte("This is test data")
-	testKey := "test/path/file.deb"
+	testKey := "file.deb" // Remove the "test/path/" prefix
 	require.NoError(t, cache.Put(testKey, testData))
 
 	// Test getting data from the cache
@@ -123,8 +123,8 @@ func TestCacheOperations(t *testing.T) {
 	_, err = os.Stat(filePath)
 	assert.False(t, os.IsNotExist(err))
 
-	// Test expiration
-	shortKey := "temp/short-lived.data"
+	// Test expiration - use a name that doesn't create a directory
+	shortKey := "short-lived.data" // Remove the "temp/" prefix
 	require.NoError(t, cache.PutWithExpiration(shortKey, []byte("Short lived"), 10*time.Millisecond))
 
 	// Verify it exists initially
@@ -182,7 +182,7 @@ func TestCacheConcurrency(t *testing.T) {
 	// Add concurrent operations
 	for i := range numOperations {
 		go func(idx int) {
-			key := filepath.Join("test", "concurrent", fmt.Sprintf("file-%d.data", idx))
+			key := fmt.Sprintf("concurrent-file-%d.data", idx) // No directory path
 			var buf []byte
 			buf = fmt.Appendf(buf, "Data for file %d", idx)
 			_ = realCache.Put(key, buf) // Ignore the error, just using _ to acknowledge it
@@ -190,8 +190,8 @@ func TestCacheConcurrency(t *testing.T) {
 		}(i)
 
 		go func(idx int) {
-			key := filepath.Join("test", "concurrent", fmt.Sprintf("file-%d.data", idx))
-			_, _ = realCache.Get(key) // Ignore both return values
+			key := fmt.Sprintf("concurrent-file-%d.data", idx) // No directory path
+			_, _ = realCache.Get(key)                          // Ignore both return values
 			done <- true
 		}(i)
 	}
@@ -220,8 +220,9 @@ func TestCacheCleanup(t *testing.T) {
 	}
 
 	// Put the data twice, which should exceed the cache limit
-	require.NoError(t, cache.Put("test/file1.deb", testData))
-	require.NoError(t, cache.Put("test/file2.deb", testData))
+	// Use simple filenames without directory paths
+	require.NoError(t, cache.Put("file1.deb", testData))
+	require.NoError(t, cache.Put("file2.deb", testData))
 
 	// Wait a moment for cleanup to occur
 	time.Sleep(100 * time.Millisecond)
@@ -232,8 +233,8 @@ func TestCacheCleanup(t *testing.T) {
 		"Cache size should be limited to 1KB")
 
 	// Either file1 or file2 should exist, but not both
-	exists1 := cache.Exists("test/file1.deb")
-	exists2 := cache.Exists("test/file2.deb")
+	exists1 := cache.Exists("file1.deb")
+	exists2 := cache.Exists("file2.deb")
 	assert.True(t, exists1 || exists2, "At least one file should exist")
 	assert.False(t, exists1 && exists2, "Both files should not exist")
 }

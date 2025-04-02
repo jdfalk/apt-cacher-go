@@ -446,8 +446,14 @@ func (ds *DatabaseStore) GetPackageNameForHash(path string) string {
 
 // Put adds a file to the cache
 func (ds *DatabaseStore) Put(path string, data []byte) error {
+	// Calculate absolute path first
+	absPath := path
+	if !filepath.IsAbs(absPath) {
+		absPath = filepath.Join(ds.dbPath, "..", path)
+	}
+
 	// Create filesystem directory if needed
-	dir := filepath.Dir(path)
+	dir := filepath.Dir(absPath)
 	if dir != "" {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return err
@@ -455,11 +461,6 @@ func (ds *DatabaseStore) Put(path string, data []byte) error {
 	}
 
 	// Write the file to the filesystem
-	absPath := path
-	if !filepath.IsAbs(absPath) {
-		absPath = filepath.Join(ds.dbPath, "..", path)
-	}
-
 	if err := os.WriteFile(absPath, data, 0644); err != nil {
 		return err
 	}
