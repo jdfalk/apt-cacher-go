@@ -60,14 +60,23 @@ type CacheEntry struct {
 func NewDatabaseStore(cacheDir string, config *config.Config) (*DatabaseStore, error) {
 	dbPath := filepath.Join(cacheDir, "pebbledb")
 
-	// Get memory limits from config
-	var maxCacheEntries int = 10000                  // Default
-	var maxMemoryMB int64 = 1024                     // Default 1GB
-	var maxCacheSize int64 = 10 * 1024 * 1024 * 1024 // Default 10GB
+	// Get memory limits from config - define these locally rather than as package variables
+	maxCacheEntries := 10000                       // Default
+	maxMemoryMB := int64(1024)                     // Default 1GB
+	maxCacheSize := int64(10 * 1024 * 1024 * 1024) // Default 10GB
 
 	// Read from config if available
 	if config != nil {
-		// Parse memory settings from config
+		// Use the explicit config fields if available
+		if config.DatabaseMemoryMB > 0 {
+			maxMemoryMB = int64(config.DatabaseMemoryMB)
+		}
+
+		if config.MaxCacheEntries > 0 {
+			maxCacheEntries = config.MaxCacheEntries
+		}
+
+		// For backward compatibility, still check metadata
 		if val, ok := config.Metadata["memory_management.max_cache_size"]; ok {
 			if strVal, ok := val.(string); ok {
 				// Parse size string like "1024MB"
@@ -837,29 +846,40 @@ func (ds *DatabaseStore) UpdatePackageIndex(packages []parser.PackageInfo) error
 
 // GetPackageCount returns the total number of packages stored in the database
 func (ds *DatabaseStore) GetPackageCount() (int, error) {
-	ds.packageCountMutex.RLock()
-
-	// Use cached count if available and fresh (less than 5 seconds old)
-	if time.Since(ds.packageCountTime) < 5*time.Second && ds.packageCount > 0 {
-		count := ds.packageCount
-		ds.packageCountMutex.RUnlock()
-		return int(count), nil
-	}
-	ds.packageCountMutex.RUnlock()
-
-	// Otherwise, refresh the count
-	return ds.refreshPackageCount()
-}
-
-// refreshPackageCount recounts all packages in the database
-func (ds *DatabaseStore) refreshPackageCount() (int, error) {
-	// Lock for writing the new count
 	ds.packageCountMutex.Lock()
 	defer ds.packageCountMutex.Unlock()
 
+	// Check if we have a cached count that's still valid (less than 10 minutes old)
+	if !ds.packageCountTime.IsZero() && time.Since(ds.packageCountTime) < 10*time.Minute {
+		return int(ds.packageCount), nil // Convert int64 to int
+	}
+
+	// We need to refresh the count - call the internal locked version
+	count, err := ds.refreshPackageCountLocked()
+	if err != nil {
+		return 0, err
+	}
+
+	// Note: no need to update packageCount and packageCountTime here
+	// as refreshPackageCountLocked already does that
+
+	return int(count), nil // Convert int64 to int
+}
+
+// refreshPackageCount recounts all packages in the database
+func (ds *DatabaseStore) refreshPackageCount() (int64, error) {
+	ds.packageCountMutex.Lock()
+	defer ds.packageCountMutex.Unlock()
+
+	return ds.refreshPackageCountLocked()
+}
+
+// refreshPackageCountLocked recounts all packages in the database when the mutex is already locked
+// IMPORTANT: This method must only be called when packageCountMutex is already locked
+func (ds *DatabaseStore) refreshPackageCountLocked() (int64, error) {
 	// Check again after getting the write lock in case another goroutine updated it
 	if time.Since(ds.packageCountTime) < 5*time.Second && ds.packageCount > 0 {
-		return int(ds.packageCount), nil
+		return ds.packageCount, nil
 	}
 
 	// Count the packages by iterating through all package keys
@@ -887,12 +907,12 @@ func (ds *DatabaseStore) refreshPackageCount() (int, error) {
 	}
 
 	if err := iter.Error(); err != nil {
-		return int(count), fmt.Errorf("iterator error during count: %w", err)
+		return count, fmt.Errorf("iterator error during count: %w", err)
 	}
 
 	// Update the cached count and timestamp
 	ds.packageCount = count
 	ds.packageCountTime = time.Now()
 
-	return int(count), nil
+	return count, nil
 }
