@@ -288,7 +288,7 @@ func TestDatabaseStoreGet(t *testing.T) {
 		path := "file1.txt"
 
 		// Get the file multiple times
-		for i := 0; i < 3; i++ {
+		for range 3 {
 			_, err := db.Get(path)
 			require.NoError(t, err)
 		}

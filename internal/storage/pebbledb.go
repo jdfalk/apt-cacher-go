@@ -314,11 +314,11 @@ func (ds *DatabaseStore) RecordCacheMiss() {
 }
 
 // GetStats returns cache statistics
-func (ds *DatabaseStore) GetStats() (map[string]interface{}, error) {
+func (ds *DatabaseStore) GetStats() (map[string]any, error) {
 	ds.statsMutex.RLock()
 	defer ds.statsMutex.RUnlock()
 
-	stats := map[string]interface{}{
+	stats := map[string]any{
 		"currentSize": ds.currentSize,
 		"maxSize":     ds.maxSize,
 		"hitCount":    ds.hitCount,
