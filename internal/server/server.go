@@ -231,6 +231,9 @@ func (s *Server) setupHTTPHandlers() {
 	mainMux.HandleFunc("/download", s.handleHTTPSRequest)    // Changed from handleProxiedHTTPSRequest
 	mainMux.HandleFunc("/https", s.handleHTTPSRequest)       // Changed from handleProxiedHTTPSRequest
 
+	// In the setupHTTPHandlers method, add:
+	mainMux.HandleFunc("CONNECT", s.handleConnectRequest)
+
 	// Set up admin handlers on the adminMux - adminHome is used for the root path
 	s.setupAdminHandlers(adminMux)
 
