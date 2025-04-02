@@ -40,6 +40,10 @@ type DatabaseStore struct {
 	hitCount    int64
 	missCount   int64
 	statsMutex  sync.RWMutex
+
+	packageCount      int64
+	packageCountMutex sync.RWMutex
+	packageCountTime  time.Time
 }
 
 // CacheEntry represents metadata for a cached file
@@ -660,24 +664,41 @@ func (ds *DatabaseStore) StorePackageInfo(pkg parser.PackageInfo) error {
 		return err
 	}
 
-	key := "p:" + pkg.Package
-	return ds.db.Set([]byte(key), data, nil)
+	// Use composite key for unique package identification
+	key := fmt.Sprintf("p:%s:%s:%s", pkg.Package, pkg.Version, pkg.Architecture)
+	err = ds.db.Set([]byte(key), data, nil)
+	if err != nil {
+		return err
+	}
+
+	// Invalidate the package count cache
+	ds.packageCountMutex.Lock()
+	ds.packageCountTime = time.Time{} // Zero time to force refresh
+	ds.packageCountMutex.Unlock()
+
+	return nil
 }
 
 // GetPackageInfo retrieves package information from the database
 func (ds *DatabaseStore) GetPackageInfo(packageName string) (parser.PackageInfo, bool, error) {
-	key := "p:" + packageName
-	data, closer, err := ds.db.Get([]byte(key))
+	// Create an iterator to find any package with this name
+	prefix := "p:" + packageName + ":"
+	iter, err := ds.db.NewIter(&pebble.IterOptions{
+		LowerBound: []byte(prefix),
+		UpperBound: []byte(prefix + "\xff"),
+	})
 	if err != nil {
-		if err == pebble.ErrNotFound {
-			return parser.PackageInfo{}, false, nil
-		}
 		return parser.PackageInfo{}, false, err
 	}
-	defer closer.Close()
+	defer iter.Close()
+
+	// Just get the first matching package
+	if !iter.First() {
+		return parser.PackageInfo{}, false, nil
+	}
 
 	var pkg parser.PackageInfo
-	if err := json.Unmarshal(data, &pkg); err != nil {
+	if err := json.Unmarshal(iter.Value(), &pkg); err != nil {
 		return parser.PackageInfo{}, false, err
 	}
 
@@ -686,39 +707,191 @@ func (ds *DatabaseStore) GetPackageInfo(packageName string) (parser.PackageInfo,
 
 // ListPackages returns a list of all packages
 func (ds *DatabaseStore) ListPackages(pattern string) ([]parser.PackageInfo, error) {
-	var packages []parser.PackageInfo
+	// Lock to prevent concurrent iterator creation
+	ds.batchMutex.Lock()
+	defer ds.batchMutex.Unlock()
 
-	// Create an iterator with prefix "p:"
+	// Use a consistent prefix for package entries
+	prefix := []byte("p:")
+
+	// Create an iterator with proper bounds
 	iter, err := ds.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("p:"),
-		UpperBound: []byte("p:\xff"),
+		LowerBound: prefix,
+		UpperBound: []byte("p;"), // One byte higher than 'p:' to include all 'p:' entries
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create iterator: %w", err)
 	}
 	defer iter.Close()
 
-	// Iterate through package entries
-	for iter.First(); iter.Valid(); iter.Next() {
-		key := string(iter.Key())
-		packageName := strings.TrimPrefix(key, "p:")
+	var packages []parser.PackageInfo
+	valid := iter.First()
 
-		// Skip if pattern doesn't match
-		if pattern != "" && !strings.Contains(packageName, pattern) {
+	// Add logging to help diagnose issues
+	if !valid {
+		// Iterator is empty or error occurred
+		if err := iter.Error(); err != nil {
+			return nil, fmt.Errorf("iterator error: %w", err)
+		}
+		// Empty result - no packages found
+		return packages, nil
+	}
+
+	for ; iter.Valid(); iter.Next() {
+		key := string(iter.Key())
+		// Skip non-package keys
+		if !strings.HasPrefix(key, "p:") {
 			continue
 		}
 
+		// Apply pattern filter if specified
+		if pattern != "" && !strings.Contains(key, pattern) {
+			continue
+		}
+
+		// Make a copy of the value since it will be invalidated after Next()
+		valueCopy := append([]byte(nil), iter.Value()...)
+
 		var pkg parser.PackageInfo
-		if err := json.Unmarshal(iter.Value(), &pkg); err != nil {
-			log.Printf("Error unmarshaling package info for %s: %v", packageName, err)
+		if err := json.Unmarshal(valueCopy, &pkg); err != nil {
+			log.Printf("Error unmarshaling package data for key %s: %v", key, err)
 			continue
 		}
 
 		packages = append(packages, pkg)
 	}
 
-	return packages, iter.Error()
+	if err := iter.Error(); err != nil {
+		return packages, fmt.Errorf("iterator error: %w", err)
+	}
+
+	return packages, nil
 }
 
-// The rest of the implementation remains similar to the existing methods
-// with minor adjustments to work with the new data model
+// UpdatePackageIndex updates the package index with a list of packages
+func (ds *DatabaseStore) UpdatePackageIndex(packages []parser.PackageInfo) error {
+	// Use a batch for better performance
+	ds.batchMutex.Lock()
+	defer ds.batchMutex.Unlock()
+
+	batch := ds.db.NewBatch()
+	defer batch.Close()
+
+	addedCount := 0
+
+	for _, pkg := range packages {
+		// Skip empty package names
+		if pkg.Package == "" {
+			continue
+		}
+
+		// Create a unique key using package name, version and architecture
+		key := fmt.Sprintf("p:%s:%s:%s", pkg.Package, pkg.Version, pkg.Architecture)
+
+		// Check if package already exists
+		_, closer, err := ds.db.Get([]byte(key))
+		if err == nil {
+			// Package exists, close the value and continue
+			closer.Close()
+			continue
+		}
+
+		// Serialize package info
+		pkgData, err := json.Marshal(pkg)
+		if err != nil {
+			continue
+		}
+
+		// Add to batch
+		if err := batch.Set([]byte(key), pkgData, nil); err != nil {
+			continue
+		}
+
+		addedCount++
+
+		// Also add hash mapping if available
+		if pkg.SHA256 != "" {
+			hashKey := "h:" + pkg.SHA256
+			if err := batch.Set([]byte(hashKey), []byte(pkg.Package), nil); err != nil {
+				// Just log the error but continue with the package
+				log.Printf("Error storing hash mapping for %s: %v", pkg.Package, err)
+			}
+		}
+	}
+
+	// Apply the batch
+	if err := ds.db.Apply(batch, nil); err != nil {
+		return err
+	}
+
+	// Invalidate the package count cache if we added packages
+	if addedCount > 0 {
+		ds.packageCountMutex.Lock()
+		ds.packageCountTime = time.Time{} // Zero time to force refresh
+		ds.packageCountMutex.Unlock()
+	}
+
+	return nil
+}
+
+// GetPackageCount returns the total number of packages stored in the database
+func (ds *DatabaseStore) GetPackageCount() (int, error) {
+	ds.packageCountMutex.RLock()
+
+	// Use cached count if available and fresh (less than 5 seconds old)
+	if time.Since(ds.packageCountTime) < 5*time.Second && ds.packageCount > 0 {
+		count := ds.packageCount
+		ds.packageCountMutex.RUnlock()
+		return int(count), nil
+	}
+	ds.packageCountMutex.RUnlock()
+
+	// Otherwise, refresh the count
+	return ds.refreshPackageCount()
+}
+
+// refreshPackageCount recounts all packages in the database
+func (ds *DatabaseStore) refreshPackageCount() (int, error) {
+	// Lock for writing the new count
+	ds.packageCountMutex.Lock()
+	defer ds.packageCountMutex.Unlock()
+
+	// Check again after getting the write lock in case another goroutine updated it
+	if time.Since(ds.packageCountTime) < 5*time.Second && ds.packageCount > 0 {
+		return int(ds.packageCount), nil
+	}
+
+	// Count the packages by iterating through all package keys
+	prefix := []byte("p:")
+
+	// Use a batch mutex to prevent concurrent iterator creation
+	ds.batchMutex.Lock()
+	iter, err := ds.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: []byte("p;"), // One byte higher than 'p:' for all 'p:' entries
+	})
+	ds.batchMutex.Unlock()
+
+	if err != nil {
+		return 0, fmt.Errorf("failed to create iterator: %w", err)
+	}
+	defer iter.Close()
+
+	var count int64 = 0
+	for iter.First(); iter.Valid(); iter.Next() {
+		key := string(iter.Key())
+		if strings.HasPrefix(key, "p:") {
+			count++
+		}
+	}
+
+	if err := iter.Error(); err != nil {
+		return int(count), fmt.Errorf("iterator error during count: %w", err)
+	}
+
+	// Update the cached count and timestamp
+	ds.packageCount = count
+	ds.packageCountTime = time.Now()
+
+	return int(count), nil
+}
