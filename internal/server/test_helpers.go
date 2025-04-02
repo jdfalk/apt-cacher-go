@@ -66,6 +66,7 @@ func NewTestServerFixture(t *testing.T) *TestServerFixture {
 	mockBackend.On("KeyManager").Return(mockKeyManager).Maybe()
 	mockBackend.On("ForceCleanupPrefetcher").Return(0).Maybe()
 	mockBackend.On("PrefetchOnStartup", mock.Anything).Return(nil).Maybe()
+	mockBackend.On("RefreshReleaseData", mock.Anything).Return(nil).Maybe()
 	mockCache.On("GetStats").Return(cache.CacheStats{}).Maybe()
 	// ADD THIS: Mock expectation for Close() which is called during server shutdown
 	mockCache.On("Close").Return(nil).Maybe()
