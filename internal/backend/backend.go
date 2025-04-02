@@ -265,6 +265,20 @@ func (m *Manager) Fetch(requestPath string) ([]byte, error) {
 		go m.ProcessReleaseFile(mappingResult.Repository, mappingResult.RemotePath, result)
 	}
 
+	// Check for GPG key errors if we have a key manager
+	if m.keyManager != nil {
+		keyID, hasKeyError := m.keyManager.DetectKeyError(result)
+		if hasKeyError {
+			log.Printf("Detected missing GPG key: %s, attempting to fetch", keyID)
+			err := m.keyManager.FetchKey(keyID)
+			if err != nil {
+				log.Printf("Failed to fetch key %s: %v", keyID, err)
+			} else {
+				log.Printf("Successfully fetched key %s", keyID)
+			}
+		}
+	}
+
 	return result, nil
 }
 
