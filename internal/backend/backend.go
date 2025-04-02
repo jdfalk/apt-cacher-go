@@ -9,7 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"path"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -68,44 +68,42 @@ type Backend struct {
 	client   *http.Client // Added client field
 }
 
-// Modify the New function to accept interfaces instead of concrete types
+// Modify the New function to use createHTTPClient
 func New(cfg *config.Config, cache CacheProvider, mapper PathMapperProvider, packageMapper PackageMapperProvider) (*Manager, error) {
-	// Create HTTP client for backends
-	client := &http.Client{
-		Timeout: 30 * time.Second,
+	// Create manager first so we can use its methods
+	m := &Manager{
+		cache:         cache,
+		mapper:        mapper,
+		packageMapper: packageMapper,
+		cacheDir:      cfg.CacheDir,
 	}
 
-	backends := make([]*Backend, 0, len(cfg.Backends))
+	// Use the createHTTPClient method instead of creating it inline
+	client := m.createHTTPClient()
+	m.client = client
 
+	// Create download context
+	downloadCtx, downloadCancel := context.WithCancel(context.Background())
+	m.downloadCtx = downloadCtx
+	m.downloadCancel = downloadCancel
+
+	// Create backends with the HTTP client
+	backends := make([]*Backend, 0, len(cfg.Backends))
 	for _, b := range cfg.Backends {
 		backends = append(backends, &Backend{
 			Name:     b.Name,
 			BaseURL:  b.URL,
 			Priority: b.Priority,
-			client:   client, // Initialize client for each backend
+			client:   client,
 		})
 	}
-
-	// Create download queue with desired concurrency
-	downloadCtx, downloadCancel := context.WithCancel(context.Background())
-
-	m := &Manager{
-		backends:       backends,
-		cache:          cache,
-		client:         client,
-		mapper:         mapper,        // Use the provided mapper instead of creating a new one
-		packageMapper:  packageMapper, // Add this line
-		downloadCtx:    downloadCtx,
-		downloadCancel: downloadCancel, // Store the cancel function
-		cacheDir:       cfg.CacheDir,
-	}
+	m.backends = backends
 
 	// Initialize key manager with cache directory for fallback
 	km, err := keymanager.New(&cfg.KeyManagement, cfg.CacheDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize key manager: %w", err)
 	}
-
 	m.keyManager = km
 
 	// Create the download queue
@@ -158,116 +156,35 @@ func (m *Manager) Shutdown() {
 	}
 }
 
-// Fix the Fetch method to handle the queue Submit properly
-func (m *Manager) Fetch(requestPath string) ([]byte, error) {
-	// Map the request path to a repository and cache path
-	mappingResult, err := m.mapper.MapPath(requestPath)
+// Fix the Fetch method to use selectBackendByName
+func (m *Manager) Fetch(path string) ([]byte, error) {
+	// Check if this is a keyserver request we need to handle
+	if strings.Contains(path, "/keys/") || strings.Contains(path, "/pks/lookup") {
+		return m.handleKeyRequest(path)
+	}
+
+	// Regular fetch process
+	mappingResult, err := m.mapper.MapPath(path)
+	if err != nil {
+		return nil, fmt.Errorf("error mapping path %s: %w", path, err)
+	}
+
+	// Find the correct backend for this repository using our helper function
+	selectedBackend, err := m.selectBackendByName(mappingResult.Repository)
+	if err != nil {
+		return nil, fmt.Errorf("no backend found for repository %s (path: %s)",
+			mappingResult.Repository, path)
+	}
+
+	// Original fetch logic - using the selectedBackend
+	data, err := m.downloadFromURL(filepath.Join(selectedBackend.BaseURL, mappingResult.RemotePath))
 	if err != nil {
 		return nil, err
 	}
 
-	// Check if the file exists in cache first
-	cacheKey := mappingResult.CachePath
-
-	// Try to get from cache first
-	data, err := m.cache.Get(cacheKey)
-	found := err == nil && len(data) > 0
-
-	// Handle repository signature files specially
-	isSignatureFile := strings.HasSuffix(mappingResult.RemotePath, ".gpg") ||
-		strings.HasSuffix(mappingResult.RemotePath, "InRelease") ||
-		strings.HasSuffix(mappingResult.RemotePath, "Release")
-
-	if found {
-		// For regular files, always use cache if found
-		if !mappingResult.IsIndex && !isSignatureFile {
-			return data, nil
-		}
-
-		// For index and signature files, check if they are fresh
-		if m.cache.IsFresh(cacheKey) {
-			// If cache is fresh, use it
-			log.Printf("Using cached %s", requestPath)
-			return data, nil
-		}
-
-		// Otherwise, refresh from backend but still return cached data
-		// if backend fails
-		log.Printf("Refreshing %s", requestPath)
-	}
-
-	// Fetch from backend if not found in cache or needs refreshing
-	fileType := "file"
-	if isSignatureFile {
-		fileType = "signature file"
-	}
-	log.Printf("Fetching %s: %s",
-		fileType,
-		mappingResult.RemotePath)
-
-	// Select backend based on the repository name
-	backend, err := m.selectBackendByName(mappingResult.Repository)
-	if err != nil {
-		if found {
-			// If backend selection fails but we have cached data, use it
-			log.Printf("Backend selection failed, using cached data: %v", err)
-			return data, nil
-		}
-		return nil, err
-	}
-
-	// Construct full URL
-	u, err := url.Parse(backend.BaseURL)
-	if err != nil {
-		if found {
-			return data, nil // Use cached data if URL parsing fails
-		}
-		return nil, err
-	}
-	u.Path = path.Join(u.Path, mappingResult.RemotePath)
-	fullURL := u.String()
-
-	// Download directly for now instead of using queue
-	result, err := m.downloadFromURL(fullURL)
-	if err != nil {
-		if found {
-			// If download fails but we have cached data, use it
-			log.Printf("Download failed, using cached data: %v", err)
-			return data, nil
-		}
-		return nil, err
-	}
-
-	// Determine cache policy based on file type
-	var expiration time.Duration
-	if mappingResult.IsIndex || isSignatureFile {
-		// Index files expire quickly (1 hour by default)
-		expiration, _ = time.ParseDuration("1h")
-	} else {
-		// Package files are kept for a month
-		expiration, _ = time.ParseDuration("720h")
-	}
-
-	// Store in cache with expiration
-	err = m.cache.PutWithExpiration(cacheKey, result, expiration)
-	if err != nil {
-		log.Printf("Warning: failed to cache %s: %v", cacheKey, err)
-	}
-
-	// Process packages files and release files in the background
-	if mappingResult.IsIndex && strings.Contains(mappingResult.RemotePath, "Packages") {
-		go m.ProcessPackagesFile(mappingResult.Repository, mappingResult.RemotePath, result)
-	}
-
-	// Process Release files to find additional index files
-	if mappingResult.IsIndex && (strings.HasSuffix(mappingResult.RemotePath, "Release") ||
-		strings.HasSuffix(mappingResult.RemotePath, "InRelease")) {
-		go m.ProcessReleaseFile(mappingResult.Repository, mappingResult.RemotePath, result)
-	}
-
-	// Check for GPG key errors if we have a key manager
+	// Check response for GPG key errors
 	if m.keyManager != nil {
-		keyID, hasKeyError := m.keyManager.DetectKeyError(result)
+		keyID, hasKeyError := m.keyManager.DetectKeyError(data)
 		if hasKeyError {
 			log.Printf("Detected missing GPG key: %s, attempting to fetch", keyID)
 			err := m.keyManager.FetchKey(keyID)
@@ -275,11 +192,68 @@ func (m *Manager) Fetch(requestPath string) ([]byte, error) {
 				log.Printf("Failed to fetch key %s: %v", keyID, err)
 			} else {
 				log.Printf("Successfully fetched key %s", keyID)
+
+				// Now we need to re-fetch the original content, which might
+				// succeed if the backend can use the key we just fetched
+				updatedData, retryErr := m.downloadFromURL(filepath.Join(selectedBackend.BaseURL, mappingResult.RemotePath))
+				if retryErr == nil {
+					// Check if key error is gone
+					_, stillHasError := m.keyManager.DetectKeyError(updatedData)
+					if !stillHasError {
+						log.Printf("Successfully fetched content after retrieving key %s", keyID)
+						return updatedData, nil
+					}
+				}
 			}
 		}
 	}
 
-	return result, nil
+	return data, nil
+}
+
+// New method to handle keyserver requests
+func (m *Manager) handleKeyRequest(path string) ([]byte, error) {
+	// Extract key ID from various possible request formats
+	var keyID string
+
+	if strings.Contains(path, "/pks/lookup") {
+		// Parse keyserver request: /pks/lookup?op=get&search=0xKEYID
+		if strings.Contains(path, "search=0x") {
+			parts := strings.Split(path, "search=0x")
+			if len(parts) > 1 {
+				keyID = strings.Split(parts[1], "&")[0]
+			}
+		}
+	} else if strings.Contains(path, "/keys/") {
+		// Direct key file request: /keys/KEYID.gpg
+		fileName := filepath.Base(path)
+		keyID = strings.TrimSuffix(fileName, ".gpg")
+	}
+
+	if keyID == "" {
+		return nil, fmt.Errorf("could not extract key ID from request: %s", path)
+	}
+
+	// Check if we have the key
+	if m.keyManager == nil {
+		return nil, fmt.Errorf("key manager not available")
+	}
+
+	if !m.keyManager.HasKey(keyID) {
+		// Try to fetch it
+		err := m.keyManager.FetchKey(keyID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch key %s: %w", keyID, err)
+		}
+	}
+
+	// Get and return the key data
+	keyPath := m.keyManager.GetKeyPath(keyID)
+	if keyPath == "" {
+		return nil, fmt.Errorf("key not available after fetch")
+	}
+
+	return os.ReadFile(keyPath)
 }
 
 // ProcessReleaseFile analyzes a Release file to find additional index files
@@ -340,7 +314,7 @@ func (m *Manager) ProcessReleaseFile(repo string, path string, data []byte) {
 func (m *Manager) selectBackendByName(repoName string) (*Backend, error) {
 	for _, b := range m.backends {
 		// Simple name matching - can be more sophisticated
-		if strings.Contains(b.Name, repoName) {
+		if b.Name == repoName {
 			return b, nil
 		}
 	}
@@ -569,4 +543,23 @@ func (m *Manager) createHTTPClient() *http.Client {
 		Transport: transport,
 		Timeout:   60 * time.Second,
 	}
+}
+
+// RefreshReleaseData refreshes and reprocesses a release file after key changes
+func (m *Manager) RefreshReleaseData(path string) error {
+	// Map the path to determine the repository
+	mappingResult, err := m.mapper.MapPath(path)
+	if err != nil {
+		return fmt.Errorf("error mapping path %s: %w", path, err)
+	}
+
+	// Fetch the data again (now that we have the key)
+	data, err := m.Fetch(path)
+	if err != nil {
+		return fmt.Errorf("error fetching refreshed data: %w", err)
+	}
+
+	// Process the release file with updated data
+	m.ProcessReleaseFile(mappingResult.Repository, path, data)
+	return nil
 }

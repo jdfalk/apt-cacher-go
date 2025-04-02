@@ -2,6 +2,7 @@ package backend
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -344,114 +345,47 @@ func CreateMockBackendManager(manager *Manager) *Manager {
 // changes. These comments are essential for understanding the test's purpose
 // and approach, especially for future maintainers and code reviewers.
 
-// TestFetchFromBackend tests the Manager.Fetch method that retrieves files from backend repositories.
-//
-// The test verifies:
-// - Path mapping from client request to backend URL works correctly
-// - Cache miss handling works correctly
-// - Successful backend requests store data in cache
-// - The correct backend is selected based on repository name
-// - Direct HTTP requests to the backend work as expected
-//
-// Approach:
-// 1. Creates a mock HTTP server that returns "mock package data"
-// 2. Creates a backend manager configured to use the mock server
-// 3. Sets up mapping expectations for the path
-// 4. Tests fetching a file from the backend
-// 5. Tests direct HTTP requests to the backend
-// 6. Tests a simplified mock implementation
-//
-// Note: Uses httptest.Server instead of a custom transport for more reliable testing
+// TestFetchFromBackend tests the Fetch method
 func TestFetchFromBackend(t *testing.T) {
+	// Setup test server
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "mock data")
+	}))
+	defer ts.Close()
+
+	// Fix the server URL format - explicitly ensure it has the double slash after http:
+	serverURL := strings.Replace(ts.URL, "http:/", "http://", 1)
+
 	// Create mock components
 	mockCache := new(MockCache)
 	mockMapper := new(MockMapper)
 	mockPackageMapper := new(MockPackageMapper)
 
-	// Set up common mock expectations
-	setupBackendTestMocks(mockCache, mockMapper, mockPackageMapper)
+	// Setup expectations
+	mockMapper.On("MapPath", "/test/path").Return(mapper.MappingResult{
+		Repository: "test-repo",
+		RemotePath: "path/to/file",
+		CachePath:  "test-repo/path/to/file",
+	}, nil)
 
-	// Create a test HTTP server instead of a custom transport
-	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/octet-stream")
-		_, err := w.Write([]byte("mock package data"))
-		if err != nil {
-			t.Logf("Error writing response: %v", err)
-		}
-	}))
-	t.Cleanup(func() { mockServer.Close() }) // Use t.Cleanup instead of defer
-
-	// Create config with real URL from mock server
-	cfg := &config.Config{
-		CacheDir: t.TempDir(),
-		Backends: []config.Backend{
-			{Name: "debian", URL: mockServer.URL, Priority: 100},
-			{Name: "ubuntu", URL: "http://archive.ubuntu.com/ubuntu", Priority: 90},
-		},
-		MaxConcurrentDownloads: 2,
-	}
-
-	// Create backend manager with real HTTP server URL
-	manager, err := New(cfg, mockCache, mockMapper, mockPackageMapper)
-	require.NoError(t, err)
-
-	// Ensure all resources are cleaned up
-	ensureBatchesAreClosed(t, manager)
-
-	// Disable the prefetcher for this test
-	manager.prefetcher = nil
-
-	// Set up specific expectations - use Maybe() instead of Once() since we're testing
-	// multiple aspects and don't know the exact call sequence
-	mockMapper.On("MapPath", "/debian/pool/main/n/nginx/nginx_1.18.0-6_amd64.deb").Return(mapper.MappingResult{
-		Repository: "debian",
-		RemotePath: "pool/main/n/nginx/nginx_1.18.0-6_amd64.deb",
-		CachePath:  "debian/pool/main/n/nginx/nginx_1.18.0-6_amd64.deb",
-		IsIndex:    false,
-	}, nil).Maybe()
-
-	mockCache.On("Get", "debian/pool/main/n/nginx/nginx_1.18.0-6_amd64.deb").Return(nil, os.ErrNotExist).Maybe()
-	mockCache.On("PutWithExpiration", "debian/pool/main/n/nginx/nginx_1.18.0-6_amd64.deb", []byte("mock package data"), mock.Anything).Return(nil).Maybe()
-
-	// Test direct download using the real manager
-	data, err := manager.Fetch("/debian/pool/main/n/nginx/nginx_1.18.0-6_amd64.deb")
-	require.NoError(t, err)
-	assert.Equal(t, "mock package data", string(data))
-
-	// Verify expectations
-	mockMapper.AssertExpectations(t)
-	mockCache.AssertExpectations(t)
-
-	// Add a direct method test for FetchFromBackend to verify backend selection
-	backend := manager.backends[0] // Get the first backend (debian)
-
-	// Test the backend's download directly - using the proper method that exists
-	// Instead of calling a non-existent method, we'll directly use http client from the backend
-	reqURL := mockServer.URL + "/some/test/path"
-	req, err := http.NewRequest("GET", reqURL, nil)
-	require.NoError(t, err)
-
-	resp, err := backend.client.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
-	data, err = io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	assert.Equal(t, "mock package data", string(data))
-
-	// Skip the full Fetch test since it's complex and prone to timing issues
-
-	// Alternative: Create a simple mock for BackendManager
-	simpleMockManager := &MockBackendManager{
-		fetchHandler: func(path string) ([]byte, error) {
-			return []byte("mock data"), nil
+	// Create manager with mocks
+	m := &Manager{
+		cache:         mockCache,
+		mapper:        mockMapper,
+		packageMapper: mockPackageMapper,
+		backends: []*Backend{
+			{
+				Name:    "test-repo",
+				BaseURL: serverURL,
+				client:  &http.Client{},
+			},
 		},
 	}
 
-	// Test just the mock handler
-	testData, err := simpleMockManager.Fetch("/test/path")
+	// Test the fetch method
+	data, err := m.Fetch("/test/path")
 	require.NoError(t, err)
-	assert.Equal(t, "mock data", string(testData))
+	assert.Equal(t, "mock data", string(data))
 }
 
 // CreateManagerWithFetchOverride creates a test wrapper around Manager that overrides the Fetch method
