@@ -16,6 +16,7 @@ import (
 
 	"github.com/cockroachdb/pebble"
 	"github.com/jdfalk/apt-cacher-go/internal/config"
+	"github.com/jdfalk/apt-cacher-go/internal/parser"
 )
 
 // DatabaseStore provides a persistent storage mechanism using PebbleDB
@@ -208,6 +209,11 @@ func (ds *DatabaseStore) saveCacheState() error {
 
 	// Commit the batch
 	return ds.db.Apply(batch, pebble.Sync)
+}
+
+// SaveCacheState exports the cache state saving functionality
+func (ds *DatabaseStore) SaveCacheState() error {
+	return ds.saveCacheState()
 }
 
 // GetCacheEntry retrieves cache metadata for a path
@@ -644,6 +650,73 @@ func (ds *DatabaseStore) Close() error {
 		return ds.db.Close()
 	}
 	return nil
+}
+
+// StorePackageInfo stores package information in the database
+func (ds *DatabaseStore) StorePackageInfo(pkg parser.PackageInfo) error {
+	data, err := json.Marshal(pkg)
+	if err != nil {
+		return err
+	}
+
+	key := "p:" + pkg.Package
+	return ds.db.Set([]byte(key), data, nil)
+}
+
+// GetPackageInfo retrieves package information from the database
+func (ds *DatabaseStore) GetPackageInfo(packageName string) (parser.PackageInfo, bool, error) {
+	key := "p:" + packageName
+	data, closer, err := ds.db.Get([]byte(key))
+	if err != nil {
+		if err == pebble.ErrNotFound {
+			return parser.PackageInfo{}, false, nil
+		}
+		return parser.PackageInfo{}, false, err
+	}
+	defer closer.Close()
+
+	var pkg parser.PackageInfo
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return parser.PackageInfo{}, false, err
+	}
+
+	return pkg, true, nil
+}
+
+// ListPackages returns a list of all packages
+func (ds *DatabaseStore) ListPackages(pattern string) ([]parser.PackageInfo, error) {
+	var packages []parser.PackageInfo
+
+	// Create an iterator with prefix "p:"
+	iter, err := ds.db.NewIter(&pebble.IterOptions{
+		LowerBound: []byte("p:"),
+		UpperBound: []byte("p:\xff"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	// Iterate through package entries
+	for iter.First(); iter.Valid(); iter.Next() {
+		key := string(iter.Key())
+		packageName := strings.TrimPrefix(key, "p:")
+
+		// Skip if pattern doesn't match
+		if pattern != "" && !strings.Contains(packageName, pattern) {
+			continue
+		}
+
+		var pkg parser.PackageInfo
+		if err := json.Unmarshal(iter.Value(), &pkg); err != nil {
+			log.Printf("Error unmarshaling package info for %s: %v", packageName, err)
+			continue
+		}
+
+		packages = append(packages, pkg)
+	}
+
+	return packages, iter.Error()
 }
 
 // The rest of the implementation remains similar to the existing methods

@@ -42,7 +42,6 @@ type Cache struct {
 	rootDir      string
 	maxSize      int64
 	db           *storage.DatabaseStore
-	packageIndex map[string]parser.PackageInfo
 	packageMutex sync.RWMutex
 }
 
@@ -73,10 +72,9 @@ func New(rootDir string, maxSize int64) (*Cache, error) {
 	}
 
 	cache := &Cache{
-		rootDir:      rootDir,
-		maxSize:      maxSize,
-		db:           db,
-		packageIndex: make(map[string]parser.PackageInfo),
+		rootDir: rootDir,
+		maxSize: maxSize,
+		db:      db,
 	}
 
 	// Check if we need to migrate from old JSON state
@@ -84,9 +82,9 @@ func New(rootDir string, maxSize int64) (*Cache, error) {
 		log.Printf("Warning: failed to migrate from JSON state: %v", err)
 	}
 
-	// Load package index from disk
-	if err := cache.loadPackageIndex(); err != nil {
-		log.Printf("Warning: failed to load package index: %v", err)
+	// Migrate package index if it exists
+	if err := cache.migratePackageIndex(); err != nil {
+		log.Printf("Warning: failed to migrate package index: %v", err)
 	}
 
 	// Get current stats
@@ -94,8 +92,15 @@ func New(rootDir string, maxSize int64) (*Cache, error) {
 	if err != nil {
 		log.Printf("Warning: failed to get database stats: %v", err)
 	} else {
-		log.Printf("Cache initialized successfully: %s (current size: %d bytes, max: %d bytes, items: %d)",
-			rootDir, stats["currentSize"], maxSize, len(cache.packageIndex))
+		// Get package count for logging
+		packages, err := db.ListPackages("")
+		packageCount := 0
+		if err == nil {
+			packageCount = len(packages)
+		}
+
+		log.Printf("Cache initialized successfully: %s (current size: %d bytes, max: %d bytes, packages: %d)",
+			rootDir, stats["currentSize"], maxSize, packageCount)
 	}
 
 	return cache, nil
@@ -336,11 +341,6 @@ func (c *Cache) GetMostPopularItems(count int) []storage.CacheEntry {
 
 // Close safely shuts down the cache
 func (c *Cache) Close() error {
-	// Save package index before shutdown
-	if err := c.savePackageIndex(); err != nil {
-		log.Printf("Error saving package index during shutdown: %v", err)
-	}
-
 	// Close the database
 	return c.db.Close()
 }
@@ -359,12 +359,17 @@ func (c *Cache) pathIsAllowed(path string) bool {
 
 // SyncToDisk ensures all cache state is written to disk
 func (c *Cache) SyncToDisk() error {
-	// Save the package index
-	if err := c.savePackageIndex(); err != nil {
-		return err
+	// The package index is now stored directly in PebbleDB
+	// and synced automatically with each write operation.
+	// No additional syncing needed.
+
+	// Force flush any pending PebbleDB writes if needed
+	if c.db != nil {
+		if err := c.db.SaveCacheState(); err != nil {
+			return fmt.Errorf("failed to sync database state: %w", err)
+		}
 	}
 
-	// In the new implementation, syncing happens automatically through PebbleDB
 	return nil
 }
 
@@ -558,28 +563,32 @@ func (c *Cache) SearchByPackageName(name string) ([]CacheSearchResult, error) {
 	var results []CacheSearchResult
 	searchTerm := strings.ToLower(name)
 
-	// First check the package index
-	for pkgName, info := range c.packageIndex {
-		if strings.Contains(strings.ToLower(pkgName), searchTerm) {
-			// Create a full path to check if file exists in cache
-			cachePath := info.Filename
-			if c.Exists(cachePath) {
-				size := int64(0)
-				if sizeVal, err := strconv.ParseInt(info.Size, 10, 64); err == nil {
-					size = sizeVal
-				}
+	// Get packages from database that match the search term
+	packages, err := c.db.ListPackages(searchTerm)
+	if err != nil {
+		log.Printf("Error listing packages: %v", err)
+	}
 
-				results = append(results, CacheSearchResult{
-					PackageName: pkgName,
-					Version:     info.Version,
-					Path:        cachePath,
-					Size:        size,
-				})
+	// Convert package info to search results
+	for _, pkg := range packages {
+		// Create a full path to check if file exists in cache
+		cachePath := pkg.Filename
+		if c.Exists(cachePath) {
+			size := int64(0)
+			if sizeVal, err := strconv.ParseInt(pkg.Size, 10, 64); err == nil {
+				size = sizeVal
 			}
+
+			results = append(results, CacheSearchResult{
+				PackageName: pkg.Package,
+				Version:     pkg.Version,
+				Path:        cachePath,
+				Size:        size,
+			})
 		}
 	}
 
-	// If no results from index, fall back to filesystem search
+	// If no results from database, fall back to filesystem search
 	if len(results) == 0 {
 		err := filepath.Walk(c.rootDir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
@@ -626,12 +635,13 @@ func (c *Cache) UpdatePackageIndex(packages []parser.PackageInfo) error {
 	c.packageMutex.Lock()
 	defer c.packageMutex.Unlock()
 
-	existingCount := len(c.packageIndex)
+	existingCount := 0
 	addedCount := 0
 
-	// Check if packageIndex is nil and initialize it
-	if c.packageIndex == nil {
-		c.packageIndex = make(map[string]parser.PackageInfo)
+	// Get count of existing packages from PebbleDB
+	entries, err := c.db.ListPackages("")
+	if err == nil {
+		existingCount = len(entries)
 	}
 
 	// Add packages to index
@@ -642,91 +652,45 @@ func (c *Cache) UpdatePackageIndex(packages []parser.PackageInfo) error {
 		}
 
 		// Skip if already exists with same version
-		if existing, ok := c.packageIndex[pkg.Package]; ok && existing.Version == pkg.Version {
+		existing, exists, err := c.db.GetPackageInfo(pkg.Package)
+		if err == nil && exists && existing.Version == pkg.Version {
 			continue
 		}
 
-		c.packageIndex[pkg.Package] = pkg
+		// Store package in PebbleDB
+		if err := c.db.StorePackageInfo(pkg); err != nil {
+			log.Printf("Error storing package %s: %v", pkg.Package, err)
+			continue
+		}
+
 		addedCount++
 
 		// Also store hash mapping if available
 		if pkg.SHA256 != "" {
 			if err := c.db.AddHashMapping(pkg.SHA256, pkg.Package); err != nil {
-				log.Printf("Warning: failed to add hash mapping for %s: %v", pkg.Package, err)
+				log.Printf("Error storing hash mapping for %s: %v", pkg.Package, err)
 			}
 		}
 	}
 
-	// Only log at debug level for no changes
+	// Get updated count
+	entries, err = c.db.ListPackages("")
+	currentCount := 0
+	if err == nil {
+		currentCount = len(entries)
+	} else {
+		currentCount = existingCount + addedCount // Fallback if we can't get actual count
+	}
+
+	// Log results
 	if addedCount > 0 {
 		log.Printf("Added %d new packages to index (had %d, now %d total packages)",
-			addedCount, existingCount, len(c.packageIndex))
-
-		// Save index to disk after updates
-		go func() {
-			if err := c.savePackageIndex(); err != nil {
-				log.Printf("Error saving package index: %v", err)
-			}
-		}()
+			addedCount, existingCount, currentCount)
 	} else {
 		log.Printf("Package index update: no new packages added (index contains %d packages)",
-			existingCount)
+			currentCount)
 	}
 
-	return nil
-}
-
-// savePackageIndex persists the package index to disk
-func (c *Cache) savePackageIndex() error {
-	// Use a local copy to avoid holding the lock
-	c.packageMutex.RLock()
-	localIndex := make(map[string]parser.PackageInfo, len(c.packageIndex))
-	for k, v := range c.packageIndex {
-		localIndex[k] = v
-	}
-	c.packageMutex.RUnlock()
-
-	// Create the file
-	indexPath := filepath.Join(c.rootDir, "package_index.json")
-	file, err := os.Create(indexPath)
-	if err != nil {
-		return fmt.Errorf("failed to create package index file: %w", err)
-	}
-	defer file.Close()
-
-	// Write the data
-	encoder := json.NewEncoder(file)
-	if err := encoder.Encode(localIndex); err != nil {
-		return fmt.Errorf("failed to encode package index: %w", err)
-	}
-
-	log.Printf("Package index saved to %s (%d packages)", indexPath, len(localIndex))
-	return nil
-}
-
-// loadPackageIndex loads the package index from disk
-func (c *Cache) loadPackageIndex() error {
-	indexPath := filepath.Join(c.rootDir, "package_index.json")
-	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
-		// No index file exists yet
-		return nil
-	}
-
-	file, err := os.Open(indexPath)
-	if err != nil {
-		return fmt.Errorf("failed to open package index: %w", err)
-	}
-	defer file.Close()
-
-	c.packageMutex.Lock()
-	defer c.packageMutex.Unlock()
-
-	decoder := json.NewDecoder(file)
-	if err := decoder.Decode(&c.packageIndex); err != nil {
-		return fmt.Errorf("failed to decode package index: %w", err)
-	}
-
-	log.Printf("Loaded package index with %d packages", len(c.packageIndex))
 	return nil
 }
 
@@ -796,6 +760,60 @@ func (c *Cache) migrateFromJSON() error {
 	backupPath := filepath.Join(c.rootDir, "cache_state.json.bak")
 	if err := os.Rename(statePath, backupPath); err != nil {
 		log.Printf("Warning: could not rename old state file: %v", err)
+	}
+
+	return nil
+}
+
+// migratePackageIndex migrates package index from JSON file to PebbleDB
+func (c *Cache) migratePackageIndex() error {
+	indexPath := filepath.Join(c.rootDir, "package_index.json")
+
+	// Check if the old file exists
+	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
+		// No migration needed
+		return nil
+	}
+
+	log.Printf("Migrating package index from JSON to PebbleDB")
+
+	// Open the JSON file
+	file, err := os.Open(indexPath)
+	if err != nil {
+		return fmt.Errorf("failed to open package index: %w", err)
+	}
+	defer file.Close()
+
+	// Decode the JSON
+	var packageIndex map[string]parser.PackageInfo
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&packageIndex); err != nil {
+		return fmt.Errorf("failed to decode package index: %w", err)
+	}
+
+	// Store each package in PebbleDB
+	count := 0
+	for _, pkg := range packageIndex {
+		if err := c.db.StorePackageInfo(pkg); err != nil {
+			log.Printf("Error migrating package %s: %v", pkg.Package, err)
+			continue
+		}
+
+		// Store hash mapping if available
+		if pkg.SHA256 != "" {
+			if err := c.db.AddHashMapping(pkg.SHA256, pkg.Package); err != nil {
+				log.Printf("Error migrating hash for %s: %v", pkg.Package, err)
+			}
+		}
+		count++
+	}
+
+	log.Printf("Package index migration complete, migrated %d packages", count)
+
+	// Rename the old file
+	backupPath := filepath.Join(c.rootDir, "package_index.json.bak")
+	if err := os.Rename(indexPath, backupPath); err != nil {
+		return fmt.Errorf("failed to backup package index: %w", err)
 	}
 
 	return nil
