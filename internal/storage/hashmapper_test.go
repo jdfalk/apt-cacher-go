@@ -14,6 +14,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestNewPersistentPackageMapper tests the creation of a new PersistentPackageMapper
+// instance with various configuration options.
+//
+// The test verifies:
+// - PersistentPackageMapper can be created with default settings
+// - PersistentPackageMapper can be created with custom memory settings
+// - Database initialization works correctly
+//
+// Approach:
+// 1. Creates a temporary directory for the database
+// 2. Tests initialization with nil config (default settings)
+// 3. Tests initialization with custom memory settings
+// 4. Verifies the database and internal structures are properly initialized
+//
+// Note: Uses subtests to isolate different initialization scenarios
 func TestNewPersistentPackageMapper(t *testing.T) {
 	t.Run("initialization with default config", func(t *testing.T) {
 		// Create temp dir
@@ -56,6 +76,28 @@ func TestNewPersistentPackageMapper(t *testing.T) {
 	})
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestAddAndGetHashMapping tests the AddHashMapping and GetPackageNameForHash methods
+// of the PersistentPackageMapper, which are core operations for package mapping.
+//
+// The test verifies:
+// - Hash mappings can be added to the database
+// - Mappings are persisted to disk
+// - Package names can be retrieved by hash
+// - Behavior is correct when a hash doesn't exist
+//
+// Approach:
+// 1. Creates a temporary directory for the database
+// 2. Adds a hash mapping
+// 3. Forces a database flush to ensure persistence
+// 4. Retrieves the package name using the hash
+// 5. Tests behavior with a non-existent hash
+//
+// Note: Uses separate instances to test persistence and isolation
 func TestAddAndGetHashMapping(t *testing.T) {
 	// Create a temporary directory
 	dir, err := os.MkdirTemp("", "hashmapper-test")
@@ -109,6 +151,29 @@ func TestAddAndGetHashMapping(t *testing.T) {
 	})
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestClearCache tests the ClearCache method of PersistentPackageMapper, which
+// is used to manage memory pressure by clearing the in-memory cache.
+//
+// The test verifies:
+// - Multiple hash mappings can be added
+// - In-memory cache properly stores mappings
+// - ClearCache method successfully clears the in-memory cache
+// - Mappings remain available in the persistent database
+//
+// Approach:
+// 1. Creates a mapper with default settings
+// 2. Adds multiple hash mappings
+// 3. Verifies mappings exist in the in-memory cache
+// 4. Calls ClearCache to clear the in-memory cache
+// 5. Verifies in-memory cache is empty
+// 6. Checks that data is still available from the persistent database
+//
+// Note: Directly accesses database to verify persistence after cache clear
 func TestClearCache(t *testing.T) {
 	// Create temporary directory for test
 	tempDir, err := os.MkdirTemp("", "hashmapper-test")
@@ -165,6 +230,28 @@ func TestClearCache(t *testing.T) {
 	assert.Equal(t, "package-0", pkgName)
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestCheckpointAndMaintenance tests the database maintenance operations,
+// including checkpointing and compaction routines.
+//
+// The test verifies:
+// - Database checkpoints can be created successfully
+// - Checkpoint directory contains expected files
+// - Maintenance routines can be started and stopped
+//
+// Approach:
+// 1. Creates a database with test data
+// 2. Creates a checkpoint of the database
+// 3. Verifies checkpoint files exist
+// 4. Tests integrity verification (skipped for small test databases)
+// 5. Verifies maintenance routine starts and stops correctly
+//
+// Note: Some operations like integrity verification are skipped due to
+// limitations with small test databases
 func TestCheckpointAndMaintenance(t *testing.T) {
 	// Create temporary directory for test
 	tempDir, err := os.MkdirTemp("", "hashmapper-test")
@@ -254,5 +341,148 @@ func TestCheckpointAndMaintenance(t *testing.T) {
 
 		// Wait for cancellation to take effect
 		time.Sleep(50 * time.Millisecond)
+	})
+}
+
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestPackageManagementFunctions tests the additional package management methods
+// added to the PersistentPackageMapper.
+//
+// The test verifies:
+// - GetPackageCount returns the correct number of packages
+// - InsertPackage adds new packages to the database
+// - RemovePackage removes packages from the database
+// - ListAllPackages returns all packages in the database
+// - SearchPackages correctly finds packages by name pattern
+// - Compact successfully optimizes the database
+//
+// Approach:
+// 1. Creates a mapper with test data
+// 2. Tests each management method individually
+// 3. Verifies expected behavior for each operation
+// 4. Confirms database state after operations
+// 5. Properly handles error conditions and checks
+//
+// Note: Uses subtests to isolate different operations
+func TestPackageManagementFunctions(t *testing.T) {
+	// Create temporary directory for test
+	tempDir, err := os.MkdirTemp("", "hashmapper-test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
+	// Create mapper
+	mapper, err := NewPersistentPackageMapper(tempDir, nil)
+	require.NoError(t, err)
+	require.NotNil(t, mapper)
+	defer mapper.Close()
+
+	// Test data - populate with initial data
+	initialHashes := []struct {
+		hash string
+		pkg  string
+	}{
+		{"hash1", "apache2"},
+		{"hash2", "mysql-server"},
+		{"hash3", "nginx"},
+		{"hash4", "postgresql"},
+		{"hash5", "redis"},
+	}
+
+	// Add initial data
+	for _, item := range initialHashes {
+		err := mapper.AddHashMapping(item.hash, item.pkg)
+		require.NoError(t, err)
+	}
+
+	// Force flush to ensure all data is persisted
+	mapper.batchMutex.Lock()
+	err = mapper.db.Apply(mapper.batch, pebble.Sync)
+	require.NoError(t, err)
+	mapper.batch.Close()
+	mapper.batch = mapper.db.NewBatch()
+	mapper.batchMutex.Unlock()
+
+	t.Run("GetPackageCount", func(t *testing.T) {
+		count, err := mapper.GetPackageCount()
+		require.NoError(t, err)
+		assert.Equal(t, len(initialHashes), count)
+	})
+
+	t.Run("InsertPackage", func(t *testing.T) {
+		err := mapper.InsertPackage("newhash", "new-package")
+		require.NoError(t, err)
+
+		// Verify it was added
+		count, err := mapper.GetPackageCount()
+		require.NoError(t, err)
+		assert.Equal(t, len(initialHashes)+1, count)
+
+		// Verify we can retrieve it
+		result, closer, err := mapper.db.Get([]byte("newhash"))
+		require.NoError(t, err)
+		pkgName := string(result)
+		closer.Close()
+		assert.Equal(t, "new-package", pkgName)
+	})
+
+	t.Run("RemovePackage", func(t *testing.T) {
+		// Remove a package
+		err := mapper.RemovePackage("hash1")
+		require.NoError(t, err)
+
+		// Verify it was removed
+		_, closer, err := mapper.db.Get([]byte("hash1"))
+		assert.Error(t, err) // Should error since key is gone
+		if err == nil {
+			closer.Close()
+		}
+
+		// Verify count decreased
+		count, err := mapper.GetPackageCount()
+		require.NoError(t, err)
+		assert.Equal(t, len(initialHashes), count) // -1 then +1 from previous test
+	})
+
+	t.Run("ListAllPackages", func(t *testing.T) {
+		packages, err := mapper.ListAllPackages()
+		require.NoError(t, err)
+
+		// We should have exactly the initial count (minus 1 removed, plus 1 added)
+		assert.Equal(t, len(initialHashes), len(packages))
+
+		// Check for specific packages
+		assert.Equal(t, "new-package", packages["newhash"])
+		assert.Equal(t, "nginx", packages["hash3"])
+
+		// Removed package should not be present
+		_, exists := packages["hash1"]
+		assert.False(t, exists)
+	})
+
+	t.Run("SearchPackages", func(t *testing.T) {
+		// Search for packages containing "sql"
+		results, err := mapper.SearchPackages("sql")
+		require.NoError(t, err)
+		assert.Equal(t, 2, len(results)) // mysql-server and postgresql
+
+		// Verify specific results
+		assert.Contains(t, results, "hash2")
+		assert.Equal(t, "mysql-server", results["hash2"])
+		assert.Contains(t, results, "hash4")
+		assert.Equal(t, "postgresql", results["hash4"])
+	})
+
+	t.Run("Compact", func(t *testing.T) {
+		err := mapper.Compact()
+		assert.NoError(t, err)
+
+		// Verify data is still intact after compaction
+		count, err := mapper.GetPackageCount()
+		require.NoError(t, err)
+		assert.Equal(t, len(initialHashes), count)
 	})
 }

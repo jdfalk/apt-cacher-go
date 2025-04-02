@@ -291,3 +291,100 @@ func (pm *PersistentPackageMapper) StartMaintenanceRoutine(ctx context.Context) 
 		}
 	}()
 }
+
+// Add these methods for package management
+
+// GetPackageCount returns the total number of packages in the database
+func (pm *PersistentPackageMapper) GetPackageCount() (int, error) {
+	count := 0
+	// Use an iterator to count entries
+	iter, err := pm.db.NewIter(nil)
+	if err != nil {
+		return 0, err
+	}
+	defer iter.Close()
+
+	for iter.First(); iter.Valid(); iter.Next() {
+		count++
+	}
+
+	return count, iter.Error()
+}
+
+// InsertPackage adds a package to the database
+func (pm *PersistentPackageMapper) InsertPackage(hash, packageName string) error {
+	pm.cacheMutex.Lock()
+	// Update memory cache
+	if len(pm.cache) >= pm.maxCacheSize {
+		// Clear cache if too big
+		pm.cache = make(map[string]string, pm.maxCacheSize)
+	}
+	pm.cache[hash] = packageName
+	pm.cacheMutex.Unlock()
+
+	// Write to database
+	return pm.db.Set([]byte(hash), []byte(packageName), nil)
+}
+
+// RemovePackage removes a package from the database
+func (pm *PersistentPackageMapper) RemovePackage(hash string) error {
+	// Remove from memory cache
+	pm.cacheMutex.Lock()
+	delete(pm.cache, hash)
+	pm.cacheMutex.Unlock()
+
+	// Remove from database
+	return pm.db.Delete([]byte(hash), nil)
+}
+
+// ListAllPackages returns all packages in the database
+func (pm *PersistentPackageMapper) ListAllPackages() (map[string]string, error) {
+	results := make(map[string]string)
+
+	// Use an iterator to go through all entries
+	iter, err := pm.db.NewIter(nil)
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	for iter.First(); iter.Valid(); iter.Next() {
+		key := string(iter.Key())
+		value := string(iter.Value())
+		results[key] = value
+	}
+
+	return results, iter.Error()
+}
+
+// SearchPackages searches for packages by name pattern
+func (pm *PersistentPackageMapper) SearchPackages(pattern string) (map[string]string, error) {
+	results := make(map[string]string)
+
+	// Use case-insensitive pattern
+	lowerPattern := strings.ToLower(pattern)
+
+	// Use an iterator to go through all entries
+	iter, err := pm.db.NewIter(nil)
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	for iter.First(); iter.Valid(); iter.Next() {
+		key := string(iter.Key())
+		value := string(iter.Value())
+
+		// Match if the package name contains the pattern
+		if strings.Contains(strings.ToLower(value), lowerPattern) {
+			results[key] = value
+		}
+	}
+
+	return results, iter.Error()
+}
+
+// Compact compacts the database to optimize storage
+func (pm *PersistentPackageMapper) Compact() error {
+	return pm.db.Compact(nil, nil, true)
+}
