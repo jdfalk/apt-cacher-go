@@ -84,7 +84,7 @@ type TestServer struct {
 	Ready       chan struct{} // Channel to signal when server is ready
 }
 
-// Create a shared test utility function to set up the server properly
+// Fix the conflicting assignments to the ts variable and ensure proper cleanup
 func setupTestServer(t *testing.T, mockURL string) (*TestServer, func()) {
 	// Create temp directory for cache, preferably within project directory
 	testRoot := getTestDir(t)
@@ -96,14 +96,9 @@ func setupTestServer(t *testing.T, mockURL string) (*TestServer, func()) {
 		dirName := fmt.Sprintf("apt-cacher-test-%d", time.Now().UnixNano())
 		tempDir = filepath.Join(testRoot, dirName)
 
-		// Always attempt to remove it first to prevent problems with leftover directories
-		os.RemoveAll(tempDir)
-
-		err = os.MkdirAll(tempDir, 0755)
-		if err != nil {
-			t.Logf("Failed to create test dir in .file_system_root: %v", err)
-			t.Logf("Falling back to temporary directory")
-			tempDir = ""
+		// Create the directory
+		if err := os.MkdirAll(tempDir, 0755); err != nil {
+			t.Fatalf("Failed to create test directory: %v", err)
 		}
 	}
 
@@ -154,15 +149,26 @@ func setupTestServer(t *testing.T, mockURL string) (*TestServer, func()) {
 	// Channel to signal when server is ready
 	ready := make(chan struct{})
 
-	// Create cleanup function - REMOVE channel close from here!
+	// Create cleanup function that properly removes tempDir
 	cleanup := func() {
-		if err := srv.Shutdown(); err != nil {
-			t.Logf("Warning: Server shutdown error: %v", err)
+		if srv != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if err := srv.Shutdown(); err != nil {
+				t.Logf("Error shutting down server: %v", err)
+			}
+			<-ctx.Done()
 		}
-		os.RemoveAll(tempDir)
-		// Don't close ready channel here - it's already closed in the goroutine
+
+		// Ensure we clean up the temp directory
+		if tempDir != "" {
+			if err := os.RemoveAll(tempDir); err != nil {
+				t.Logf("Failed to remove temp directory %s: %v", tempDir, err)
+			}
+		}
 	}
 
+	// Create the test server structure
 	ts := &TestServer{
 		Server:      srv,
 		CacheDir:    tempDir,
@@ -172,6 +178,9 @@ func setupTestServer(t *testing.T, mockURL string) (*TestServer, func()) {
 		CleanupFunc: cleanup,
 		Ready:       ready,
 	}
+
+	// Register cleanup with testing.T
+	t.Cleanup(cleanup)
 
 	// Start the server in a goroutine
 	go func() {
