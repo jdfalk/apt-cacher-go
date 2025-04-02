@@ -221,18 +221,22 @@ func (s *Server) setupHTTPHandlers() {
 	mainMux := http.NewServeMux()
 	adminMux := http.NewServeMux()
 
-	// Set up main server handlers on the mainMux
+	// Set up main server handlers
 	mainMux.HandleFunc("/", s.handlePackageRequest)
 	mainMux.HandleFunc("/acng-report.html", s.handleReportRequest)
-	mainMux.HandleFunc("/report", s.handleReportRequest)
+	mainMux.HandleFunc("/health", s.handleHealth)
+	mainMux.HandleFunc("/ready", s.handleReady)
+	mainMux.HandleFunc("/metrics", s.handleMetrics)
 
-	// FIX: Implement these missing handlers or replace with existing ones
-	mainMux.HandleFunc("/apt-cacher", s.handleReportRequest) // Changed from handleDirectoryRequest
-	mainMux.HandleFunc("/download", s.handleHTTPSRequest)    // Changed from handleProxiedHTTPSRequest
-	mainMux.HandleFunc("/https", s.handleHTTPSRequest)       // Changed from handleProxiedHTTPSRequest
-
-	// In the setupHTTPHandlers method, add:
-	mainMux.HandleFunc("CONNECT", s.handleConnectRequest)
+	// Fix the CONNECT handler by using method checking in the default handler
+	// instead of direct method registration which causes the panic
+	mainMux.HandleFunc("/connect-tunnel", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodConnect {
+			s.handleConnectRequest(w, r)
+			return
+		}
+		http.NotFound(w, r)
+	})
 
 	// Set up admin handlers on the adminMux - adminHome is used for the root path
 	s.setupAdminHandlers(adminMux)
