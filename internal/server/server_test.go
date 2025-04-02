@@ -23,7 +23,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Generic handler for testing - Used for examples, so we'll add a test that uses it
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestGenericHandler tests a simple HTTP handler used as an example in tests.
+//
+// The test verifies:
+// - Basic HTTP handlers respond with correct status code
+// - Response body contains expected content
+//
+// Approach:
+// 1. Creates a new HTTP request
+// 2. Executes the request against the handler
+// 3. Verifies the response status and body
+//
+// Note: This is a simple demonstration of httptest usage
 func TestGenericHandler(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", nil)
 	w := httptest.NewRecorder()
@@ -108,7 +124,27 @@ func createTestServer(t *testing.T) (*Server, string, func()) {
 	return server, tempDir, cleanup
 }
 
-// TestCreateServer verifies the server creation process
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestCreateServer tests the server creation process to ensure a server
+// can be properly instantiated with default settings.
+//
+// The test verifies:
+// - Server can be created with a basic configuration
+// - No errors occur during initialization
+// - Server shutdown functions correctly
+//
+// Approach:
+// 1. Creates a temporary directory for the cache
+// 2. Sets up a minimal server configuration
+// 3. Creates a server instance with default options
+// 4. Verifies the server was created successfully
+// 5. Tests proper server shutdown
+//
+// Note: Uses temporary directory that's automatically cleaned up
 func TestCreateServer(t *testing.T) {
 	// Create temp directory for cache
 	tempDir, err := os.MkdirTemp("", "apt-cacher-test")
@@ -157,6 +193,27 @@ func TestServerHandlers(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "status")
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestAdminAuthentication tests the admin authentication functionality,
+// which controls access to administration endpoints.
+//
+// The test verifies:
+// - Requests without credentials are denied
+// - Requests with valid credentials are accepted
+// - Requests with invalid credentials are denied
+//
+// Approach:
+// 1. Creates a server with authentication enabled
+// 2. Tests request with no authentication
+// 3. Tests request with correct credentials
+// 4. Tests request with incorrect credentials
+// 5. Verifies response codes match expectations
+//
+// Note: Uses basic HTTP authentication headers
 func TestAdminAuthentication(t *testing.T) {
 	// Create server with auth enabled
 	tempDir, err := os.MkdirTemp("", "apt-cacher-test")
