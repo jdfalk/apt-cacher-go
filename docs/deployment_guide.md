@@ -10,6 +10,7 @@ This guide covers various deployment options and configurations for apt-cacher-g
 - Linux-based OS (recommended)
 - 512MB RAM minimum (2GB+ recommended for high-traffic deployments)
 - Sufficient disk space for package cache (10GB+ recommended)
+- A compatible filesystem with proper permission support (ext4 recommended)
 
 ## Installation Options
 
@@ -59,6 +60,17 @@ This guide covers various deployment options and configurations for apt-cacher-g
      apt-cacher-go
    ```
 
+3. For HTTPS support:
+
+   ```
+   docker run -d --name apt-cacher-go \
+     -p 3142:3142 \
+     -p 3143:3143 \
+     -v apt-cacher-data:/var/cache/apt-cacher-go \
+     -v ./certs:/etc/apt-cacher-go/certs \
+     apt-cacher-go
+   ```
+
 ## Configuration
 
 ### Basic Configuration
@@ -81,14 +93,20 @@ For more advanced setup:
 cache_dir: /var/cache/apt-cacher-go
 listen_address: 0.0.0.0
 port: 3142
+admin_port: 9283
 max_cache_size: 10GB
 log_level: info
 
 # TLS configuration
-enable_tls: true
-tls_cert_file: /etc/apt-cacher-go/cert.pem
-tls_key_file: /etc/apt-cacher-go/key.pem
+tls_enabled: true
+tls_cert: /etc/apt-cacher-go/cert.pem
+tls_key: /etc/apt-cacher-go/key.pem
 tls_port: 3143
+
+# Memory management
+memory_high_watermark: 1024    # MB, when to start GC
+memory_critical_watermark: 1536  # MB, when to take emergency action
+memory_check_interval: 30s
 
 # Repository mapping rules
 mapping_rules:
@@ -121,9 +139,24 @@ cache_ttl:
   default: 7d
 
 # Prefetch settings
-enable_prefetch: true
-prefetch_concurrency: 2
-prefetch_delay: 5m
+prefetch:
+  enabled: true
+  max_concurrent: 5
+  architectures:
+    - amd64
+    - arm64
+  warmup_on_startup: true
+  batch_size: 10
+  verbose_logging: false
+
+# Key management for repository signatures
+key_management:
+  enabled: true
+  auto_retrieve: true
+  key_ttl: 365d
+  keyservers:
+    - hkp://keyserver.ubuntu.com
+  key_dir: /var/cache/apt-cacher-go/keys
 ```
 
 ## Service Setup
@@ -143,6 +176,13 @@ Restart=always
 User=apt-cacher
 Group=apt-cacher
 Environment=APT_CACHER_CONFIG_FILE=/etc/apt-cacher-go/config.yaml
+
+# Memory limits
+MemoryHigh=1536M
+MemoryMax=2048M
+
+# File limits
+LimitNOFILE=65535
 
 [Install]
 WantedBy=multi-user.target
@@ -177,10 +217,80 @@ RUN echo 'Acquire::http::Proxy "http://apt-cacher-server:3142";' > /etc/apt/apt.
     echo 'Acquire::https::Proxy "http://apt-cacher-server:3142";' >> /etc/apt/apt.conf.d/01proxy
 ```
 
+## HTTPS Configuration
+
+To enable HTTPS support:
+
+1. Generate or obtain TLS certificates:
+   ```
+   openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+     -keyout /etc/apt-cacher-go/key.pem \
+     -out /etc/apt-cacher-go/cert.pem
+   ```
+
+2. Update configuration:
+   ```yaml
+   tls_enabled: true
+   tls_cert: /etc/apt-cacher-go/cert.pem
+   tls_key: /etc/apt-cacher-go/key.pem
+   tls_port: 3143
+   ```
+
+3. Configure clients to use HTTPS:
+   ```
+   Acquire::https::Proxy "https://apt-cacher-server:3143";
+   ```
+
+## Memory Optimization
+
+Apt-cacher-go includes memory monitoring that can be tuned:
+
+1. Set appropriate watermarks based on system memory:
+   ```yaml
+   memory_high_watermark: 1024     # MB, when to start GC
+   memory_critical_watermark: 1536 # MB, when to throttle operations
+   ```
+
+2. Limit prefetch concurrency on memory-constrained systems:
+   ```yaml
+   prefetch:
+     enabled: true
+     max_concurrent: 3  # Lower for less memory usage
+   ```
+
+3. Add systemd memory limits for additional protection:
+   ```ini
+   [Service]
+   MemoryHigh=1536M
+   MemoryMax=2048M
+   ```
+
 ## Monitoring
 
 Access the built-in monitoring tools:
 
 - Admin interface: <http://apt-cacher-server:3142/admin>
 - Health check: <http://apt-cacher-server:3142/health>
+- Detailed health: <http://apt-cacher-server:3142/health?detailed=true>
 - Prometheus metrics: <http://apt-cacher-server:3142/metrics>
+- Readiness check: <http://apt-cacher-server:3142/ready>
+
+## Security Considerations
+
+1. Configure access control to limit which clients can use the proxy:
+   ```yaml
+   allowed_ips:
+     - 127.0.0.1
+     - 192.168.0.0/24  # Internal network
+   ```
+
+2. Enable admin authentication to secure the admin interface:
+   ```yaml
+   admin_auth: true
+   username: admin
+   password: secure_password
+   ```
+
+3. If exposing to untrusted networks, use a reverse proxy with TLS termination.
+
+4. Consider using a dedicated user with limited permissions for the service.

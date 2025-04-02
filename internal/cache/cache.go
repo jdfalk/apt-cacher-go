@@ -668,12 +668,24 @@ func (c *Cache) UpdatePackageIndex(packages []parser.PackageInfo) error {
 			continue
 		}
 
-		// Skip if already exists with same version and architecture
-		key := fmt.Sprintf("p:%s:%s:%s", pkg.Package, pkg.Version, pkg.Architecture)
-		_, closer, err := c.db.db.Get([]byte(key))
-		if err == nil {
+		// Check if package exists by trying to retrieve it
+		pkgs, err := c.db.ListPackages(fmt.Sprintf("%s:%s:%s", pkg.Package, pkg.Version, pkg.Architecture))
+		exists := false
+
+		if err == nil && len(pkgs) > 0 {
+			// Check if any package matches exactly (same name, version, architecture)
+			for _, existingPkg := range pkgs {
+				if existingPkg.Package == pkg.Package &&
+					existingPkg.Version == pkg.Version &&
+					existingPkg.Architecture == pkg.Architecture {
+					exists = true
+					break
+				}
+			}
+		}
+
+		if exists {
 			// Package exists with this exact version and architecture
-			closer.Close()
 			continue
 		}
 

@@ -189,17 +189,14 @@ func TestProcessPackagesFile(t *testing.T) {
 	// Create a temporary directory for the cache
 	tempDir, err := os.MkdirTemp("", "backend-test")
 	require.NoError(t, err)
-	t.Cleanup(func() { os.RemoveAll(tempDir) }) // Use t.Cleanup instead of defer
+	t.Cleanup(func() { os.RemoveAll(tempDir) })
 
 	// Create mock components
 	mockCache := new(MockCache)
 	mockMapper := new(MockMapper)
 	mockPackageMapper := new(MockPackageMapper)
 
-	// Set up common mock expectations first
-	setupBackendTestMocks(mockCache, mockMapper, mockPackageMapper)
-
-	// Create config
+	// Create config with a specific cache dir
 	cfg := &config.Config{
 		CacheDir: tempDir,
 		Backends: []config.Backend{
@@ -218,18 +215,18 @@ func TestProcessPackagesFile(t *testing.T) {
 	// Disable the prefetcher for this test to avoid background MapPath calls
 	manager.prefetcher = nil
 
-	// Set up expectations
-	// Parse sample data for expectations
+	// Parse sample data to have proper expectations
 	packages, err := parser.ParsePackages([]byte(samplePackagesData))
 	require.NoError(t, err)
 	require.Equal(t, 2, len(packages))
 
-	// Remove the specific expectations from setupBackendTestMocks
-	mockCache.ExpectedCalls = nil
-	mockPackageMapper.ExpectedCalls = nil
-	mockMapper.ExpectedCalls = nil
+	// Set up ALL expectations - DON'T clear them later
 
-	// Reset with ONLY the expectations we need - using .Maybe() to be flexible
+	// Important: These need to be set before any calls that might trigger them
+	mockCache.On("SearchByPackageName", "").Return([]cache.CacheSearchResult{}, nil).Once()
+	mockCache.On("SearchByPackageName", "").Return([]cache.CacheSearchResult{}, nil).Once()
+
+	// Main test expectations
 	mockCache.On("UpdatePackageIndex", mock.MatchedBy(func(pkgs []parser.PackageInfo) bool {
 		return len(pkgs) == 2 &&
 			(pkgs[0].Package == "nginx" || pkgs[1].Package == "nginx") &&
@@ -247,10 +244,10 @@ func TestProcessPackagesFile(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	// Wrap the goroutine logic
+	// Run the test in a goroutine to better control synchronization
 	go func() {
 		defer wg.Done()
-		// Call the method being tested inside the goroutine
+		// Call the method being tested
 		manager.ProcessPackagesFile(repo, path, []byte(samplePackagesData))
 	}()
 
@@ -271,6 +268,7 @@ func TestProcessPackagesFile(t *testing.T) {
 		},
 	}
 
+	// Add a new expectation for the explicit search call below
 	mockCache.On("SearchByPackageName", "nginx").Return(expectedResults, nil).Once()
 
 	results, err := mockCache.SearchByPackageName("nginx")

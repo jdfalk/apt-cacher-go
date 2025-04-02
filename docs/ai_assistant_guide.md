@@ -39,295 +39,149 @@ The codebase follows a modular structure:
 ### Server Components
 
 1. **Server** (`internal/server/server.go`)
-
    ```go
    type Server struct {
        cfg           *config.Config
        httpServer    *http.Server
        httpsServer   *http.Server
-       cache         *cache.Cache
-       backend       *backend.Manager
-       metrics       *metrics.Collector
-       prometheus    *metrics.PrometheusCollector
+       adminServer   *http.Server
+       cache         Cache
+       backend       BackendManager
+       metrics       MetricsCollector
        acl           *security.ACL
-       mapper        *mapper.AdvancedMapper
-       startTime     time.Time
-       version       string
-       memoryMonitor *MemoryMonitor
+       mapper        PathMapper
+       packageMapper PackageMapper
+       memoryMonitor MemoryMonitorInterface
+       // Additional fields omitted
    }
    ```
 
 2. **MemoryMonitor** (`internal/server/memory.go`)
-
    ```go
    type MemoryMonitor struct {
-       highWatermarkMB      int
-       criticalWatermarkMB  int
-       memoryPressureAction func(pressure int)
-       checkInterval        time.Duration
+       mutex                sync.RWMutex
+       highWatermarkMB      int64
+       criticalWatermarkMB  int64
        memoryPressure       int64
-       stopChan             chan struct{}
-       gcCount              uint32
+       memoryPressureAction func(pressure int)
+       // Additional fields omitted
    }
    ```
 
 ### Cache Components
 
 3. **Cache** (`internal/cache/cache.go`)
-
    ```go
    type Cache struct {
        rootDir     string
        maxSize     int64
-       currentSize int64
-       items       map[string]*cacheEntry
-       mutex       sync.RWMutex
-       lruCache    *LRUCache
-       hitCount    int64
-       missCount   int64
-       statsMutex  sync.RWMutex
+       db          *storage.DatabaseStore
+       packageMutex sync.RWMutex
    }
    ```
 
-4. **CacheEntry** (`internal/cache/cache.go`)
-
-   ```go
-   type cacheEntry struct {
-       Path         string    `json:"path"`
-       Size         int64     `json:"size"`
-       LastAccessed time.Time `json:"last_accessed"`
-       LastModified time.Time `json:"last_modified"`
-       HitCount     int       `json:"hit_count"`
-   }
-   ```
-
-5. **CacheSearchResult** (`internal/cache/cache.go`)
-
-   ```go
-   type CacheSearchResult struct {
-       Path        string
-       PackageName string
-       Version     string
-       Size        int64
-       LastAccess  time.Time
-       IsCached    bool
-   }
-   ```
-
-6. **CacheStats** (`internal/cache/cache.go`)
-
-   ```go
-   type CacheStats struct {
-       CurrentSize int64
-       MaxSize     int64
-       Items       int
-       HitRate     float64
-       MissRate    float64
-       Hits        int64
-       Misses      int64
-   }
-   ```
-
-7. **LRUCache** (`internal/cache/lru.go`)
-
+4. **LRUCache** (`internal/cache/lru.go`)
    ```go
    type LRUCache struct {
-       capacity int
-       items    map[string]*LRUItem
-       head     *LRUItem
-       tail     *LRUItem
-       mutex    sync.Mutex
+       capacity  int
+       items     map[string]*list.Element
+       evictList *list.List
+       mutex     sync.RWMutex
+   }
+   ```
+
+5. **DatabaseStore** (`internal/storage/pebbledb.go`)
+   ```go
+   type DatabaseStore struct {
+       db                *pebble.DB
+       dbPath            string
+       cache             map[string]string
+       cacheMutex        sync.RWMutex
+       batchMutex        sync.Mutex
+       batch             *pebble.Batch
+       packageCount      int64
+       packageCountMutex sync.RWMutex
+       // Additional fields omitted
    }
    ```
 
 ### Backend Components
 
-8. **Manager** (`internal/backend/backend.go`)
-
+6. **Manager** (`internal/backend/backend.go`)
    ```go
    type Manager struct {
-       cfg              *config.Config
-       cache            *cache.Cache
-       mapper           *mapper.AdvancedMapper
-       packageMapper    *mapper.PackageMapper
-       httpClient       *http.Client
-       downloadQueue    *queue.DownloadQueue
-       prefetcher       *Prefetcher
-       backends         map[string]*Backend
-       backendsMutex    sync.RWMutex
-       repoKeyManager   *keymanager.Manager
+       backends       []*Backend
+       cache          CacheProvider
+       client         *http.Client
+       mapper         PathMapperProvider
+       packageMapper  PackageMapperProvider
+       downloadQ      *queue.Queue
+       prefetcher     *Prefetcher
+       keyManager     *keymanager.KeyManager
+       // Additional fields omitted
    }
    ```
 
-9. **Backend** (`internal/backend/backend.go`)
-
+7. **Prefetcher** (`internal/backend/prefetcher.go`)
    ```go
-   type Backend struct {
-       Name     string
-       BaseURL  string
-       Priority int
-       client   *http.Client
+   type Prefetcher struct {
+       manager        PrefetcherManager
+       active         sync.Map
+       maxActive      int
+       architectures  map[string]bool
+       memoryPressure int32
+       prefetchQueue  chan prefetchRequest
+       metrics        *metrics.PrefetchMetrics
+       // Additional fields omitted
    }
    ```
 
-10. **Prefetcher** (`internal/backend/prefetcher.go`)
-
-    ```go
-    type Prefetcher struct {
-        manager         *Manager
-        maxConcurrency  int
-        activeFetches   int32
-        architectures   map[string]bool
-        prefetchQueue   chan prefetchOperation
-        stopChan        chan struct{}
-        wg              sync.WaitGroup
-        memoryPressure  int32
-    }
-    ```
-
-11. **prefetchOperation** (`internal/backend/prefetcher.go`)
-
-    ```go
-    type prefetchOperation struct {
-        url       string
-        repo      string
-        priority  int
-        recursive bool
-    }
-    ```
-
-12. **TestCache** (used in testing, `internal/backend/backend_test.go`)
-
-    ```go
-    type TestCache struct {
-        *cache.Cache
-        PackageMapper *mapper.PackageMapper
-        packageIdx    *packageIndex
-        GetPackageIndex func() *packageIndex
-    }
-    ```
-
-13. **packageIndex** (testing implementation, `internal/backend/backend_test.go`)
-
-    ```go
-    type packageIndex struct {
-        packages map[string]parser.PackageInfo
-        mutex    sync.Mutex
-    }
-    ```
+8. **Queue** (`internal/queue/queue.go`)
+   ```go
+   type Queue struct {
+       taskCh     chan *Task
+       stopCh     chan struct{}
+       workers    int
+       isStopping int32
+       stopOnce   sync.Once
+       // Additional fields omitted
+   }
+   ```
 
 ### Mapper Components
 
-14. **AdvancedMapper** (`internal/mapper/advanced_mapper.go`)
+9. **PathMapper** (`internal/mapper/mapper.go`)
+   ```go
+   type PathMapper struct {
+       rules []MappingRule
+       mutex sync.RWMutex
+   }
+   ```
 
-    ```go
-    type AdvancedMapper struct {
-        rules    []MappingRule
-        mutex    sync.RWMutex
-    }
-    ```
-
-15. **MappingRule** (`internal/mapper/advanced_mapper.go`)
-
-    ```go
-    type MappingRule struct {
-        Type        RuleType
-        Pattern     string
-        Repository  string
-        Priority    int
-        RegexObj    *regexp.Regexp
-        Rewrite     bool
-        RewriteRule string
-    }
-    ```
-
-16. **PathMapper** (`internal/mapper/mapper.go`)
-
-    ```go
-    type PathMapper struct {
-        rules []MappingRule
-        mutex sync.RWMutex
-    }
-    ```
-
-17. **MappingResult** (`internal/mapper/mapper.go`)
-
-    ```go
-    type MappingResult struct {
-        Repository  string
-        RemotePath  string
-        CachePath   string
-        IsIndex     bool
-        Rule        *MappingRule
-    }
-    ```
-
-18. **PackageMapper** (`internal/mapper/package_mapper.go`)
-
+10. **PackageMapper** (`internal/mapper/mapper.go`)
     ```go
     type PackageMapper struct {
-        hashPackageMap map[string]string
+        hashToPackage map[string]string
         mutex         sync.RWMutex
     }
     ```
 
-### Parser Components
+### Security Components
 
-19. **PackageInfo** (`internal/parser/packages.go`)
-
+11. **ACL** (`internal/security/acl.go`)
     ```go
-    type PackageInfo struct {
-        Package      string
-        Version      string
-        Architecture string
-        Maintainer   string
-        InstalledSize string
-        Filename    string
-        Size        string
-        MD5sum      string
-        SHA1        string
-        SHA256      string
-        Description string
+    type ACL struct {
+        allowedNetworks []*net.IPNet
+        mutex           sync.RWMutex
     }
     ```
 
-### Config Components
-
-20. **Config** (`internal/config/config.go`)
-
+12. **KeyManager** (`internal/keymanager/keymanager.go`)
     ```go
-    type Config struct {
-        ListenAddress string
-        CacheDir      string
-        MaxCacheSize  string
-        LogFile       string
-        LogLevel      string
-        Backends      []Backend
-        AdminAuth     bool
-        AdminUser     string
-        AdminPassword string
-        AdminPort     int
-        CacheTTL      string
-        HTTPS         bool
-        TLSCert       string
-        TLSKey        string
-        MaxConcurrentDownloads int
-        MemoryHighWatermark    int
-        MemoryCriticalWatermark int
-        MemoryCheckInterval    string
-        EnabledArchitectures   []string
-        AllowedIPs             []string
-    }
-    ```
-
-21. **Backend** (`internal/config/config.go`)
-
-    ```go
-    type Backend struct {
-        Name     string
-        URL      string
-        Priority int
-        Enabled  bool
+    type KeyManager struct {
+        config     *config.KeyManagementConfig
+        keyCache   map[string]time.Time
+        fetchMutex sync.RWMutex
     }
     ```
 
@@ -335,59 +189,70 @@ The codebase follows a modular structure:
 
 ### Package Request Flow
 
-1. Client sends request to apt-cacher-go (e.g., <http://apt-cacher:3142/ubuntu/pool/main/n/nginx/nginx_1.18.0-0ubuntu1_amd64.deb>)
-2. Server receives request in `handlePackage` function (server/handlers.go)
-3. Path mapper determines repository and package path using `mapper.Map()`
+1. Client sends request to apt-cacher-go (e.g., `http://apt-cacher:3142/ubuntu/pool/main/n/nginx/nginx_1.18.0-0ubuntu1_amd64.deb`)
+2. Server receives request in `handlePackageRequest` function (server/handlers.go)
+3. Path mapper determines repository and package path using `mapper.MapPath()`
 4. Cache is checked for the package with `cache.Get()`
 5. If found and valid, package is served from cache
 6. If not found or expired:
    - Backend manager downloads from appropriate repository using `backend.Fetch()`
-   - Package is stored in cache with `cache.Put()`
-   - Package is streamed to client
-7. Metrics are updated with `metrics.RecordCache()`
+   - Package is streamed to client while being saved to cache
+   - Package metadata is extracted and stored for indexing
+7. Metrics are updated with `metrics.RecordRequest()` and related methods
 
-### Repository Index Processing
+### HTTP/HTTPS Handling
 
-1. Client requests an index file (e.g., Release, Packages)
-2. Server identifies it as an index file with `IsIndexFile()`
-3. If cached copy exists and is valid, it's served
-4. Otherwise, backend fetches from upstream
-5. For certain index types:
-   - `ProcessReleaseFile()` extracts information about other index files
-   - `ProcessPackagesFile()` parses package info and updates the package index
-6. Package index is used for search functionality
+1. The server can handle both HTTP and HTTPS requests
+2. For HTTPS requests, the server can:
+   - Act as an HTTPS endpoint with TLS termination
+   - Remap HTTPS repository requests to HTTP backend connections
+   - Support CONNECT tunneling for repository key servers
+3. HTTPS remapping is handled in `handleHTTPSRequest`
+4. CONNECT tunneling is implemented in `handleConnectRequest`
 
-### Cache Management Flow
-
-1. Cache entries are stored with metadata (size, access time, expiration)
-2. When cache size would exceed limits, LRU eviction is triggered:
-   - `evictItems()` removes least recently used items to make space
-   - Uses LRUCache to track access order efficiently
-3. Cache state is periodically saved to disk with `saveState()`
-4. On startup, saved state is loaded from disk with `loadState()`
-5. Safe shutdown with timeout protection in `Close()` method
-
-### Memory Monitoring
+### Memory Management
 
 1. MemoryMonitor tracks system and application memory usage
 2. Regular checks are performed at configured intervals
 3. When memory pressure exceeds thresholds, actions are triggered:
    - GC is forced to reclaim memory
    - Prefetch operations may be delayed or cancelled
+   - Background tasks may be throttled
 4. Memory stats are exposed through metrics and admin interface
 
+### Package Prefetching
+
+1. When index files are downloaded, prefetcher extracts package URLs
+2. Package URLs are filtered by architecture if configured
+3. Prefetch requests are added to a queue with priorities
+4. Worker goroutines process the queue with controlled concurrency
+5. If memory pressure is high, prefetching is throttled or paused
+6. Metrics track prefetch success/failure rates
+
 ## Implementation Details
+
+### PebbleDB Storage
+
+1. PebbleDB provides persistent key-value storage for:
+   - Package metadata
+   - Cache entry information
+   - Hash-to-package mappings
+   - Cache statistics
+2. Batch operations improve performance for multiple writes
+3. Memory caching reduces database reads for hot items
+4. Atomic counters ensure thread-safe operations
 
 ### Thread Safety
 
 The codebase uses several mechanisms to ensure thread safety:
 
 1. Mutex locks (sync.Mutex, sync.RWMutex) for access to shared data structures
-2. Fine-grained locking with separate mutexes for different concerns (e.g., cache.mutex and cache.statsMutex)
+2. Fine-grained locking with separate mutexes for different concerns (e.g., packageMutex, cacheMutex)
 3. Atomic operations (atomic package) for counters and flags
 4. Channel-based communication between goroutines
 5. sync.WaitGroup for coordinating goroutine completion
-6. Timeouts to prevent deadlocks during shutdown (e.g., in Cache.Close())
+6. sync.Once for operations that must execute exactly once
+7. Timeouts to prevent deadlocks during shutdown
 
 ### Error Handling
 
@@ -401,36 +266,32 @@ Error handling follows these patterns:
 
 ### Testing Approach
 
-The project follows these testing practices:
+1. Extensive use of interfaces for mocking dependencies
+2. TestFixture pattern for setting up test environments
+3. Concurrent testing with timeouts to catch race conditions
+4. Explicit cleanup with t.Cleanup to ensure resources are released
+5. Context cancellation testing for graceful shutdown
+6. Comprehensive documentation comments for test purpose and approach
 
-1. Unit tests for individual components
-2. Integration tests for end-to-end functionality
-3. Test doubles (mocks, stubs) for isolating components
-4. The `TestCache` in backend tests shows how to create test doubles
-5. Performance benchmarks for critical operations
-6. Docker-based integration testing with real HTTP clients
-
-### Common Development Tasks
+## Common Development Tasks
 
 1. **Adding a new API endpoint:**
    - Add a new handler function in server/handlers.go
-   - Register the handler in server/server.go
-   - Add appropriate tests
+   - Add route in setupHTTPHandlers() in server/server.go
+   - Add tests in server/server_test.go
 
-2. **Adding a new configuration option:**
-   - Add the field to the Config struct in config/config.go
-   - Update the loadConfig and validateConfig functions
-   - Add appropriate defaults and validation
-   - Update the component that uses the configuration
+2. **Modifying caching behavior:**
+   - Update relevant methods in cache/cache.go
+   - Modify storage/pebbledb.go for persistence changes
+   - Update expiration logic in cache.PutWithExpiration
 
-3. **Implementing a new caching strategy:**
-   - Modify the cache/cache.go file
-   - Update the evictItems or other cache management methods
-   - Add metrics to track effectiveness
+3. **Adding prefetch support for new file types:**
+   - Update ProcessIndexFile in backend/prefetcher.go
+   - Modify FilterURLsByArchitecture to handle new patterns
+   - Add test cases in prefetcher_test.go
 
-4. **Fixing deadlocks and race conditions:**
-   - Use proper lock ordering to avoid deadlocks
-   - Minimize the scope of locks to reduce contention
-   - Use atomic operations for simple flags and counters
-   - Run tests with the race detector
-   - Add timeouts for operations that might block indefinitely
+4. **Debugging deadlocks:**
+   - Look for missing mutex unlocks or deferred unlocks
+   - Check for circular dependencies in lock acquisition
+   - Verify that channels have sufficient buffer sizes or are properly consumed
+   - Add timeouts to context-based operations
