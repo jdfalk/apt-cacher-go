@@ -50,12 +50,48 @@ func (m *MockMetricsCollector) GetTopClients(limit int) []ClientStats {
 	return args.Get(0).([]ClientStats)
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestMetricsFunctionality is a basic sanity check for the testing framework.
+//
+// The test verifies:
+// - The testing framework is properly set up
+// - Basic assertions work as expected
+//
+// Approach:
+// 1. Performs a simple assertion (1+1=2)
+// 2. Verifies the assertion passes
+//
+// Note: This serves as a baseline test to confirm the testing infrastructure is working
 func TestMetricsFunctionality(t *testing.T) {
 	t.Run("hello world", func(t *testing.T) {
 		assert.Equal(t, 2, 1+1)
 	})
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestCollectorWithMock tests the metrics collector using a mock implementation
+// to verify that the interface works as expected.
+//
+// The test verifies:
+// - Mock metrics collector properly records various types of metrics
+// - GetStatistics returns the expected values
+// - Package and client tracking works correctly
+//
+// Approach:
+// 1. Creates a mock metrics collector with predefined expectations
+// 2. Calls various recording methods on the mock
+// 3. Verifies the mock returns expected statistics
+// 4. Confirms expectations on the mock were met
+//
+// Note: This test focuses on the collector interface rather than the actual implementation
 func TestCollectorWithMock(t *testing.T) {
 	// Setup mock
 	mockCollector := new(MockMetricsCollector)
@@ -118,6 +154,25 @@ func TestCollectorWithMock(t *testing.T) {
 	mockCollector.AssertExpectations(t)
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestStandardRecordBytesServed tests the RecordBytesServed method for tracking
+// the total bytes served through the cache.
+//
+// The test verifies:
+// - Bytes served are correctly accumulated
+// - Multiple record operations add to the total
+// - Negative values are handled appropriately
+//
+// Approach:
+// 1. Creates a new metrics collector
+// 2. Records bytes served with various values
+// 3. Verifies the total is updated correctly after each operation
+//
+// Note: This tests direct byte recording without an associated request
 func TestStandardRecordBytesServed(t *testing.T) {
 	collector := New()
 
@@ -134,6 +189,26 @@ func TestStandardRecordBytesServed(t *testing.T) {
 	assert.Equal(t, int64(2560), collector.bytesServed)
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestEdgeCases tests the metrics collector's behavior with edge case inputs.
+//
+// The test verifies:
+// - Empty path is handled correctly in RecordRequest
+// - Zero duration is handled correctly in RecordRequest
+// - Empty client IP is handled correctly in RecordRequest
+// - Recording hit/miss/error works with no prior requests
+//
+// Approach:
+// 1. Creates a new metrics collector
+// 2. Records requests with empty path, zero duration, and empty client IP
+// 3. Creates a fresh collector and records hits/misses/errors without requests
+// 4. Verifies counters are updated correctly despite edge case inputs
+//
+// Note: This tests robustness against unexpected or missing input data
 func TestEdgeCases(t *testing.T) {
 	collector := New()
 
@@ -163,6 +238,27 @@ func TestEdgeCases(t *testing.T) {
 	assert.Equal(t, int64(3072), collector.bytesServed)
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestConcurrentAccess tests the thread safety of the metrics collector.
+//
+// The test verifies:
+// - Concurrent calls to RecordRequest work correctly
+// - Concurrent calls to RecordCacheHit work correctly
+// - Concurrent calls to RecordCacheMiss work correctly
+// - Counters are correctly updated after all goroutines complete
+//
+// Approach:
+// 1. Creates a new metrics collector
+// 2. Launches multiple goroutines that call various record methods concurrently
+// 3. Uses a WaitGroup to ensure all goroutines complete
+// 4. Verifies the final counter values match expected totals
+//
+// Note: This test ensures the metrics collector is safe for concurrent use
+// across multiple server goroutines
 func TestConcurrentAccess(t *testing.T) {
 	collector := New()
 	var wg sync.WaitGroup
@@ -170,8 +266,7 @@ func TestConcurrentAccess(t *testing.T) {
 
 	// Test concurrent RecordRequest
 	wg.Add(iterations)
-	// CHANGE 1: Modernize for loop using range over ints at line 172
-	for i := range iterations {
+	for i := range make([]int, iterations) {
 		go func(i int) {
 			defer wg.Done()
 			path := fmt.Sprintf("/path%d", i)
@@ -183,8 +278,7 @@ func TestConcurrentAccess(t *testing.T) {
 
 	// Test concurrent RecordCacheHit and RecordCacheMiss
 	wg.Add(iterations * 2)
-	// CHANGE 2: Modernize for loop using range over ints at line 184
-	for i := range iterations {
+	for i := range make([]int, iterations) {
 		go func(i int) {
 			defer wg.Done()
 			collector.RecordCacheHit(fmt.Sprintf("/path%d", i), int64(i*10))
@@ -200,6 +294,26 @@ func TestConcurrentAccess(t *testing.T) {
 	assert.Equal(t, iterations, collector.cacheMisses)
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestEmptyCollectorStats tests the behavior of a fresh collector with no recorded data.
+//
+// The test verifies:
+// - GetStatistics returns zero values for all counters
+// - HitRate and AvgResponseTime are correctly calculated as zero
+// - GetTopPackages returns an empty slice with no data
+// - GetTopClients returns an empty slice with no data
+//
+// Approach:
+// 1. Creates a new empty metrics collector
+// 2. Calls GetStatistics and checks all values are zero
+// 3. Calls GetTopPackages and verifies an empty slice is returned
+// 4. Calls GetTopClients and verifies an empty slice is returned
+//
+// Note: This test ensures the collector behaves correctly when no data has been recorded
 func TestEmptyCollectorStats(t *testing.T) {
 	collector := New()
 
@@ -223,6 +337,25 @@ func TestEmptyCollectorStats(t *testing.T) {
 	assert.Equal(t, 0, len(topClients))
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestRecordRequestWithPackageTracking tests the package tracking functionality.
+//
+// The test verifies:
+// - Package statistics are correctly updated for multiple requests
+// - GetTopPackages correctly returns the most accessed packages
+// - Package counts are correctly maintained
+//
+// Approach:
+// 1. Creates a new metrics collector
+// 2. Records multiple requests for the same package
+// 3. Manually updates package statistics to simulate tracking
+// 4. Calls GetTopPackages and verifies the results
+//
+// Note: This test focuses on verifying package tracking functionality
 func TestRecordRequestWithPackageTracking(t *testing.T) {
 	collector := New()
 
@@ -256,6 +389,26 @@ func TestRecordRequestWithPackageTracking(t *testing.T) {
 	assert.Equal(t, 5, topPackages[0].Count)
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestCollectorCreation tests the initialization of the metrics collector.
+//
+// The test verifies:
+// - A new collector is properly initialized
+// - All counters start at zero
+// - Internal maps are properly initialized
+// - MaxRecentItems is set to the default value
+//
+// Approach:
+// 1. Creates a new metrics collector
+// 2. Verifies all counters are initialized to zero
+// 3. Verifies internal data structures are initialized
+// 4. Checks that default configuration values are set correctly
+//
+// Note: This test ensures the collector is in a valid initial state
 func TestCollectorCreation(t *testing.T) {
 	collector := New()
 
@@ -271,6 +424,27 @@ func TestCollectorCreation(t *testing.T) {
 	assert.NotNil(t, collector.clients)
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestMetricsRecordRequest tests the RecordRequest method of the metrics collector.
+//
+// The test verifies:
+// - A request is properly recorded with all fields
+// - TotalRequests counter is incremented
+// - Total response time is updated
+// - Client statistics are updated
+//
+// Approach:
+// 1. Creates a new metrics collector
+// 2. Records a request with specific path, duration, client IP, and package name
+// 3. Verifies request counters are updated
+// 4. Verifies request details are stored correctly
+// 5. Checks that client statistics are updated
+//
+// Note: This test focuses on the basic request recording functionality
 func TestMetricsRecordRequest(t *testing.T) {
 	collector := New()
 
@@ -298,6 +472,28 @@ func TestMetricsRecordRequest(t *testing.T) {
 	assert.Equal(t, 1, clientStats.Requests)
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestRecordCacheHit tests the RecordCacheHit method of the metrics collector.
+//
+// The test verifies:
+// - Cache hit counter is properly incremented
+// - Bytes served counter is updated
+// - Most recent request is updated with hit status
+// - Bytes value is set on the most recent request
+//
+// Approach:
+// 1. Creates a new metrics collector
+// 2. Records a request
+// 3. Records a cache hit for the same path
+// 4. Verifies cache hit counter is incremented
+// 5. Verifies bytes served counter is updated
+// 6. Checks that the most recent request is updated with hit status
+//
+// Note: This test ensures cache hits are properly tracked
 func TestRecordCacheHit(t *testing.T) {
 	collector := New()
 
