@@ -161,24 +161,39 @@ func (s *Server) handleConnectRequest(w http.ResponseWriter, r *http.Request) {
 	// Connect to the remote host
 	remoteConn, err := net.DialTimeout("tcp", r.Host, 10*time.Second)
 	if err != nil {
-		clientConn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
+		_, writeErr := clientConn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
+		if writeErr != nil {
+			log.Printf("Error writing to client: %v", writeErr)
+		}
 		clientConn.Close()
 		return
 	}
 
 	// Tell the client everything is OK
-	clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+	_, err = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+	if err != nil {
+		log.Printf("Error writing to client: %v", err)
+		clientConn.Close()
+		remoteConn.Close()
+		return
+	}
 
 	// Start copying data back and forth
 	go func() {
 		defer clientConn.Close()
 		defer remoteConn.Close()
-		io.Copy(remoteConn, clientConn)
+		_, err := io.Copy(remoteConn, clientConn)
+		if err != nil && err != io.EOF {
+			log.Printf("Error copying from client to remote: %v", err)
+		}
 	}()
 
 	go func() {
 		defer clientConn.Close()
 		defer remoteConn.Close()
-		io.Copy(clientConn, remoteConn)
+		_, err := io.Copy(clientConn, remoteConn)
+		if err != nil && err != io.EOF {
+			log.Printf("Error copying from remote to client: %v", err)
+		}
 	}()
 }

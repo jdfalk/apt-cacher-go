@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -155,7 +156,11 @@ func TestURLParsing(t *testing.T) {
 func TestHandleConnectRequest(t *testing.T) {
 	// Start a test server to act as our keyserver target
 	targetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("Test server response"))
+		_, err := w.Write([]byte("Test server response"))
+		if err != nil {
+			// In tests, we can just log the error since we can't easily propagate it
+			t.Logf("Error writing response: %v", err)
+		}
 	}))
 	defer targetServer.Close()
 
@@ -211,6 +216,19 @@ func TestHandleConnectRequest(t *testing.T) {
 func TestHandleHTTPSRequest(t *testing.T) {
 	fixture := NewTestServerFixture(t)
 	defer fixture.Cleanup()
+
+	// Add missing expectations for metrics collection
+	fixture.Metrics.On("SetLastClientIP", mock.AnythingOfType("string")).Return().Maybe()
+	fixture.Metrics.On("SetLastFileSize", mock.AnythingOfType("int64")).Return().Maybe()
+	fixture.Metrics.On("RecordRequest", mock.AnythingOfType("string"), mock.AnythingOfType("time.Duration"),
+		mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return().Maybe()
+	fixture.Metrics.On("RecordCacheHit", mock.AnythingOfType("string"), mock.AnythingOfType("int64")).Return().Maybe()
+	fixture.Metrics.On("RecordCacheMiss", mock.AnythingOfType("string"), mock.AnythingOfType("int64")).Return().Maybe()
+	fixture.Metrics.On("RecordError", mock.AnythingOfType("string")).Return().Maybe()
+	fixture.Metrics.On("RecordBytesServed", mock.AnythingOfType("int64")).Return().Maybe()
+
+	// Add missing PackageMapper expectation
+	fixture.PackageMapper.On("GetPackageNameForHash", mock.AnythingOfType("string")).Return("").Maybe()
 
 	t.Run("docker_https_request", func(t *testing.T) {
 		// Setup backend expectation
