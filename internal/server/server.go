@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -245,6 +246,14 @@ func (s *Server) setupHTTPHandlers() {
 	s.httpServer = &http.Server{
 		Addr:    fmt.Sprintf("%s:%d", s.cfg.ListenAddress, s.cfg.Port),
 		Handler: mainMux,
+	}
+
+	// Apply ACL middleware to the main HTTP server
+	if s.acl != nil {
+		mainHandler := s.acl.Middleware(mainMux)
+		s.httpServer.Handler = mainHandler
+	} else {
+		s.httpServer.Handler = mainMux
 	}
 
 	// Set up admin server if configured
@@ -557,6 +566,7 @@ func (rw *responseWriter) WriteHeader(code int) {
 
 // handlePackageRequest handles package download requests
 func (s *Server) handlePackageRequest(w http.ResponseWriter, r *http.Request) {
+	// Start timing for this request
 	start := time.Now()
 	requestPath := r.URL.Path
 
@@ -567,6 +577,14 @@ func (s *Server) handlePackageRequest(w http.ResponseWriter, r *http.Request) {
 	s.mutex.Lock()
 	s.metrics.SetLastClientIP(clientIP)
 	s.mutex.Unlock()
+
+	// Handle conditional requests (using the previously unused method)
+	if r.Header.Get("If-Modified-Since") != "" {
+		if s.handleConditionalRequest(w, r, requestPath) {
+			// Request was handled as Not Modified, return early
+			return
+		}
+	}
 
 	// Fetch the package data
 	data, err := s.backend.Fetch(requestPath)
@@ -642,7 +660,9 @@ func (s *Server) handlePackageRequest(w http.ResponseWriter, r *http.Request) {
 								log.Printf("Successfully fetched key %s via proxy", keyID)
 								// Try refetching the original content after proxy key fetch
 								time.Sleep(100 * time.Millisecond) // Small delay to ensure key is processed
-								s.backend.RefreshReleaseData(requestPath)
+								if err := s.backend.RefreshReleaseData(requestPath); err != nil {
+									log.Printf("Error refreshing release data after key fetch: %v", err)
+								}
 							}
 						}()
 					}
@@ -1286,15 +1306,54 @@ func (s *Server) proxyKeyServerRequest(w http.ResponseWriter, r *http.Request) {
 		// Headers already sent, can't return an error status code
 		return
 	}
+
+	// Check if it contains a PGP key block
+	if strings.Contains(string(resp.Body), "BEGIN PGP PUBLIC KEY BLOCK") {
+		// Extract key ID if possible
+		keyID := s.extractKeyIDFromKeyData(resp.Body)
+		if keyID != "" {
+			// Store the key
+			s.mutex.Lock()
+			keyManager := s.backend.KeyManager()
+			s.mutex.Unlock()
+
+			if keyM, ok := keyManager.(KeyManager); ok {
+				keyPath := keyM.GetKeyPath(keyID)
+				if err := os.MkdirAll(filepath.Dir(keyPath), 0755); err != nil {
+					log.Printf("Failed to create key directory: %v", err)
+				} else if err := os.WriteFile(keyPath, resp.Body, 0644); err != nil {
+					log.Printf("Failed to store key %s: %v", keyID, err)
+				} else {
+					log.Printf("Successfully stored key %s from keyserver response", keyID)
+				}
+			}
+		}
+	}
 }
 
 // Helper to extract key ID from key data
 func (s *Server) extractKeyIDFromKeyData(data []byte) string {
-	// This is a simplified version - real implementation would parse the key properly
 	content := string(data)
-	// Look for lines that might contain the key ID
-	lines := strings.Split(content, "\n")
-	for _, line := range lines {
+
+	// Look for key IDs in the content
+	patterns := []string{
+		`signed by key ID (\w+)`,
+		`signature from key ID (\w+)`,
+		`key ID (\w+)`,
+	}
+
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		matches := re.FindStringSubmatch(content)
+		if len(matches) > 1 {
+			return matches[1]
+		}
+	}
+
+	// More efficient approach for scanning lines
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for scanner.Scan() {
+		line := scanner.Text()
 		if strings.Contains(line, "Key ID") || strings.Contains(line, "keyid") {
 			// Extract what looks like a key ID (8+ hex characters)
 			re := regexp.MustCompile(`[0-9A-F]{8,}`)
@@ -1304,5 +1363,6 @@ func (s *Server) extractKeyIDFromKeyData(data []byte) string {
 			}
 		}
 	}
+
 	return ""
 }
