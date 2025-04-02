@@ -411,6 +411,7 @@ type BackendManagerInterface interface {
 	ForceCleanupPrefetcher() int
 	PrefetchOnStartup(ctx context.Context)
 	KeyManager() interface{}
+	RefreshReleaseData(repo string) error
 }
 
 type CacheInterface interface {
@@ -498,6 +499,9 @@ func TestServerWithExtDeps(t *testing.T) {
 		RemotePath: "path/to/file",
 		CachePath:  "test-repo/path/to/file",
 	}, nil)
+
+	// In TestServerWithExtDeps, add this expectation:
+	mockBackend.On("RefreshReleaseData", mock.Anything).Return(nil).Maybe()
 
 	// Create config
 	cfg := &config.Config{
