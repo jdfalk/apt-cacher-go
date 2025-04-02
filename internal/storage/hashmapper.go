@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -386,5 +387,34 @@ func (pm *PersistentPackageMapper) SearchPackages(pattern string) (map[string]st
 
 // Compact compacts the database to optimize storage
 func (pm *PersistentPackageMapper) Compact() error {
-	return pm.db.Compact(nil, nil, true)
+	// Get the first and last keys to create a valid range
+	iter, err := pm.db.NewIter(nil)
+	if err != nil {
+		return err
+	}
+	defer iter.Close()
+
+	// Check if we have any keys
+	if !iter.First() {
+		// Empty database, nothing to compact
+		return nil
+	}
+
+	// Get the first key
+	firstKey := append([]byte{}, iter.Key()...)
+
+	// Try to find the last key
+	if !iter.Last() {
+		// Only one key, nothing to compact
+		return nil
+	}
+	lastKey := append([]byte{}, iter.Key()...)
+
+	// Only compact if we have a valid range
+	if bytes.Compare(firstKey, lastKey) < 0 {
+		return pm.db.Compact(firstKey, lastKey, true)
+	}
+
+	// No valid range found
+	return nil
 }
