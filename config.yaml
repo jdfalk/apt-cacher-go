@@ -67,6 +67,7 @@ prefetch:
   architectures:
     - amd64
   warmup_on_startup: true
+  verbose_logging: false # Controls detailed logging of prefetcher operations
 
 # Standard repository backends (will be added automatically if missing)
 backends:

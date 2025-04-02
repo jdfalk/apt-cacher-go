@@ -113,9 +113,10 @@ type PrefetchConfig struct {
 	MaxConcurrent   int      `yaml:"max_concurrent"`
 	Architectures   []string `yaml:"architectures"`
 	WarmupOnStartup bool     `yaml:"warmup_on_startup"`
-	BatchSize       int      `yaml:"batch_size"` // Add this field
+	BatchSize       int      `yaml:"batch_size"`
 	RetryLimit      int      `yaml:"retry_limit"`
 	SkipNotFound    bool     `yaml:"skip_notfound"`
+	VerboseLogging  bool     `yaml:"verbose_logging"` // Add this field
 }
 
 // LoadConfigFile loads configuration from a YAML file
