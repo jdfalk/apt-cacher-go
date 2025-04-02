@@ -47,6 +47,12 @@ func (m *MockBackendManager) KeyManager() any {
 	return args.Get(0)
 }
 
+// Add RefreshReleaseData method to MockBackendManager
+func (m *MockBackendManager) RefreshReleaseData(path string) error {
+	args := m.Called(path)
+	return args.Error(0)
+}
+
 // MockKeyManager implements the KeyManager interface for testing
 type MockKeyManager struct {
 	mock.Mock
