@@ -462,32 +462,47 @@ func (m *Manager) Download(ctx context.Context, path string, backend *Backend) (
 	return &result, nil
 }
 
-// ProcessPackagesFile processes package index files
-func (m *Manager) ProcessPackagesFile(repo string, path string, data []byte) {
-	packages, err := parser.ParsePackages(data)
+// ProcessPackagesFile parses and stores package information from an index file
+func (m *Manager) ProcessPackagesFile(repo, path string, data []byte) {
+	// Parse packages from the file
+	packages, err := parser.ParsePackagesFile(data)
 	if err != nil {
-		log.Printf("Error parsing packages file: %v", err)
+		log.Printf("Error parsing packages file %s: %v", path, err)
 		return
 	}
 
-	// Store package information in cache
+	// Store packages in database
+	beforeCount := 0
+	packageList, err := m.cache.SearchByPackageName("")
+	if err == nil {
+		beforeCount = len(packageList)
+	}
+
 	err = m.cache.UpdatePackageIndex(packages)
 	if err != nil {
-		log.Printf("Error updating package index in cache: %v", err)
+		log.Printf("Error updating package index: %v", err)
+		return
 	}
 
-	// Populate package mapper with hash information
-	if m.packageMapper != nil {
-		for _, pkg := range packages {
-			if pkg.SHA256 != "" {
-				log.Printf("Added hash mapping: %s -> %s", pkg.SHA256, pkg.Package)
-				m.packageMapper.AddHashMapping(pkg.SHA256, pkg.Package)
-			}
-		}
+	// Get the new count to calculate how many were added
+	afterCount := 0
+	packageList, err = m.cache.SearchByPackageName("")
+	if err == nil {
+		afterCount = len(packageList)
 	}
 
-	// If prefetcher is enabled, process the data for potential prefetching
-	if m.prefetcher != nil {
+	// Log the update
+	newPackages := afterCount - beforeCount
+	if newPackages > 0 {
+		log.Printf("Added %d new packages from %s (index contains %d packages)",
+			newPackages, path, afterCount)
+	} else {
+		log.Printf("Package index update: no new packages added (index contains %d packages)",
+			afterCount)
+	}
+
+	// Process packages for prefetching if enabled
+	if m.prefetcher != nil && len(packages) > 0 {
 		m.prefetcher.ProcessIndexFile(repo, path, data)
 	}
 }
