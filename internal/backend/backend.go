@@ -470,22 +470,23 @@ func (m *Manager) ProcessPackagesFile(repo string, path string, data []byte) {
 		return
 	}
 
-	// Store package information in cache - directly call the method
-	if err := m.cache.UpdatePackageIndex(packages); err != nil {
-		log.Printf("Error updating package index: %v", err)
+	// Store package information in cache
+	err = m.cache.UpdatePackageIndex(packages)
+	if err != nil {
+		log.Printf("Error updating package index in cache: %v", err)
 	}
 
 	// Populate package mapper with hash information
 	if m.packageMapper != nil {
 		for _, pkg := range packages {
 			if pkg.SHA256 != "" {
-				m.packageMapper.AddHashMapping(pkg.SHA256, pkg.Package)
 				log.Printf("Added hash mapping: %s -> %s", pkg.SHA256, pkg.Package)
+				m.packageMapper.AddHashMapping(pkg.SHA256, pkg.Package)
 			}
 		}
 	}
 
-	// If you want to also trigger prefetching
+	// If prefetcher is enabled, process the data for potential prefetching
 	if m.prefetcher != nil {
 		m.prefetcher.ProcessIndexFile(repo, path, data)
 	}
