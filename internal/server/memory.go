@@ -25,6 +25,18 @@ type MemoryMonitor struct {
 }
 
 // NewMemoryMonitor creates a new monitor
+//
+// This function initializes a memory monitor with specified high and critical watermarks.
+// The monitor will track memory usage and call the provided action function when pressure
+// exceeds certain thresholds.
+//
+// Parameters:
+// - highWatermarkMB: Memory usage level (in MB) at which to begin taking action
+// - criticalWatermarkMB: Memory usage level (in MB) considered critical
+// - action: Function to call when memory pressure is high, or nil if none
+//
+// Returns:
+// - A configured MemoryMonitor instance ready to be started
 func NewMemoryMonitor(highWatermarkMB, criticalWatermarkMB int, action func(pressure int)) *MemoryMonitor {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &MemoryMonitor{
@@ -117,8 +129,8 @@ func (m *MemoryMonitor) GetMemoryUsage() map[string]any {
 		"allocated_mb":          float64(stats.Alloc) / (1024 * 1024),
 		"system_mb":             float64(stats.Sys) / (1024 * 1024),
 		"total_allocated_mb":    float64(stats.TotalAlloc) / (1024 * 1024),
-		"heap_objects":          stats.HeapObjects,
-		"gc_cycles":             stats.NumGC,
+		"heap_objects":          int(stats.HeapObjects), // Convert uint64 to int
+		"gc_cycles":             int(stats.NumGC),       // Convert uint32 to int explicitly
 		"goroutines":            runtime.NumGoroutine(),
 		"high_watermark_mb":     m.highWatermarkMB,
 		"critical_watermark_mb": m.criticalWatermarkMB,
