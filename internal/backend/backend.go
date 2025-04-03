@@ -69,24 +69,54 @@ type Backend struct {
 	client   *http.Client // Added client field
 }
 
-// Modify the New function to use createHTTPClient and add default key prefetching
+// createHTTPClient creates a new HTTP client with appropriate settings
+func createHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: 60 * time.Second,
+		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		},
+	}
+}
+
+// New creates a new backend manager with tracing capabilities
 func New(cfg *config.Config, cache CacheProvider, mapper PathMapperProvider, packageMapper PackageMapperProvider) (*Manager, error) {
-	// Create manager first so we can use its methods
-	m := &Manager{
-		cache:         cache,
-		mapper:        mapper,
-		packageMapper: packageMapper,
-		cacheDir:      cfg.CacheDir,
+	// Create HTTP client (will be wrapped for tracing if enabled)
+	client := createHTTPClient()
+
+	// Set up HTTP tracing if enabled
+	if cfg.Log.Debug.TraceHTTPRequests {
+		client = &http.Client{
+			Transport: &loggingTransport{
+				inner: client.Transport,
+			},
+			Timeout: client.Timeout,
+		}
 	}
 
-	// Use the createHTTPClient method instead of creating it inline
-	client := m.createHTTPClient()
-	m.client = client
-
 	// Create download context
-	downloadCtx, downloadCancel := context.WithCancel(context.Background())
-	m.downloadCtx = downloadCtx
-	m.downloadCancel = downloadCancel
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Construct the manager with all dependencies
+	manager := &Manager{
+		backends:       make([]*Backend, 0),
+		cache:          cache,
+		client:         client,
+		mapper:         mapper,
+		packageMapper:  packageMapper,
+		downloadCtx:    ctx,
+		downloadCancel: cancel,
+		cacheDir:       cfg.CacheDir,
+	}
 
 	// Create backends with the HTTP client
 	backends := make([]*Backend, 0, len(cfg.Backends))
@@ -98,14 +128,14 @@ func New(cfg *config.Config, cache CacheProvider, mapper PathMapperProvider, pac
 			client:   client,
 		})
 	}
-	m.backends = backends
+	manager.backends = backends
 
 	// Initialize key manager with cache directory for fallback
-	km, err := keymanager.New(&cfg.KeyManagement, cfg.CacheDir)
+	km, err := keymanager.New(&cfg.KeyManagement, cfg.CacheDir, &cfg.Log.Debug)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize key manager: %w", err)
 	}
-	m.keyManager = km
+	manager.keyManager = km
 
 	// Prefetch common repository keys if key management is enabled
 	if km != nil && cfg.KeyManagement.Enabled {
@@ -133,7 +163,7 @@ func New(cfg *config.Config, cache CacheProvider, mapper PathMapperProvider, pac
 	}
 
 	// Create the download queue
-	m.downloadQ = queue.New(cfg.MaxConcurrentDownloads)
+	manager.downloadQ = queue.New(cfg.MaxConcurrentDownloads)
 
 	// Create prefetcher if enabled
 	if cfg.Prefetch.Enabled {
@@ -143,27 +173,56 @@ func New(cfg *config.Config, cache CacheProvider, mapper PathMapperProvider, pac
 			maxConcurrent = 5 // Default if not specified
 		}
 
-		m.prefetcher = NewPrefetcher(m, maxConcurrent, cfg.Prefetch.Architectures)
+		manager.prefetcher = NewPrefetcher(manager, maxConcurrent, cfg.Prefetch.Architectures)
 
 		// Set batch size if specified in config
 		if cfg.Prefetch.BatchSize > 0 {
-			m.prefetcher.SetBatchSize(cfg.Prefetch.BatchSize)
+			manager.prefetcher.SetBatchSize(cfg.Prefetch.BatchSize)
 		}
 	}
 
 	// Start the download queue with the handler function
-	m.downloadQ.Start(func(task any) error {
+	manager.downloadQ.Start(func(task any) error {
 		url, ok := task.(string)
 		if !ok {
 			return fmt.Errorf("invalid task type: %T", task)
 		}
 
 		// Download but don't store result since we're not using it
-		_, err := m.downloadFromURL(url)
+		_, err := manager.downloadFromURL(url)
 		return err
 	})
 
-	return m, nil
+	return manager, nil
+}
+
+// loggingTransport wraps an http.RoundTripper and logs requests/responses
+type loggingTransport struct {
+	inner http.RoundTripper
+}
+
+func (lt *loggingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Log the request
+	log.Printf("[HTTP TRACE] Request: %s %s", req.Method, req.URL.String())
+	for key, values := range req.Header {
+		log.Printf("[HTTP TRACE] Header: %s: %s", key, strings.Join(values, ", "))
+	}
+
+	// Execute the request
+	start := time.Now()
+	resp, err := lt.inner.RoundTrip(req)
+	duration := time.Since(start)
+
+	// Log the response
+	if err != nil {
+		log.Printf("[HTTP TRACE] Error: %v (after %s)", err, duration)
+		return resp, err
+	}
+
+	log.Printf("[HTTP TRACE] Response: %s, Status: %d, Size: %d, Duration: %s",
+		req.URL.String(), resp.StatusCode, resp.ContentLength, duration)
+
+	return resp, err
 }
 
 // Shutdown cleans up resources
@@ -606,25 +665,6 @@ func (m *Manager) PrefetchOnStartup(ctx context.Context) {
 	}
 }
 
-func (m *Manager) createHTTPClient() *http.Client {
-	// Create a transport with more conservative settings
-	transport := &http.Transport{
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 10,
-		IdleConnTimeout:     90 * time.Second,
-		DisableCompression:  false,
-		Dial: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).Dial,
-		TLSHandshakeTimeout: 10 * time.Second,
-	}
-
-	return &http.Client{
-		Transport: transport,
-		Timeout:   60 * time.Second,
-	}
-}
 
 // RefreshReleaseData refreshes and reprocesses a release file after key changes.
 //
