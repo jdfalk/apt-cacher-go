@@ -367,11 +367,14 @@ func (m *Manager) handleKeyRequest(path string) ([]byte, error) {
 }
 
 // ProcessReleaseFile analyzes a Release file to find additional index files
-// Changed from private 'processReleaseFile' to public 'ProcessReleaseFile' for testing
 func (m *Manager) ProcessReleaseFile(repo string, path string, data []byte) {
 	// Parse the Release file
 	filenames, err := parser.ParseIndexFilenames(data)
 	if err != nil {
+		// Use dev_suppress_errors instead of suppress_errors
+		if !m.cfg.Log.Debug.DevSuppressErrors {
+			log.Printf("Error parsing Release file for %s: %v", repo, err)
+		}
 		return
 	}
 
@@ -664,7 +667,6 @@ func (m *Manager) PrefetchOnStartup(ctx context.Context) {
 		log.Printf("Prefetcher not initialized, skipping startup prefetch")
 	}
 }
-
 
 // RefreshReleaseData refreshes and reprocesses a release file after key changes.
 //
