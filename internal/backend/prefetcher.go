@@ -256,89 +256,65 @@ func (p *Prefetcher) queueWorker() {
 // Add a method to process a single URL
 func (p *Prefetcher) processSingleURL(repo, url string) {
 	// Update metrics if available
-	if p.metrics != nil && p.metrics.PrefetchAttempts != nil {
+	if p.metrics != nil {
 		p.metrics.PrefetchAttempts.WithLabelValues(repo).Inc()
 	}
 
 	// Track as in-progress
-	urlID := fmt.Sprintf("%s-%d", url, time.Now().UnixNano())
+	atomic.AddInt32(&p.inProgress, 1)
+	defer atomic.AddInt32(&p.inProgress, -1)
 
 	// Skip if already in progress
+	urlID := fmt.Sprintf("%s-%d", url, time.Now().UnixNano())
 	if _, loaded := p.active.LoadOrStore(urlID, time.Now()); loaded {
 		if p.verboseLogging {
-			log.Printf("Prefetch already in progress: %s", url)
+			log.Printf("Prefetch already in progress for %s", url)
 		}
 		return
 	}
-
-	atomic.AddInt32(&p.inProgress, 1)
 
 	p.wg.Add(1)
 	go func(u string, id string) {
 		defer p.wg.Done()
 		defer p.active.Delete(id)
-		defer atomic.AddInt32(&p.inProgress, -1)
 
-		// Use context with timeout instead of FetchWithContext
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
+		if p.verboseLogging {
+			log.Printf("Starting prefetch for %s: %s", repo, u)
+		}
 
-		// Use a channel to implement timeout with existing Fetch method
+		// Create a channel to get the result with timeout
 		resultCh := make(chan struct {
 			data []byte
 			err  error
 		}, 1)
 
+		// Use a goroutine to fetch the data and send to the channel
 		go func() {
 			data, err := p.manager.Fetch(u)
-			select {
-			case resultCh <- struct {
+			resultCh <- struct {
 				data []byte
 				err  error
-			}{data, err}:
-				// Successfully sent result
-			case <-ctx.Done():
-				// Context cancelled, just return
-				return
-			}
+			}{data, err}
 		}()
 
-		// Wait for either result or timeout
-		var err error
+		// Wait for result or timeout
 		select {
 		case result := <-resultCh:
-			err = result.err
-		case <-ctx.Done():
-			err = ctx.Err()
-		}
-
-		// Handle errors more efficiently
-		if err != nil {
-			// Record the failure to track consecutive failures
-			failCount := p.recordFailure(u)
-
-			// Log with different detail levels based on failure count
-			if p.verboseLogging || failCount == 1 {
-				log.Printf("Failed to prefetch %s: %v", u, err)
-			}
-
-			// Report failure to metrics
-			if p.metrics != nil && p.metrics.PrefetchFailures != nil {
-				reason := "fetch_error"
-				if ctx.Err() != nil {
-					reason = "timeout"
+			if result.err != nil {
+				failures := p.recordFailure(u)
+				if p.verboseLogging || failures <= 1 { // Always log first failure
+					log.Printf("Error prefetching %s: %v (attempt %d)", u, result.err, failures)
 				}
-				p.metrics.PrefetchFailures.WithLabelValues(repo, reason).Inc()
+			} else {
+				p.resetFailureCount(u)
+				if p.verboseLogging {
+					log.Printf("Successfully prefetched %s (%d bytes)", u, len(result.data))
+				}
 			}
-			return
-		}
-
-		// On success, reset the failure counter
-		p.resetFailureCount(u)
-
-		// Success - record metrics
-		if p.metrics != nil && p.metrics.PrefetchSuccesses != nil {
-			p.metrics.PrefetchSuccesses.WithLabelValues(repo).Inc()
+		case <-time.After(30 * time.Second):
+			if p.verboseLogging {
+				log.Printf("Prefetch timed out after 30s: %s", u)
+			}
 		}
 	}(url, urlID)
 }
