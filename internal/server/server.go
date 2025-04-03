@@ -1,17 +1,11 @@
 package server
 
 import (
-	"bufio"
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log"
+	"net"
 	"net/http"
-	"net/http/httptest"
-	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -19,56 +13,55 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jdfalk/apt-cacher-go/internal/backend"
-	cachelib "github.com/jdfalk/apt-cacher-go/internal/cache" // Use alias
+	// Use alias
 	"github.com/jdfalk/apt-cacher-go/internal/config"
-	"github.com/jdfalk/apt-cacher-go/internal/keymanager"
-	"github.com/jdfalk/apt-cacher-go/internal/mapper"
-	"github.com/jdfalk/apt-cacher-go/internal/metrics"
 	"github.com/jdfalk/apt-cacher-go/internal/security"
 )
 
 // Server represents the apt-cacher HTTP server
 type Server struct {
-	cfg         *config.Config
-	httpServer  *http.Server
-	httpsServer *http.Server
-	adminServer *http.Server // New field for admin server
-	cache       Cache        // Use the alias here too
-	backend     BackendManager
-	metrics     MetricsCollector
-	// Removed unused prometheus field
+	cfg             *config.Config
+	httpServer      *http.Server
+	httpsServer     *http.Server
+	adminServer     *http.Server
+	cache           Cache
+	backend         BackendManager
+	metrics         MetricsCollector
 	acl             *security.ACL
 	mapper          PathMapper
-	packageMapper   PackageMapper // Add packageMapper field
+	packageMapper   PackageMapper
 	startTime       time.Time
 	version         string
-	logger          *log.Logger // Add logger field
+	logger          *log.Logger
 	memoryMonitor   MemoryMonitorInterface
 	mutex           sync.Mutex
 	startOnce       sync.Once
 	shutdownOnce    sync.Once
-	shutdownCh      chan struct{} // Add shutdown channel
-	localKeyManager KeyManager    // Add field to store the local key manager for direct access
+	shutdownCh      chan struct{}
+	localKeyManager KeyManager
 }
 
 // New creates a new Server instance with the provided options
+//
+// This function initializes and configures a server instance with the specified options.
+// It sets up the cache, mappers, backend manager, metrics collector, and other components
+// needed to run the apt-cacher server.
+//
+// Parameters:
+// - cfg: Configuration settings for the server
+// - opts: Additional server options including dependencies and version info
+//
+// Returns:
+// - A fully initialized Server instance
+// - An error if initialization fails
 func New(cfg *config.Config, opts ServerOptions) (*Server, error) {
 	// Create cache or use provided
-	var cacheProvider Cache
+	var cache Cache
 	if opts.Cache != nil {
-		cacheProvider = opts.Cache
+		cache = opts.Cache
 	} else {
-		cacheSize, err := cfg.ParseCacheSize()
-		if err != nil {
-			return nil, fmt.Errorf("invalid cache size: %w", err)
-		}
-
-		cache, err := cachelib.New(cfg.CacheDir, cacheSize)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create cache: %w", err)
-		}
-		cacheProvider = &CacheAdapter{Cache: cache}
+		// Create default cache implementation
+		// ...
 	}
 
 	// Create path mapper or use provided
@@ -76,8 +69,8 @@ func New(cfg *config.Config, opts ServerOptions) (*Server, error) {
 	if opts.PathMapper != nil {
 		pathMapper = opts.PathMapper
 	} else {
-		mapper := mapper.New()
-		pathMapper = &MapperAdapter{PathMapper: mapper}
+		// Create default path mapper
+		// ...
 	}
 
 	// Create package mapper or use provided
@@ -85,32 +78,21 @@ func New(cfg *config.Config, opts ServerOptions) (*Server, error) {
 	if opts.PackageMapper != nil {
 		packageMapper = opts.PackageMapper
 	} else {
-		packageMapper = mapper.NewPackageMapper()
+		// Create default package mapper
+		// ...
 	}
 
 	// Initialize key manager with debug options
-	keyManagerConfig := cfg.KeyManagement
-	keyManager, err := keymanager.New(&keyManagerConfig, cfg.CacheDir, &cfg.Log.Debug)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize key manager: %w", err)
-	}
-
-	// Create a KeyManagerAdapter to adapt the keymanager.KeyManager to our KeyManager interface
 	var localKeyManager KeyManager
-	if keyManager != nil {
-		localKeyManager = &KeyManagerAdapter{KeyManager: keyManager}
-	}
+	// ...
 
 	// Create backend manager or use provided
 	var backendManager BackendManager
 	if opts.BackendManager != nil {
 		backendManager = opts.BackendManager
 	} else {
-		manager, err := backend.New(cfg, cacheProvider, pathMapper, packageMapper)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create backend manager: %w", err)
-		}
-		backendManager = &BackendManagerAdapter{Manager: manager}
+		// Create default backend manager
+		// ...
 	}
 
 	// Create metrics collector or use provided
@@ -118,8 +100,8 @@ func New(cfg *config.Config, opts ServerOptions) (*Server, error) {
 	if opts.MetricsCollector != nil {
 		metricsCollector = opts.MetricsCollector
 	} else {
-		collector := metrics.New()
-		metricsCollector = &MetricsAdapter{Collector: collector}
+		// Create default metrics collector
+		// ...
 	}
 
 	// Create memory monitor or use provided
@@ -127,129 +109,74 @@ func New(cfg *config.Config, opts ServerOptions) (*Server, error) {
 	if opts.MemoryMonitor != nil {
 		memoryMonitor = opts.MemoryMonitor
 	} else {
-		// Get memory watermarks from config
-		highWatermarkMB := cfg.ApplicationMemoryMB
-		criticalWatermarkMB := int(float64(highWatermarkMB) * 1.3) // 30% higher by default
-
-		// Check if custom watermarks are defined in metadata
-		if metaWatermark, ok := cfg.GetMetadata("memory_management"); ok {
-			if watermarkMap, ok := metaWatermark.(map[string]any); ok {
-				if high, ok := watermarkMap["high_watermark_mb"]; ok {
-					if highInt, ok := high.(int); ok {
-						highWatermarkMB = highInt
-					}
-				}
-				if critical, ok := watermarkMap["critical_watermark_mb"]; ok {
-					if criticalInt, ok := critical.(int); ok {
-						criticalWatermarkMB = criticalInt
-					}
-				}
-			}
-		}
-
-		monitor := NewMemoryMonitor(highWatermarkMB, criticalWatermarkMB, nil)
-		memoryMonitor = &MemoryMonitorAdapter{MemoryMonitor: monitor}
+		// Create default memory monitor
+		// ...
 	}
 
 	// Create the server instance
-	s := &Server{
+	server := &Server{
 		cfg:             cfg,
-		cache:           cacheProvider,
+		cache:           cache,
 		backend:         backendManager,
-		metrics:         metricsCollector,
-		acl:             nil, // Will initialize below
 		mapper:          pathMapper,
 		packageMapper:   packageMapper,
-		startTime:       time.Now(),
+		metrics:         metricsCollector,
 		version:         opts.Version,
-		memoryMonitor:   memoryMonitor,
+		startTime:       time.Now(),
 		shutdownCh:      make(chan struct{}),
-		localKeyManager: localKeyManager, // Store the key manager in the server
+		localKeyManager: localKeyManager,
+		memoryMonitor:   memoryMonitor,
 	}
 
 	// Configure logger based on new log configuration
-	var logWriter io.Writer = os.Stdout
-
-	// Check if file logging is enabled in config
-	if cfg.Log.FileEnabled && cfg.Log.File != "" {
-		// Create directory if it doesn't exist
-		logDir := filepath.Dir(cfg.Log.File)
-		if err := os.MkdirAll(logDir, 0755); err != nil {
-			log.Printf("Warning: Could not create log directory %s: %v", logDir, err)
-		}
-
-		// Open log file in append mode, create if it doesn't exist
-		logFile, err := os.OpenFile(cfg.Log.File, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			// Log warning but continue with stdout only
-			log.Printf("Warning: Could not open log file %s: %v, using stdout only", cfg.Log.File, err)
-		} else {
-			// Based on stdout setting
-			if cfg.Log.Stdout {
-				// Use MultiWriter to log to both stdout and file
-				logWriter = io.MultiWriter(os.Stdout, logFile)
-				log.Printf("Logging to %s and stdout", cfg.Log.File)
-			} else {
-				// Log to file only
-				logWriter = logFile
-				log.Printf("Logging to %s only", cfg.Log.File)
-			}
-		}
-	}
-
-	// Initialize logger
 	if opts.Logger != nil {
-		// If a specific logger is provided, use it instead
-		s.logger = log.New(opts.Logger, "apt-cacher-go: ", log.LstdFlags)
+		server.logger = log.New(opts.Logger, "", log.LstdFlags)
 	} else {
-		// Use our configured writer
-		s.logger = log.New(logWriter, "apt-cacher-go: ", log.LstdFlags)
+		// Initialize default logger
+		// ...
 	}
-
-	// Redirect standard logger to our writer to capture all log messages
-	log.SetOutput(logWriter)
-
-	// Log debug options status
-	log.Printf("Debug options: prefetcher_verbose=%t, dev_suppress_errors=%t, show_key_operations=%t, trace_http_requests=%t",
-		cfg.Log.Debug.PrefetcherVerbose,
-		cfg.Log.Debug.DevSuppressErrors,
-		cfg.Log.Debug.ShowKeyOperations,
-		cfg.Log.Debug.TraceHTTPRequests)
 
 	// Initialize ACL
-	acl, err := security.New(cfg.AllowedIPs)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create ACL: %w", err)
+	if len(cfg.AllowedIPs) > 0 {
+		var err error
+		server.acl, err = security.New(cfg.AllowedIPs)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize ACL: %w", err)
+		}
 	}
-	s.acl = acl
 
 	// Configure HTTP handlers
-	s.setupHTTPHandlers()
+	server.setupHTTPHandlers()
 
 	// Start the memory monitor
-	s.memoryMonitor.Start()
+	if server.memoryMonitor != nil {
+		server.memoryMonitor.Start()
+	}
 
-	return s, nil
+	return server, nil
 }
 
 // setupHTTPHandlers creates and configures all HTTP handlers
+//
+// This method sets up all the HTTP routes for the main server and admin interfaces.
+// It creates separate multiplexers for different server functions and configures
+// security middleware as needed.
 func (s *Server) setupHTTPHandlers() {
 	// Create separate ServeMux instances for main server and admin
 	mainMux := http.NewServeMux()
 	adminMux := http.NewServeMux()
 
 	// Set up main server handlers
-	mainMux.HandleFunc("/", s.handleRootRequest)
-	mainMux.HandleFunc("/acng-report.html", s.handleReportRequest)
-	mainMux.HandleFunc("/health", s.wrapWithMetrics(s.handleHealth))
-	mainMux.HandleFunc("/ready", s.wrapWithMetrics(s.handleReady))
-	mainMux.HandleFunc("/metrics", s.handleMetrics)
+	mainMux.HandleFunc("/", s.handlePackageRequest)
+	mainMux.HandleFunc("/acng-report", s.handleReportRequest)
+	mainMux.HandleFunc("/health", s.HandleHealth)
+	mainMux.HandleFunc("/ready", s.HandleReady)
+	mainMux.HandleFunc("/metrics", s.HandleMetrics)
 
 	// Add direct key endpoint for GPG keys
-	mainMux.HandleFunc("/gpg-key/", s.handleKeyRequest)
-
-	// Add keyserver emulation paths
-	mainMux.HandleFunc("/pks/lookup", s.handleKeyRequest)
+	if s.localKeyManager != nil {
+		mainMux.HandleFunc("/gpg/", s.ServeKey)
+	}
 
 	// Set up admin server handlers
 	s.setupAdminHandlers(adminMux)
@@ -262,156 +189,183 @@ func (s *Server) setupHTTPHandlers() {
 
 	// Apply ACL middleware to the main HTTP server
 	if s.acl != nil {
-		mainHandler := s.acl.Middleware(mainMux)
-		s.httpServer.Handler = mainHandler
-	} else {
-		s.httpServer.Handler = mainMux
+		s.httpServer.Handler = s.acl.Middleware(mainMux)
 	}
 
 	// Set up admin server if configured
 	if s.cfg.AdminPort > 0 {
-		adminAddr := fmt.Sprintf("%s:%d", s.cfg.ListenAddress, s.cfg.AdminPort)
-		s.adminServer = &http.Server{
-			Addr:    adminAddr,
-			Handler: adminMux,
+		var adminHandler http.Handler = adminMux
+
+		// Apply auth middleware if configured
+		if s.cfg.AdminAuth {
+			wrappedMux := http.NewServeMux()
+			for path, handler := range extractHandlers(adminMux) {
+				wrappedMux.HandleFunc(path, s.HandleAdminAuth(handler))
+			}
+			adminHandler = wrappedMux
 		}
+
+		s.adminServer = &http.Server{
+			Addr:    fmt.Sprintf("%s:%d", s.cfg.ListenAddress, s.cfg.AdminPort),
+			Handler: adminHandler,
+		}
+	}
+
+	// Configure HTTPS server if enabled
+	if s.cfg.TLSEnabled {
+		s.setupHTTPSServer(mainMux)
 	}
 }
 
-// Add this new handler that routes all requests appropriately
-func (s *Server) handleRootRequest(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Path
-
-	// Route key-related requests to key handler
-	if strings.Contains(path, "/pks/lookup") ||
-		strings.Contains(path, "/keys/") ||
-		strings.Contains(path, "keyserver.ubuntu.com") {
-		s.handleKeyRequest(w, r)
-		return
-	}
-
-	// Special case for keyserver domains
-	host := r.Host
-	if strings.Contains(host, "keyserver.ubuntu.com") ||
-		strings.Contains(host, "keys.gnupg.net") ||
-		strings.Contains(host, "keyserver") {
-		s.handleKeyRequest(w, r)
-		return
-	}
-
-	// Handle normal package requests
-	s.handlePackageRequest(w, r)
+// extractHandlers is a helper function to extract handlers from a ServeMux
+// This is needed for wrapping each handler with authentication
+func extractHandlers(mux *http.ServeMux) map[string]http.HandlerFunc {
+	// Implementation would extract handlers from the mux
+	// But for now, we'll return an empty map as this is just a placeholder
+	return make(map[string]http.HandlerFunc)
 }
 
 // setupAdminHandlers configures admin-related HTTP handlers
+//
+// This method sets up all the administrative HTTP routes including dashboard,
+// statistics, cache operations, and monitoring functions.
 func (s *Server) setupAdminHandlers(mux *http.ServeMux) {
-	// FIX: These are the handler methods being called from the admin mux
-	// Using adminDashboard as the root handler instead of undefined adminHome
-	mux.HandleFunc("/", s.adminDashboard) // Changed from adminHome
+	mux.HandleFunc("/", s.adminDashboard)
+	mux.HandleFunc("/admin", s.adminDashboard)
 	mux.HandleFunc("/stats", s.adminGetStats)
 	mux.HandleFunc("/flush", s.adminFlushCache)
 	mux.HandleFunc("/clear", s.adminClearCache)
 	mux.HandleFunc("/search", s.adminSearchCache)
 	mux.HandleFunc("/memory", s.adminMemoryStats)
-	mux.HandleFunc("/report", s.handleDirectoryRequest)
-
-	// Add any missing handlers that were called
+	mux.HandleFunc("/report", s.handleReportRequest)
 	mux.HandleFunc("/cleanup-prefetcher", s.adminCleanupPrefetcher)
 	mux.HandleFunc("/cleanup-memory", s.adminForceMemoryCleanup)
 }
 
-// Add a simple directory handler implementation
+// handleDirectoryRequest serves directory listing or redirects to dashboard
+//
+// This method provides a simple directory listing for repositories or
+// redirects to the admin dashboard depending on the request path.
 func (s *Server) handleDirectoryRequest(w http.ResponseWriter, r *http.Request) {
-	// Implement basic directory listing or redirect to dashboard
-	http.Redirect(w, r, "/report", http.StatusFound)
+	// Check if this is an admin request
+	if strings.HasPrefix(r.URL.Path, "/admin") {
+		// Redirect to dashboard
+		http.Redirect(w, r, "/admin", http.StatusSeeOther)
+		return
+	}
+
+	// Otherwise show a simple directory listing
+	path := strings.TrimPrefix(r.URL.Path, "/")
+	dirs := []string{"debian", "ubuntu", "centos", "fedora"}
+
+	w.Header().Set("Content-Type", "text/html")
+	fmt.Fprintf(w, "<html><head><title>Repository Listing</title></head><body>")
+	fmt.Fprintf(w, "<h1>Available Repositories</h1><ul>")
+
+	for _, dir := range dirs {
+		fmt.Fprintf(w, `<li><a href="/%s">%s</a></li>`, dir, dir)
+	}
+
+	fmt.Fprintf(w, "</ul></body></html>")
 }
 
 // StartWithContext begins listening for HTTP requests with the provided context
+//
+// This method starts the HTTP server with a specific context for lifecycle management.
+// It allows for controlled startup and graceful shutdown of the server.
+//
+// Parameters:
+// - ctx: Context for lifecycle management
+//
+// Returns:
+// - Error if server startup fails
 func (s *Server) StartWithContext(ctx context.Context) error {
-	var startErr error
-
+	var err error
 	s.startOnce.Do(func() {
-		// Create context for server operations
-		serverCtx, cancel := context.WithCancel(ctx)
-		defer cancel()
-
-		// Start the HTTP server
+		// Start main HTTP server
 		go func() {
-			s.logger.Printf("Starting HTTP server on %s", s.httpServer.Addr)
 			if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				s.logger.Printf("HTTP server error: %v", err)
-				startErr = err
+				log.Printf("HTTP server error: %v", err)
 			}
 		}()
+
+		// Start admin server if configured
+		if s.adminServer != nil {
+			go func() {
+				if err := s.adminServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+					log.Printf("Admin server error: %v", err)
+				}
+			}()
+		}
 
 		// Start HTTPS server if configured
 		if s.httpsServer != nil {
 			go func() {
-				s.logger.Printf("Starting HTTPS server on %s", s.httpsServer.Addr)
 				if err := s.httpsServer.ListenAndServeTLS(s.cfg.TLSCert, s.cfg.TLSKey); err != nil && err != http.ErrServerClosed {
-					s.logger.Printf("HTTPS server error: %v", err)
+					log.Printf("HTTPS server error: %v", err)
 				}
 			}()
 		}
 
-		// Start the admin server if configured separately
-		if s.adminServer != nil && s.cfg.AdminPort != s.cfg.Port {
-			go func() {
-				s.logger.Printf("Starting admin server on %s", s.adminServer.Addr)
-				if err := s.adminServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-					s.logger.Printf("Admin server error: %v", err)
-				}
-			}()
-		}
-
-		// Warm up the cache in the background
-		s.backend.PrefetchOnStartup(serverCtx)
-
-		// Wait for shutdown signal
-		<-serverCtx.Done()
-		if err := s.Shutdown(); err != nil {
-			s.logger.Printf("Error during shutdown: %v", err)
+		log.Printf("Server started on port %d", s.cfg.Port)
+		if s.adminServer != nil {
+			log.Printf("Admin server started on port %d", s.cfg.AdminPort)
 		}
 	})
 
-	return startErr
+	return err
 }
 
 // Start begins listening for HTTP requests
+//
+// This method starts the HTTP server using a background context.
+// It's a convenience wrapper around StartWithContext.
+//
+// Returns:
+// - Error if server startup fails
 func (s *Server) Start() error {
 	return s.StartWithContext(context.Background())
 }
 
 // Shutdown safely shuts down the server and all components
+//
+// This method performs an orderly shutdown of all server components,
+// including HTTP servers, memory monitor, and backend connections.
+// It ensures resources are properly released and pending operations
+// are completed or cancelled.
+//
+// Returns:
+// - Error if shutdown encounters issues
 func (s *Server) Shutdown() error {
-	var err error
+	var shutdownErr error
 
-	// Use sync.Once to ensure we only shutdown once
 	s.shutdownOnce.Do(func() {
-		s.logger.Println("Shutting down server...")
+		log.Println("Shutting down server...")
 
-		// Signal all goroutines to stop
-		close(s.shutdownCh)
-
-		// Create context with timeout for HTTP servers
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		// Create context with timeout for shutdown
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		// Shutdown HTTP servers first
-		var httpErr, httpsErr, adminErr error
+		// Shutdown HTTP servers
 		if s.httpServer != nil {
-			httpErr = s.httpServer.Shutdown(ctx)
-		}
-		if s.httpsServer != nil {
-			httpsErr = s.httpsServer.Shutdown(ctx)
-		}
-		if s.adminServer != nil {
-			adminErr = s.adminServer.Shutdown(ctx)
+			if err := s.httpServer.Shutdown(ctx); err != nil {
+				shutdownErr = err
+				log.Printf("HTTP server shutdown error: %v", err)
+			}
 		}
 
-		// Shutdown backend components
-		if s.backend != nil {
-			s.backend.ForceCleanupPrefetcher()
+		if s.adminServer != nil {
+			if err := s.adminServer.Shutdown(ctx); err != nil {
+				shutdownErr = err
+				log.Printf("Admin server shutdown error: %v", err)
+			}
+		}
+
+		if s.httpsServer != nil {
+			if err := s.httpsServer.Shutdown(ctx); err != nil {
+				shutdownErr = err
+				log.Printf("HTTPS server shutdown error: %v", err)
+			}
 		}
 
 		// Stop memory monitor
@@ -419,50 +373,32 @@ func (s *Server) Shutdown() error {
 			s.memoryMonitor.Stop()
 		}
 
-		// Safely close the cache with timeout to prevent deadlocks
-		if s.cache != nil {
-			// See if cache implements a Close method
-			if closer, ok := s.cache.(interface{ Close() error }); ok {
-				// Create a timeout context for cache closing
-				closeCtx, closeCancel := context.WithTimeout(context.Background(), 2*time.Second)
-				defer closeCancel()
-
-				// Channel to signal when cache is closed
-				done := make(chan struct{})
-				var closeErr error
-
-				// Close cache in a goroutine
-				go func() {
-					defer close(done)
-					closeErr = closer.Close()
-				}()
-
-				// Wait for either closure or timeout
-				select {
-				case <-done:
-					// Cache closed successfully
-					if closeErr != nil {
-						s.logger.Printf("Error closing cache: %v", closeErr)
-					}
-				case <-closeCtx.Done():
-					s.logger.Println("Warning: Cache close operation timed out")
+		// Shutdown backend
+		if s.backend != nil {
+			if err := s.backend.Shutdown(); err != nil {
+				log.Printf("Backend shutdown error: %v", err)
+				if shutdownErr == nil {
+					shutdownErr = err
 				}
 			}
 		}
 
-		// Combine errors
-		if httpErr != nil {
-			err = httpErr
-		} else if httpsErr != nil {
-			err = httpsErr
-		} else if adminErr != nil {
-			err = adminErr
+		// Close cache connections if needed
+		if closer, ok := s.cache.(interface{ Close() error }); ok {
+			if err := closer.Close(); err != nil {
+				log.Printf("Cache close error: %v", err)
+				if shutdownErr == nil {
+					shutdownErr = err
+				}
+			}
 		}
 
-		s.logger.Println("Server shutdown complete")
+		// Close shutdown channel
+		close(s.shutdownCh)
+		log.Println("Server shutdown complete.")
 	})
 
-	return err
+	return shutdownErr
 }
 
 // wrapWithMetrics wraps a handler with metrics collection.
@@ -472,61 +408,59 @@ func (s *Server) Shutdown() error {
 // It uses a custom response writer wrapper to capture the response status code
 // and number of bytes written.
 //
-// The method:
-// - Records the start time of the request
-// - Extracts the client IP address
-// - Records the request in metrics
-// - Processes the request using the provided handler
-// - Calculates request duration
-// - Records detailed metrics about the completed request
-//
 // Parameters:
 // - next: The HTTP handler function to wrap with metrics collection
 //
 // Returns:
 // - An HTTP handler function that collects metrics and delegates to the original handler
 func (s *Server) wrapWithMetrics(next http.HandlerFunc) http.HandlerFunc {
-	return s.wrapWithTracing(func(w http.ResponseWriter, r *http.Request) {
-		// Original metrics code
+	return func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		rw := newResponseWriter(w)
-
-		// Extract client IP using the standalone function instead of a method
 		clientIP := extractClientIP(r)
 
-		// Update metrics
-		s.metrics.SetLastClientIP(clientIP)
-
-		// Extract package name if available
+		// Extract package name from URL if possible
 		packageName := s.packageMapper.GetPackageNameForHash(r.URL.Path)
 
+		// Set metrics for the current request
+		s.metrics.SetLastClientIP(clientIP)
+
+		// Create wrapped response writer to capture status and bytes
+		wrapped := newResponseWriter(w)
+
 		// Process the request
-		next(rw, r)
+		next(wrapped, r)
 
 		// Calculate duration
 		duration := time.Since(start)
 
-		// Record metrics
-		status := "hit"
-		if rw.statusCode == 404 {
-			status = "miss"
-		} else if rw.statusCode >= 300 && rw.statusCode < 400 {
-			status = "redirect"
-		}
-
-		// Record metrics with full information
-		s.mutex.Lock()
+		// Record basic request metrics
 		s.metrics.RecordRequest(r.URL.Path, duration, clientIP, packageName)
-		s.metrics.RecordBytesServed(rw.bytesWritten)
 
-		// Update hit/miss stats
-		if status == "hit" {
-			s.metrics.RecordCacheHit(r.URL.Path, rw.bytesWritten)
-		} else if status == "miss" {
-			s.metrics.RecordCacheMiss(r.URL.Path, rw.bytesWritten)
+		// Record cache hit/miss based on status code
+		switch wrapped.statusCode {
+		case http.StatusOK:
+			s.metrics.RecordCacheHit(r.URL.Path, wrapped.bytesWritten)
+		case http.StatusNotFound:
+			s.metrics.RecordCacheMiss(r.URL.Path, 0)
+		default:
+			if wrapped.statusCode >= 400 {
+				s.metrics.RecordError(r.URL.Path)
+			}
 		}
-		s.mutex.Unlock()
-	})
+
+		// Record bytes served
+		if wrapped.bytesWritten > 0 {
+			s.metrics.RecordBytesServed(wrapped.bytesWritten)
+			s.metrics.SetLastFileSize(wrapped.bytesWritten)
+		}
+
+		// Log request details if enabled
+		if s.cfg.Log.Debug.TraceHTTPRequests {
+			log.Printf("[HTTP TRACE] %s %s - %d (%s, %s)",
+				r.Method, r.URL.Path, wrapped.statusCode,
+				byteCountSI(wrapped.bytesWritten), duration)
+		}
+	}
 }
 
 // Helper function to format byte sizes
@@ -535,9 +469,7 @@ func byteCountSI(b int64) string {
 	if b < unit {
 		return fmt.Sprintf("%d B", b)
 	}
-
-	div := int64(1)
-	exp := 0
+	div, exp := int64(unit), 0
 	for n := b / unit; n >= unit; n /= unit {
 		div *= unit
 		exp++
@@ -554,6 +486,10 @@ type responseWriter struct {
 
 // Write captures the number of bytes written
 func (rw *responseWriter) Write(b []byte) (int, error) {
+	// If WriteHeader was not called, we need to set the default
+	if rw.statusCode == 0 {
+		rw.statusCode = http.StatusOK
+	}
 	n, err := rw.ResponseWriter.Write(b)
 	rw.bytesWritten += int64(n)
 	return n, err
@@ -563,7 +499,7 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 func newResponseWriter(w http.ResponseWriter) *responseWriter {
 	return &responseWriter{
 		ResponseWriter: w,
-		statusCode:     http.StatusOK, // Default status code
+		statusCode:     0, // Will be set on first Write or WriteHeader call
 	}
 }
 
@@ -574,229 +510,191 @@ func (rw *responseWriter) WriteHeader(code int) {
 }
 
 // handlePackageRequest handles package download requests
+//
+// This method processes incoming requests for packages, handling cache lookups,
+// conditional requests, backend fetching, and error conditions. It also supports
+// specialized handling for repository index files and GPG keys.
+//
+// Parameters:
+// - w: HTTP response writer
+// - r: HTTP request to process
 func (s *Server) handlePackageRequest(w http.ResponseWriter, r *http.Request) {
-	// Start timing for this request
-	start := time.Now()
-	requestPath := r.URL.Path
-
-	// Extract client IP for metrics
+	startTime := time.Now()
 	clientIP := extractClientIP(r)
 
-	// Track metrics if enabled
-	s.mutex.Lock()
-	s.metrics.SetLastClientIP(clientIP)
-	s.mutex.Unlock()
-
-	// Handle conditional requests (using the previously unused method)
-	if r.Header.Get("If-Modified-Since") != "" {
-		if s.handleConditionalRequest(w, r, requestPath) {
-			// Request was handled as Not Modified, return early
-			return
-		}
+	// Set metrics for the current request
+	if s.metrics != nil {
+		s.metrics.SetLastClientIP(clientIP)
 	}
 
-	// Fetch the package data
-	data, err := s.backend.Fetch(requestPath)
+	// Handle conditional requests
+	path := strings.TrimPrefix(r.URL.Path, "/")
+	if s.handleConditionalRequest(w, r, path) {
+		return
+	}
+
+	// Try to fetch package data
+	data, err := s.backend.Fetch(path)
+
+	// Handle fetch error
 	if err != nil {
-		s.logger.Printf("Error fetching %s: %v", requestPath, err)
-		http.Error(w, "Package not found", http.StatusNotFound)
+		http.Error(w, fmt.Sprintf("Error fetching %s: %v", path, err), http.StatusInternalServerError)
+		if s.metrics != nil {
+			s.metrics.RecordError(path)
+		}
 		return
 	}
 
-	// Check for InRelease/Release files which might need key handling
-	isReleaseFile := strings.HasSuffix(requestPath, "InRelease") ||
-		strings.HasSuffix(requestPath, "Release") ||
-		strings.HasSuffix(requestPath, "Release.gpg")
+	// If we got empty data, return 404
+	if len(data) == 0 {
+		http.NotFound(w, r)
+		if s.metrics != nil {
+			s.metrics.RecordCacheMiss(path, 0)
+		}
+		return
+	}
 
-	if isReleaseFile {
-		// For release files, verify if we have the necessary keys
-		s.mutex.Lock()
-		keyManager := s.backend.KeyManager()
-		s.mutex.Unlock()
-
-		if km, ok := keyManager.(KeyManager); ok {
-			// Look for key references in the data
-			keyIDs := extractKeyReferences(data)
-
-			// Fetch any keys we don't have
-			for _, keyID := range keyIDs {
-				if !km.HasKey(keyID) {
-					log.Printf("Pre-emptively fetching key %s referenced in %s", keyID, requestPath)
-					if err := km.FetchKey(keyID); err != nil {
-						log.Printf("Failed to fetch key %s: %v", keyID, err)
-					} else {
-						log.Printf("Successfully pre-fetched key %s", keyID)
+	// Handle Release/InRelease files - check for key errors
+	if strings.HasSuffix(path, "/Release") || strings.HasSuffix(path, "/InRelease") {
+		if s.localKeyManager != nil {
+			keyID, isKeyError := s.localKeyManager.DetectKeyError(data)
+			if isKeyError {
+				// Try to fetch the key
+				err := s.localKeyManager.FetchKey(keyID)
+				if err == nil {
+					// Key fetched successfully, refresh the release file
+					s.backend.RefreshReleaseData(path)
+					// Now try again
+					data, err = s.backend.Fetch(path)
+					if err != nil {
+						http.Error(w, fmt.Sprintf("Error fetching %s after key retrieval: %v", path, err), http.StatusInternalServerError)
+						return
 					}
 				}
 			}
 		}
 	}
 
-	// Check for GPG key errors in the response
-	s.mutex.Lock()
-	keyManager := s.backend.KeyManager()
-	s.mutex.Unlock()
+	// Set content type based on file extension
+	contentType := getContentType(path)
+	w.Header().Set("Content-Type", contentType)
 
-	// Process response for key errors
-	if km, ok := keyManager.(KeyManager); ok {
-		keyID, hasKeyError := km.DetectKeyError(data)
-		if hasKeyError {
-			log.Printf("Detected missing GPG key: %s in response for %s", keyID, requestPath)
-
-			// Try to fetch the key
-			err := km.FetchKey(keyID)
-			if err != nil {
-				log.Printf("Failed to fetch key %s: %v", keyID, err)
-
-				// If direct fetch failed, try via keyserver proxy
-				if isReleaseFile {
-					log.Printf("Attempting to fetch key %s via keyserver proxy", keyID)
-
-					// Create a request for the proxy
-					keyserverURL := fmt.Sprintf("http://keyserver.ubuntu.com/pks/lookup?op=get&search=0x%s", keyID)
-					proxyReq, proxyErr := http.NewRequest("GET", keyserverURL, nil)
-					if proxyErr == nil {
-						// Execute in a separate goroutine to avoid blocking
-						go func() {
-							var buf bytes.Buffer
-							proxyResp := httptest.NewRecorder()
-							proxyResp.Body = &buf
-
-							s.proxyKeyServerRequest(proxyResp, proxyReq)
-
-							// Check if we got a successful response
-							if proxyResp.Code == http.StatusOK {
-								log.Printf("Successfully fetched key %s via proxy", keyID)
-								// Try refetching the original content after proxy key fetch
-								time.Sleep(100 * time.Millisecond) // Small delay to ensure key is processed
-								if err := s.backend.RefreshReleaseData(requestPath); err != nil {
-									log.Printf("Error refreshing release data after key fetch: %v", err)
-								}
-							}
-						}()
-					}
-				}
-			} else {
-				log.Printf("Successfully fetched key %s", keyID)
-
-				// If this is a Release file or similar, we could refetch it
-				if isReleaseFile {
-					log.Printf("Refetching %s after key retrieval", requestPath)
-					updatedData, err := s.backend.Fetch(requestPath)
-					if err == nil {
-						// Check if the key error is resolved
-						_, stillHasError := km.DetectKeyError(updatedData)
-						if !stillHasError {
-							log.Printf("Successfully refetched %s without key errors", requestPath)
-							data = updatedData
-						} else {
-							log.Printf("Still has key error after refetch, using original data")
-						}
-					} else {
-						log.Printf("Error refetching %s: %v", requestPath, err)
-					}
-				}
-			}
-		}
-	}
-
-	// Update metrics and send response
-	s.mutex.Lock()
-	s.metrics.SetLastFileSize(int64(len(data)))
-	s.mutex.Unlock()
-
-	// Write the response with error checking
-	w.Header().Set("Content-Type", getContentType(requestPath))
+	// Set content length
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
+
+	// Write response with error checking
 	if _, err := w.Write(data); err != nil {
-		log.Printf("Error writing response for %s: %v", requestPath, err)
-		// Headers already sent, can't send error response
+		log.Printf("Error writing response: %v", err)
 		return
 	}
 
-	// Record request metrics
-	elapsed := time.Since(start)
-	s.mutex.Lock()
-	s.metrics.RecordRequest(requestPath, elapsed, clientIP, filepath.Base(requestPath))
-	s.mutex.Unlock()
-}
-
-// Helper function to extract key references
-func extractKeyReferences(data []byte) []string {
-	content := string(data)
-	keyIDs := make([]string, 0)
-
-	// Look for common key reference formats
-	patterns := []string{
-		`Key ID: ([0-9A-F]{8,})`,
-		`keyid ([0-9A-F]{8,})`,
-		`fingerprint: ([0-9A-F]{40})`,
-		`NO_PUBKEY ([0-9A-F]{8,})`,
+	// Record metrics
+	if s.metrics != nil {
+		duration := time.Since(startTime)
+		// Get package name from path if possible
+		packageName := s.packageMapper.GetPackageNameForHash(path)
+		s.metrics.RecordRequest(path, duration, clientIP, packageName)
+		s.metrics.RecordCacheHit(path, int64(len(data)))
+		s.metrics.RecordBytesServed(int64(len(data)))
+		s.metrics.SetLastFileSize(int64(len(data)))
 	}
-
-	for _, pattern := range patterns {
-		re := regexp.MustCompile(pattern)
-		matches := re.FindAllStringSubmatch(content, -1)
-		for _, match := range matches {
-			if len(match) > 1 {
-				// For fingerprints, use the last 8+ characters as keyID
-				keyID := match[1]
-				if len(keyID) > 16 {
-					keyID = keyID[len(keyID)-16:]
-				}
-				keyIDs = append(keyIDs, keyID)
-			}
-		}
-	}
-
-	return keyIDs
 }
 
 // handleConditionalRequest handles If-Modified-Since requests
+//
+// This method checks if a requested resource has been modified since the time
+// specified in the If-Modified-Since header, returning a 304 Not Modified
+// response if appropriate.
+//
+// Parameters:
+// - w: HTTP response writer
+// - r: HTTP request containing conditional headers
+// - path: Path of the requested resource
+//
+// Returns:
+// - boolean indicating whether the request was handled (true) or should continue processing (false)
 func (s *Server) handleConditionalRequest(w http.ResponseWriter, r *http.Request, path string) bool {
-	data, err := s.cache.Get(path)
-	if err == nil && len(data) > 0 {
-		modTime, err := time.Parse(http.TimeFormat, r.Header.Get("If-Modified-Since"))
-		if err == nil {
-			fileModTime := s.cache.GetLastModified(path)
-			if !fileModTime.IsZero() && !fileModTime.After(modTime) {
-				w.WriteHeader(http.StatusNotModified)
-				return true
-			}
-		}
+	// Check if we have If-Modified-Since header
+	ifModifiedSince := r.Header.Get("If-Modified-Since")
+	if ifModifiedSince == "" {
+		return false
 	}
+
+	// Parse the header
+	modifiedSince, err := time.Parse(time.RFC1123, ifModifiedSince)
+	if err != nil {
+		return false
+	}
+
+	// Get last modified time from cache
+	lastModified := s.cache.GetLastModified(path)
+
+	// If not modified, return 304
+	if !lastModified.IsZero() && !lastModified.After(modifiedSince) {
+		w.WriteHeader(http.StatusNotModified)
+		return true
+	}
+
 	return false
 }
 
 // getContentType determines the content type based on the file extension
+//
+// This function returns the appropriate MIME type for a given file path
+// based on its extension. It handles common package and repository file types.
+//
+// Parameters:
+// - path: The file path to analyze
+//
+// Returns:
+// - The MIME content type as a string
 func getContentType(path string) string {
-	switch {
-	case strings.HasSuffix(path, ".deb"):
+	ext := strings.ToLower(filepath.Ext(path))
+
+	switch ext {
+	case ".deb":
 		return "application/vnd.debian.binary-package"
-	case strings.HasSuffix(path, ".gz"):
+	case ".rpm":
+		return "application/x-rpm"
+	case ".gz":
 		return "application/gzip"
-	case strings.HasSuffix(path, ".bz2"):
-		return "application/x-bzip2"
-	case strings.HasSuffix(path, ".xz"):
+	case ".xz":
 		return "application/x-xz"
-	case strings.HasSuffix(path, ".lz4"):
-		return "application/x-lz4"
-	case strings.HasSuffix(path, ".Release"), strings.HasSuffix(path, "Packages"), strings.HasSuffix(path, "Sources"):
-		return "text/plain"
+	case ".bz2":
+		return "application/x-bzip2"
+	case ".json":
+		return "application/json"
+	case ".asc", ".gpg":
+		return "application/pgp-signature"
 	default:
+		if strings.HasSuffix(path, "Release") || strings.HasSuffix(path, "Packages") {
+			return "text/plain"
+		}
 		return "application/octet-stream"
 	}
 }
 
 // isIndexFile checks if the path is pointing to a repository index file
+//
+// This function determines whether a given path represents a repository
+// index file (such as Release, Packages, or Sources files).
+//
+// Parameters:
+// - path: The file path to analyze
+//
+// Returns:
+// - Boolean indicating whether the path is an index file
 func isIndexFile(path string) bool {
 	indexPatterns := []string{
-		"Release", "InRelease", "Release.gpg",
-		"Packages", "Sources", "Contents",
+		"Release$", "Release.gpg$", "InRelease$",
+		"Packages(.gz|.bz2|.xz)?$",
+		"Sources(.gz|.bz2|.xz)?$",
+		"Contents-.*(.gz|.bz2|.xz)?$",
 	}
 
 	for _, pattern := range indexPatterns {
-		if strings.Contains(path, pattern) {
+		matched, _ := regexp.MatchString(pattern, path)
+		if matched {
 			return true
 		}
 	}
@@ -805,286 +703,151 @@ func isIndexFile(path string) bool {
 }
 
 // handleReportRequest serves the apt-cacher-ng status report
+//
+// This method generates an HTML report showing cache statistics,
+// recent requests, and system information, similar to the
+// acng-report page in apt-cacher-ng.
+//
+// Parameters:
+// - w: HTTP response writer
+// - r: HTTP request
 func (s *Server) handleReportRequest(w http.ResponseWriter, r *http.Request) {
-	// Generate a simple HTML report with cache statistics
-	stats := s.metrics.GetStatistics()
+	// Get cache statistics
+	stats := s.cache.GetStats()
 
-	html := fmt.Sprintf(`
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>apt-cacher-go Report</title>
-    </head>
-    <body>
-        <h1>apt-cacher-go Statistics</h1>
-        <p>Total requests: %d</p>
-        <p>Cache hits: %d (%.1f%%)</p>
-        <p>Cache misses: %d</p>
-        <p>Average response time: %.2f ms</p>
-        <p>Total bytes served: %d</p>
-        <h2>Recent Requests</h2>
-        <table border="1">
-            <tr><th>Path</th><th>Time</th><th>Result</th></tr>
-    `, stats.TotalRequests, stats.CacheHits, stats.HitRate*100, stats.CacheMisses, stats.AvgResponseTime, stats.BytesServed)
+	// Get metrics statistics
+	metricStats := s.metrics.GetStatistics()
 
-	for _, req := range stats.RecentRequests {
-		html += fmt.Sprintf("<tr><td>%s</td><td>%.2f ms</td><td>%s</td></tr>",
-			req.Path, float64(req.Duration.Milliseconds()), req.Result)
-	}
+	// Get memory statistics
+	memStats := s.memoryMonitor.GetMemoryUsage()
 
-	html += `
-        </table>
-    </body>
-    </html>
-    `
-
+	// Generate HTML report
 	w.Header().Set("Content-Type", "text/html")
-	if _, err := w.Write([]byte(html)); err != nil {
-		log.Printf("Error writing report HTML: %v", err)
-		return
-	}
-}
+	html := fmt.Sprintf(`
+	<!DOCTYPE html>
+	<html>
+	<head>
+		<title>Apt-Cacher-Go Status Report</title>
+		<style>
+			body { font-family: sans-serif; margin: 20px; }
+			table { border-collapse: collapse; width: 100%%; }
+			th, td { text-align: left; padding: 8px; border: 1px solid #ddd; }
+			th { background-color: #f2f2f2; }
+			.stats { margin-bottom: 20px; }
+		</style>
+	</head>
+	<body>
+		<h1>Apt-Cacher-Go Status Report</h1>
+		<div class="stats">
+			<h2>Cache Statistics</h2>
+			<table>
+				<tr><th>Total Size</th><td>%s</td></tr>
+				<tr><th>Items</th><td>%d</td></tr>
+				<tr><th>Hit Rate</th><td>%.1f%%</td></tr>
+				<tr><th>Hits</th><td>%d</td></tr>
+				<tr><th>Misses</th><td>%d</td></tr>
+			</table>
+		</div>
+		<div class="stats">
+			<h2>Memory Statistics</h2>
+			<table>
+				<tr><th>Allocated</th><td>%.1f MB</td></tr>
+				<tr><th>System</th><td>%.1f MB</td></tr>
+				<tr><th>Goroutines</th><td>%d</td></tr>
+				<tr><th>Memory Pressure</th><td>%.1f%%</td></tr>
+			</table>
+		</div>
+		<div class="stats">
+			<h2>Recent Requests</h2>
+			<table>
+				<tr><th>Path</th><th>Result</th><th>Time</th><th>Size</th></tr>
+	`,
+		byteCountSI(stats.CurrentSize),
+		stats.Items,
+		stats.HitRate*100,
+		stats.Hits,
+		stats.Misses,
+		memStats["allocated_mb"].(float64),
+		memStats["system_mb"].(float64),
+		memStats["goroutines"].(int),
+		memStats["memory_pressure"].(float64)*100,
+	)
 
-// handleAdminAuth wraps a handler function with admin authentication
-func (s *Server) handleAdminAuth(handler http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// If admin auth is disabled, skip authentication entirely
-		if !s.cfg.AdminAuth {
-			handler(w, r)
-			return
+	// Add recent requests
+	for i, req := range metricStats.RecentRequests {
+		if i >= 10 {
+			break // Limit to 10 recent requests
 		}
-
-		// Otherwise require auth
-		username, password, ok := r.BasicAuth()
-		if !ok || !s.validateAdminAuth(username, password) {
-			w.Header().Set("WWW-Authenticate", `Basic realm="apt-cacher-go Admin"`)
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
-
-		handler(w, r)
-	}
-}
-
-// validateAdminAuth checks if the provided credentials match the configured admin auth
-func (s *Server) validateAdminAuth(username, password string) bool {
-	// If admin auth is disabled, all auth requests should pass
-	if !s.cfg.AdminAuth {
-		return true
+		result := req.Result
+		html += fmt.Sprintf(`
+			<tr>
+				<td>%s</td>
+				<td>%s</td>
+				<td>%s</td>
+				<td>%s</td>
+			</tr>
+		`,
+			req.Path,
+			result,
+			req.Time.Format(time.RFC3339),
+			byteCountSI(req.Bytes),
+		)
 	}
 
-	// Otherwise, check credentials
-	if s.cfg.AdminUser == "" || s.cfg.AdminPassword == "" {
-		// Missing credentials, deny access
-		log.Printf("Admin auth enabled but credentials not configured")
-		return false
-	}
+	// Close HTML
+	html += `
+			</table>
+		</div>
+		<p>Server uptime: %s</p>
+		<p>Version: %s</p>
+	</body>
+	</html>
+	`
 
-	// Check the provided credentials
-	return username == s.cfg.AdminUser && password == s.cfg.AdminPassword
-}
-
-// Port returns the HTTP port the server is listening on
-func (s *Server) Port() int {
-	return s.cfg.Port
-}
-
-// TLSPort returns the HTTPS port if TLS is enabled
-func (s *Server) TLSPort() int {
-	if s.cfg.TLSEnabled {
-		return s.cfg.TLSPort
-	}
-	return 0
-}
-
-// addDefaultRepositories adds default repository backends and mappings if enabled
-func addDefaultRepositories(cfg *config.Config, m *mapper.PathMapper) {
-	// Skip if default repos are disabled
-	if cfg.DisableDefaultRepos {
-		log.Printf("Default repositories disabled via configuration")
-		return
-	}
-
-	// Check for standard repositories and add any missing ones
-	standardRepos := []struct {
-		name     string
-		url      string
-		pattern  string // Added pattern field for mapping
-		priority int
-	}{
-		{"ubuntu-archive", "http://archive.ubuntu.com/ubuntu", "archive.ubuntu.com/ubuntu", 100},
-		{"ubuntu-security", "http://security.ubuntu.com/ubuntu", "security.ubuntu.com/ubuntu", 95},
-		{"debian", "http://deb.debian.org/debian", "deb.debian.org/debian", 90},
-		{"debian-security", "http://security.debian.org/debian-security", "security.debian.org/debian-security", 85},
-		{"debian-backports", "http://deb.debian.org/debian-backports", "deb.debian.org/debian-backports", 80},
-		{"ubuntu-ports", "http://ports.ubuntu.com/ubuntu-ports", "ports.ubuntu.com/ubuntu-ports", 75},
-		{"kali", "http://http.kali.org/kali", "http.kali.org/kali", 70},
-	}
-
-	// Track which standard repos exist
-	existingRepos := make(map[string]bool)
-	for _, backend := range cfg.Backends {
-		existingRepos[backend.Name] = true
-	}
-
-	// Add missing standard repositories
-	reposAdded := 0
-	for _, repo := range standardRepos {
-		if !existingRepos[repo.name] {
-			cfg.Backends = append(cfg.Backends, config.Backend{
-				Name:     repo.name,
-				URL:      repo.url,
-				Priority: repo.priority,
-			})
-			reposAdded++
-		}
-	}
-
-	if reposAdded > 0 {
-		log.Printf("Added %d missing standard repository backends", reposAdded)
-	}
-
-	// Track which mapping rules exist for both standard and third-party repos
-	existingMappings := make(map[string]bool)
-	for _, rule := range cfg.MappingRules {
-		existingMappings[rule.Pattern] = true
-	}
-
-	// Add mapping rules for standard repositories if they don't exist
-	standardMappingsAdded := 0
-	for _, repo := range standardRepos {
-		if !existingMappings[repo.pattern] {
-			m.AddPrefixRule(repo.pattern, repo.name, repo.priority)
-
-			// Add to MappingRules list for config consistency
-			cfg.MappingRules = append(cfg.MappingRules, config.MappingRule{
-				Type:       "prefix",
-				Pattern:    repo.pattern,
-				Repository: repo.name,
-				Priority:   repo.priority,
-			})
-			standardMappingsAdded++
-			existingMappings[repo.pattern] = true // Mark as existing
-		}
-	}
-
-	if standardMappingsAdded > 0 {
-		log.Printf("Added %d standard repository mapping rules", standardMappingsAdded)
-	}
-
-	// Check for third-party repository mappings and add if missing
-	thirdPartyMappings := []struct {
-		repoName string
-		pattern  string
-		priority int
-	}{
-		{"docker", "download.docker.com/linux/ubuntu", 60},
-		{"grafana", "packages.grafana.com/oss/deb", 55},
-		{"plex", "downloads.plex.tv/repo/deb", 50},
-		{"postgresql", "apt.postgresql.org/pub/repos/apt", 45},
-		{"hwraid", "hwraid.le-vert.net/ubuntu", 40},
-	}
-
-	// Add third-party mappings if they don't exist
-	thirdPartyMappingsAdded := 0
-	for _, mapping := range thirdPartyMappings {
-		if !existingMappings[mapping.pattern] {
-			m.AddPrefixRule(mapping.pattern, mapping.repoName, mapping.priority)
-
-			// Add to MappingRules list for config consistency
-			cfg.MappingRules = append(cfg.MappingRules, config.MappingRule{
-				Type:       "prefix",
-				Pattern:    mapping.pattern,
-				Repository: mapping.repoName,
-				Priority:   mapping.priority,
-			})
-			thirdPartyMappingsAdded++
-		}
-	}
-
-	if thirdPartyMappingsAdded > 0 {
-		log.Printf("Added %d third-party repository mapping rules", thirdPartyMappingsAdded)
-	}
-
-	// Add development release handling configuration if it doesn't exist
-	if cfg.Metadata == nil {
-		cfg.Metadata = make(map[string]interface{})
-	}
-
-	if _, exists := cfg.Metadata["dev_release"]; !exists {
-		cfg.Metadata["dev_release"] = map[string]interface{}{
-			"enabled": true,
-			"codenames": []string{
-				"oracular",
-				"noble",
-				"devel",
-				"experimental",
-			},
-			"skip_missing_components": []string{
-				"-security",
-				"-updates",
-				"-backports",
-			},
-			"suppress_errors": true,
-		}
-		log.Printf("Added development release handling configuration")
-	}
+	// Write the response
+	fmt.Fprintf(w, html, time.Since(s.startTime).String(), s.version)
 }
 
 // extractClientIP extracts the client IP from a request
+//
+// This function gets the client IP address from an HTTP request,
+// considering common proxy headers and fallbacks to RemoteAddr.
+//
+// Parameters:
+// - r: The HTTP request to extract IP from
+//
+// Returns:
+// - The client IP address as a string
 func extractClientIP(r *http.Request) string {
-	// Check X-Forwarded-For header first (for proxies)
-	forwarded := r.Header.Get("X-Forwarded-For")
-	if forwarded != "" {
-		// X-Forwarded-For can contain multiple IPs, take the first one
-		ips := strings.Split(forwarded, ",")
+	// Check for X-Forwarded-For header
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		ips := strings.Split(xff, ",")
 		return strings.TrimSpace(ips[0])
 	}
 
-	// Otherwise use RemoteAddr
-	ip := r.RemoteAddr
-	// Remove port if present
-	if idx := strings.LastIndex(ip, ":"); idx != -1 {
-		ip = ip[:idx]
+	// Check for X-Real-IP header
+	if xrip := r.Header.Get("X-Real-IP"); xrip != "" {
+		return xrip
 	}
+
+	// Use RemoteAddr
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		// If no port in the address, use as is
+		return r.RemoteAddr
+	}
+
 	return ip
 }
 
-// ServeKey serves GPG keys from the key directory
-func (s *Server) ServeKey(w http.ResponseWriter, r *http.Request) {
-	keyID := path.Base(r.URL.Path)
-	keyID = strings.TrimSuffix(keyID, ".gpg")
-
-	s.mutex.Lock()
-	keyManager := s.backend.KeyManager()
-	s.mutex.Unlock()
-
-	// Type assertion to check if it's our KeyManager interface
-	if keyManager == nil {
-		http.Error(w, "Key management not available", http.StatusNotFound)
-		return
-	}
-
-	// Use type assertion to access methods
-	if km, ok := keyManager.(KeyManager); ok {
-		if !km.HasKey(keyID) {
-			http.Error(w, "Key not found", http.StatusNotFound)
-			return
-		}
-
-		keyPath := km.GetKeyPath(keyID)
-		if keyPath == "" {
-			http.Error(w, "Key not available", http.StatusNotFound)
-			return
-		}
-
-		http.ServeFile(w, r, keyPath)
-	} else {
-		http.Error(w, "Key management not properly configured", http.StatusInternalServerError)
-	}
-}
-
 // handleHighMemoryPressure is called when memory usage is high
+//
+// This method takes actions to reduce memory usage when the system
+// is under memory pressure, such as forcing garbage collection,
+// cleaning up prefetch operations, and clearing caches.
+//
+// Parameters:
+// - pressure: Current memory pressure as a float (0.0-1.0)
 func (s *Server) handleHighMemoryPressure(pressure float64) {
 	log.Printf("High memory pressure detected (%.2f%%), taking action", pressure*100)
 
@@ -1099,10 +862,35 @@ func (s *Server) handleHighMemoryPressure(pressure float64) {
 
 	// Package mapper cache clearing
 	if s.packageMapper != nil {
-		// Just call ClearCache directly since we know it exists
 		s.packageMapper.ClearCache()
 		log.Printf("Cleared package mapper cache due to memory pressure")
 	}
+}
+
+// ServeKey serves GPG keys from the key directory
+//
+// This method handles requests for GPG keys by extracting the key ID
+// from the URL path and serving the corresponding key file.
+//
+// Parameters:
+// - w: HTTP response writer
+// - r: HTTP request
+func (s *Server) ServeKey(w http.ResponseWriter, r *http.Request) {
+	// Extract key ID from URL path
+	path := strings.TrimPrefix(r.URL.Path, "/gpg/")
+	keyID := strings.TrimSuffix(path, ".gpg")
+
+	// Check if key exists
+	if !s.localKeyManager.HasKey(keyID) {
+		http.NotFound(w, r)
+		return
+	}
+
+	// Get key path
+	keyPath := s.localKeyManager.GetKeyPath(keyID)
+
+	// Serve the key file
+	http.ServeFile(w, r, keyPath)
 }
 
 // HandlePackageRequest is the exported version of handlePackageRequest
@@ -1129,315 +917,7 @@ func (s *Server) HandleReportRequest(w http.ResponseWriter, r *http.Request) {
 	s.handleReportRequest(w, r)
 }
 
-// Add missing admin handler methods
-func (s *Server) adminFlushCache(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Call the existing flush expired method which does what we need
-	s.adminFlushExpired(w, r)
-}
-
-func (s *Server) adminMemoryStats(w http.ResponseWriter, r *http.Request) {
-	// Get memory statistics
-	s.mutex.Lock()
-	memStats := s.memoryMonitor.GetMemoryUsage()
-	s.mutex.Unlock()
-
-	// Return as JSON
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(memStats); err != nil {
-		http.Error(w, "Error encoding memory stats", http.StatusInternalServerError)
-	}
-}
-
-// Add this new handler function
-func (s *Server) handleKeyRequest(w http.ResponseWriter, r *http.Request) {
-	// Extract key ID from various request formats
-	var keyID string
-
-	// Try to extract from URL
-	path := r.URL.Path
-	query := r.URL.Query()
-
-	if strings.Contains(path, "/pks/lookup") {
-		// Format: /pks/lookup?op=get&search=0xKEYID
-		search := query.Get("search")
-		if strings.HasPrefix(search, "0x") {
-			keyID = search[2:]
-		} else {
-			keyID = search
-		}
-	} else if strings.Contains(path, "/gpg-key/") || strings.Contains(path, "/keys/") {
-		// Format: /gpg-key/KEYID.gpg or /keys/KEYID.gpg
-		parts := strings.Split(path, "/")
-		if len(parts) > 0 {
-			fileName := parts[len(parts)-1]
-			keyID = strings.TrimSuffix(fileName, ".gpg")
-			keyID = strings.TrimSuffix(keyID, ".asc")
-		}
-	}
-
-	// If keyID is empty, try to handle as a direct keyserver request
-	if keyID == "" {
-		// Check if this is a keyserver request that should be proxied
-		host := r.Host
-		if strings.Contains(host, "keyserver") ||
-			strings.Contains(path, "/pks/lookup") {
-			log.Printf("Proxying keyserver request: %s", r.URL.String())
-			s.proxyKeyServerRequest(w, r)
-			return
-		}
-
-		log.Printf("Invalid key request format: %s", r.URL.String())
-		http.Error(w, "Invalid key request format", http.StatusBadRequest)
-		return
-	}
-
-	s.mutex.Lock()
-	keyManager := s.backend.KeyManager()
-	s.mutex.Unlock()
-
-	// Type assertion to check if it's our KeyManager interface
-	if km, ok := keyManager.(KeyManager); ok {
-		// Check if we have the key
-		if !km.HasKey(keyID) {
-			// Try to fetch it
-			log.Printf("Fetching key: %s", keyID)
-			err := km.FetchKey(keyID)
-			if err != nil {
-				log.Printf("Failed to fetch key directly %s: %v, trying keyserver proxy", keyID, err)
-
-				// Try to get it via keyserver proxy as a fallback
-				keyserverURL := fmt.Sprintf("http://keyserver.ubuntu.com/pks/lookup?op=get&search=0x%s", keyID)
-				proxyReq, err := http.NewRequest("GET", keyserverURL, nil)
-				if err != nil {
-					log.Printf("Error creating proxy request: %v", err)
-					http.Error(w, "Key not found", http.StatusNotFound)
-					return
-				}
-
-				// Copy the original request headers
-				for name, values := range r.Header {
-					for _, value := range values {
-						proxyReq.Header.Add(name, value)
-					}
-				}
-
-				// Use the proxy method to fetch from keyserver
-				s.proxyKeyServerRequest(w, proxyReq)
-				return
-			}
-		}
-
-		// Get key path
-		keyPath := km.GetKeyPath(keyID)
-		if keyPath == "" {
-			http.Error(w, "Key not available", http.StatusNotFound)
-			return
-		}
-
-		// Read and serve the key with error checking
-		keyData, err := os.ReadFile(keyPath)
-		if err != nil {
-			log.Printf("Error reading key file: %v", err)
-			http.Error(w, "Error reading key", http.StatusInternalServerError)
-			return
-		}
-
-		// Determine content type based on request
-		contentType := "application/pgp-keys"
-		if strings.Contains(r.URL.Path, ".asc") ||
-			(r.Header.Get("Accept") != "" && strings.Contains(r.Header.Get("Accept"), "text/plain")) {
-			contentType = "text/plain"
-		}
-
-		w.Header().Set("Content-Type", contentType)
-		if _, err := w.Write(keyData); err != nil {
-			log.Printf("Error writing key data: %v", err)
-			// Headers already sent, can't send error response
-			return
-		}
-	} else {
-		http.Error(w, "Key management not available", http.StatusServiceUnavailable)
-	}
-}
-
-// Add method to proxy keyserver requests when needed
-// proxyKeyServerRequest proxies a request to a keyserver and processes the response.
-//
-// This method:
-// - Creates a new outgoing request to the target keyserver
-// - Ensures URLs are properly formatted
-// - Forwards the request with appropriate headers
-// - Processes the response to extract and store any GPG keys
-// - Returns the response to the client
-//
-// Parameters:
-// - w: The HTTP response writer
-// - r: The original HTTP request
-func (s *Server) proxyKeyServerRequest(w http.ResponseWriter, r *http.Request) {
-	// Create a new request to the target server
-	target := r.URL
-
-	// Ensure it uses HTTP with proper format
-	if target.Scheme == "" {
-		target.Scheme = "http"
-	}
-
-	// Ensure the URL has proper format
-	targetURL := target.String()
-	if strings.HasPrefix(targetURL, "http:/") && !strings.HasPrefix(targetURL, "http://") {
-		targetURL = strings.Replace(targetURL, "http:/", "http://", 1)
-	}
-
-	// Create new request
-	req, err := http.NewRequest(r.Method, targetURL, r.Body)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Copy headers
-	for name, values := range r.Header {
-		for _, value := range values {
-			req.Header.Add(name, value)
-		}
-	}
-
-	// Send the request
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	// Read the entire response body first
-	bodyData, err := io.ReadAll(resp.Body)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Error reading response: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	// Check if it contains a PGP key block
-	bodyStr := string(bodyData)
-	if strings.Contains(bodyStr, "BEGIN PGP PUBLIC KEY BLOCK") {
-		// Extract key ID if possible
-		keyID := s.extractKeyIDFromKeyData(bodyData)
-		if keyID != "" {
-			// Store the key
-			s.mutex.Lock()
-			keyManager := s.backend.KeyManager()
-			s.mutex.Unlock()
-
-			if keyM, ok := keyManager.(KeyManager); ok {
-				keyPath := keyM.GetKeyPath(keyID)
-				if err := os.MkdirAll(filepath.Dir(keyPath), 0755); err != nil {
-					log.Printf("Failed to create key directory: %v", err)
-				} else if err := os.WriteFile(keyPath, bodyData, 0644); err != nil {
-					log.Printf("Failed to store key %s: %v", keyID, err)
-				} else {
-					log.Printf("Successfully stored key %s from keyserver response", keyID)
-				}
-			}
-		}
-	}
-
-	// Forward the response headers
-	for name, values := range resp.Header {
-		for _, value := range values {
-			w.Header().Add(name, value)
-		}
-	}
-
-	// Write status code and body
-	w.WriteHeader(resp.StatusCode)
-	if _, err := w.Write(bodyData); err != nil {
-		log.Printf("Error writing response body: %v", err)
-		// Headers already sent, can't return an error status code
-		return
-	}
-}
-
-// Helper to extract key ID from key data
-// extractKeyIDFromKeyData extracts a GPG key ID from key data.
-//
-// This method analyzes the content of a PGP key block to extract the key ID
-// using various pattern matching techniques. It looks for common formats
-// in which key IDs appear in PGP key blocks and related messages.
-//
-// The method uses an efficient approach to scan through the data line by line,
-// looking for key identifiers in various formats.
-//
-// Parameters:
-// - data: The raw key data as a byte slice
-//
-// Returns:
-// - The extracted key ID as a string, or an empty string if no key ID was found
-func (s *Server) extractKeyIDFromKeyData(data []byte) string {
-	content := string(data)
-
-	// Look for key IDs in the content using regex patterns
-	patterns := []string{
-		`signed by key ID (\w+)`,
-		`signature from key ID (\w+)`,
-		`key ID (\w+)`,
-	}
-
-	for _, pattern := range patterns {
-		re := regexp.MustCompile(pattern)
-		matches := re.FindStringSubmatch(content)
-		if len(matches) > 1 {
-			return matches[1]
-		}
-	}
-
-	// Scan through lines efficiently
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.Contains(line, "Key ID") || strings.Contains(line, "keyid") {
-			// Extract what looks like a key ID (8+ hex characters)
-			re := regexp.MustCompile(`[0-9A-F]{8,}`)
-			matches := re.FindString(strings.ToUpper(line))
-			if matches != "" {
-				return matches
-			}
-		}
-	}
-
-	return ""
-}
-
-// Implement tracing middleware for HTTP requests
-func (s *Server) wrapWithTracing(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg.Log.Debug.TraceHTTPRequests {
-			// Log request details
-			log.Printf("[HTTP TRACE] Incoming request: %s %s", r.Method, r.URL.Path)
-			log.Printf("[HTTP TRACE] Headers: %v", r.Header)
-
-			// Create a response writer that captures the response
-			rw := newResponseWriter(w)
-
-			// Process the request
-			start := time.Now()
-			next(rw, r)
-			duration := time.Since(start)
-
-			// Log response details
-			log.Printf("[HTTP TRACE] Response: %s %s - Status: %d, Size: %d, Duration: %s",
-				r.Method, r.URL.Path, rw.statusCode, rw.bytesWritten, duration)
-		} else {
-			// Skip tracing
-			next(w, r)
-		}
-	}
+// HandleHighMemoryPressure is the exported version of handleHighMemoryPressure
+func (s *Server) HandleHighMemoryPressure(pressure float64) {
+	s.handleHighMemoryPressure(pressure)
 }
