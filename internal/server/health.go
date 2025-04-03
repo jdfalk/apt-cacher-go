@@ -53,6 +53,10 @@ func (s *Server) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 
 // handleHealth serves the health check endpoint
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Log.Debug.TraceHTTPRequests {
+		log.Printf("[HTTP TRACE] Health check requested from %s", r.RemoteAddr)
+	}
+
 	// Detailed parameter determines whether to include detailed stats
 	detailed := r.URL.Query().Get("detailed") == "true"
 
@@ -109,6 +113,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // handleMetrics serves Prometheus metrics
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Log.Debug.TraceHTTPRequests {
+		log.Printf("[HTTP TRACE] Metrics requested from %s", r.RemoteAddr)
+	}
+
 	// Use mutex when accessing the metrics handler
 	s.mutex.Lock()
 	handler := promhttp.Handler()
@@ -119,6 +127,10 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 // handleReady serves the readiness check endpoint
 func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Log.Debug.TraceHTTPRequests {
+		log.Printf("[HTTP TRACE] Readiness check requested from %s", r.RemoteAddr)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	if _, err := w.Write([]byte(`{"status":"ready"}`)); err != nil {
 		log.Printf("Error writing ready response: %v", err)
