@@ -327,18 +327,48 @@ func (m *Manager) selectBackendByName(repoName string) (*Backend, error) {
 	return nil, fmt.Errorf("no matching backend for %s", repoName)
 }
 
-// downloadFromURL downloads data from a URL
+// downloadFromURL downloads data from a URL with proper error handling.
+//
+// This function:
+// - Ensures the URL is properly formatted with correct scheme
+// - Makes an HTTP request to the given URL
+// - Handles any network or HTTP errors
+// - Returns the complete response body as a byte slice
+//
+// Parameters:
+// - url: The URL to download from
+//
+// Returns:
+// - The response body as a byte slice
+// - Any error encountered during the download
 func (m *Manager) downloadFromURL(url string) ([]byte, error) {
-	resp, err := m.client.Get(url)
+	// Ensure URL has proper format with double slashes after http:
+	if strings.HasPrefix(url, "http:/") && !strings.HasPrefix(url, "http://") {
+		url = strings.Replace(url, "http:/", "http://", 1)
+	}
+
+	// Create request with context for cancellation
+	req, err := http.NewRequestWithContext(m.downloadCtx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Add standard headers
+	req.Header.Set("User-Agent", "apt-cacher-go/1.0")
+
+	// Execute request
+	resp, err := m.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("backend request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
+	// Check response status
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("backend returned non-OK status: %d", resp.StatusCode)
+		return nil, fmt.Errorf("backend returned status %d", resp.StatusCode)
 	}
 
+	// Read response body
 	return io.ReadAll(resp.Body)
 }
 
@@ -545,7 +575,20 @@ func (m *Manager) createHTTPClient() *http.Client {
 	}
 }
 
-// RefreshReleaseData refreshes and reprocesses a release file after key changes
+// RefreshReleaseData refreshes and reprocesses a release file after key changes.
+//
+// This method is called after a GPG key has been fetched to reprocess a release file
+// that previously had signature verification issues. It performs the following steps:
+//
+// 1. Maps the path to a repository
+// 2. Fetches fresh data for the path
+// 3. Processes the release file with the updated data
+//
+// Parameters:
+// - path: The path to the release file to refresh
+//
+// Returns:
+// - Any error encountered during the refresh process
 func (m *Manager) RefreshReleaseData(path string) error {
 	// Map the path to determine the repository
 	mappingResult, err := m.mapper.MapPath(path)
