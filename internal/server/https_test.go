@@ -1,7 +1,6 @@
 package server
 
 import (
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -13,9 +12,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Define test errors
-var errNotFound = errors.New("resource not found")
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
 
+// TestHTTPSConnection tests basic HTTPS connection handling.
+//
+// This test verifies that a simple HTTPS request handler returns the correct
+// HTTP status code, confirming the basic functionality of HTTPS connections.
 func TestHTTPSConnection(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "https://example.com", nil)
 	rr := httptest.NewRecorder()
@@ -30,7 +35,20 @@ func TestHTTPSConnection(t *testing.T) {
 	}
 }
 
-// Add timeout handling to server test
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestShouldRemapHost tests the shouldRemapHost method of the Server struct.
+//
+// This test verifies:
+// - Known hosts are correctly mapped to their repository names
+// - Hosts with ports are properly handled
+// - Unknown hosts are correctly identified as not needing remapping
+//
+// The test includes multiple test cases covering different scenarios to ensure
+// the host remapping logic works consistently across various inputs.
 func TestShouldRemapHost(t *testing.T) {
 	server, _, cleanup := createTestServer(t)
 	defer func() {
@@ -79,6 +97,19 @@ func TestShouldRemapHost(t *testing.T) {
 	}
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestHTTPSRequestHandling tests high-level HTTPS request handling.
+//
+// This test verifies:
+// - Valid HTTPS requests to known repositories are properly processed
+// - Requests to unknown hosts are correctly rejected
+//
+// The test uses a test server setup to simulate the server environment
+// without requiring actual external connectivity.
 func TestHTTPSRequestHandling(t *testing.T) {
 	// Create a test server
 	server, _, cleanup := createTestServer(t)
@@ -111,6 +142,20 @@ func TestHTTPSRequestHandling(t *testing.T) {
 	})
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestURLParsing tests the URL parsing functionality that's critical for server operation.
+//
+// This test verifies:
+// - Standard HTTP URLs are correctly parsed
+// - HTTPS URLs are correctly parsed
+// - URLs with ports are correctly parsed
+//
+// The test ensures the host component is properly extracted in various scenarios,
+// which is essential for the server's host remapping functionality.
 func TestURLParsing(t *testing.T) {
 	t.Run("url_parsing", func(t *testing.T) {
 		validURL := "http://archive.ubuntu.com/ubuntu"
