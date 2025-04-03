@@ -2,6 +2,7 @@ package backend
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -353,7 +354,7 @@ func TestFetchFromBackend(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	// Fix the server URL format - explicitly ensure it has the double slash after http:
+	// Get the server URL and ensure it has the correct format with double slashes
 	serverURL := strings.Replace(ts.URL, "http:/", "http://", 1)
 
 	// Create mock components
@@ -368,18 +369,22 @@ func TestFetchFromBackend(t *testing.T) {
 		CachePath:  "test-repo/path/to/file",
 	}, nil)
 
-	// Create manager with mocks
+	// Create manager with custom client
+	client := &http.Client{Timeout: 5 * time.Second}
+
 	m := &Manager{
 		cache:         mockCache,
 		mapper:        mockMapper,
 		packageMapper: mockPackageMapper,
+		client:        client, // Ensure client is set
 		backends: []*Backend{
 			{
 				Name:    "test-repo",
 				BaseURL: serverURL,
-				client:  &http.Client{},
+				client:  client, // Ensure backend client is set
 			},
 		},
+		downloadCtx: context.Background(),
 	}
 
 	// Test the fetch method
