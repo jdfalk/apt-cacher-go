@@ -1257,17 +1257,35 @@ func (s *Server) handleKeyRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 // Add method to proxy keyserver requests when needed
+// proxyKeyServerRequest proxies a request to a keyserver and processes the response.
+//
+// This method:
+// - Creates a new outgoing request to the target keyserver
+// - Ensures URLs are properly formatted
+// - Forwards the request with appropriate headers
+// - Processes the response to extract and store any GPG keys
+// - Returns the response to the client
+//
+// Parameters:
+// - w: The HTTP response writer
+// - r: The original HTTP request
 func (s *Server) proxyKeyServerRequest(w http.ResponseWriter, r *http.Request) {
 	// Create a new request to the target server
 	target := r.URL
 
-	// Ensure it uses HTTP
+	// Ensure it uses HTTP with proper format
 	if target.Scheme == "" {
 		target.Scheme = "http"
 	}
 
+	// Ensure the URL has proper format
+	targetURL := target.String()
+	if strings.HasPrefix(targetURL, "http:/") && !strings.HasPrefix(targetURL, "http://") {
+		targetURL = strings.Replace(targetURL, "http:/", "http://", 1)
+	}
+
 	// Create new request
-	req, err := http.NewRequest(r.Method, target.String(), r.Body)
+	req, err := http.NewRequest(r.Method, targetURL, r.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1292,25 +1310,18 @@ func (s *Server) proxyKeyServerRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	// Forward the response
-	for name, values := range resp.Header {
-		for _, value := range values {
-			w.Header().Add(name, value)
-		}
-	}
-	w.WriteHeader(resp.StatusCode)
-
-	// Add error handling for io.Copy
-	if _, err := io.Copy(w, resp.Body); err != nil {
-		log.Printf("Error copying response body: %v", err)
-		// Headers already sent, can't return an error status code
+	// Read the entire response body first
+	bodyData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error reading response: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	// Check if it contains a PGP key block
-	if strings.Contains(string(resp.Body), "BEGIN PGP PUBLIC KEY BLOCK") {
+	bodyStr := string(bodyData)
+	if strings.Contains(bodyStr, "BEGIN PGP PUBLIC KEY BLOCK") {
 		// Extract key ID if possible
-		keyID := s.extractKeyIDFromKeyData(resp.Body)
+		keyID := s.extractKeyIDFromKeyData(bodyData)
 		if keyID != "" {
 			// Store the key
 			s.mutex.Lock()
@@ -1321,7 +1332,7 @@ func (s *Server) proxyKeyServerRequest(w http.ResponseWriter, r *http.Request) {
 				keyPath := keyM.GetKeyPath(keyID)
 				if err := os.MkdirAll(filepath.Dir(keyPath), 0755); err != nil {
 					log.Printf("Failed to create key directory: %v", err)
-				} else if err := os.WriteFile(keyPath, resp.Body, 0644); err != nil {
+				} else if err := os.WriteFile(keyPath, bodyData, 0644); err != nil {
 					log.Printf("Failed to store key %s: %v", keyID, err)
 				} else {
 					log.Printf("Successfully stored key %s from keyserver response", keyID)
@@ -1329,13 +1340,42 @@ func (s *Server) proxyKeyServerRequest(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+
+	// Forward the response headers
+	for name, values := range resp.Header {
+		for _, value := range values {
+			w.Header().Add(name, value)
+		}
+	}
+
+	// Write status code and body
+	w.WriteHeader(resp.StatusCode)
+	if _, err := w.Write(bodyData); err != nil {
+		log.Printf("Error writing response body: %v", err)
+		// Headers already sent, can't return an error status code
+		return
+	}
 }
 
 // Helper to extract key ID from key data
+// extractKeyIDFromKeyData extracts a GPG key ID from key data.
+//
+// This method analyzes the content of a PGP key block to extract the key ID
+// using various pattern matching techniques. It looks for common formats
+// in which key IDs appear in PGP key blocks and related messages.
+//
+// The method uses an efficient approach to scan through the data line by line,
+// looking for key identifiers in various formats.
+//
+// Parameters:
+// - data: The raw key data as a byte slice
+//
+// Returns:
+// - The extracted key ID as a string, or an empty string if no key ID was found
 func (s *Server) extractKeyIDFromKeyData(data []byte) string {
 	content := string(data)
 
-	// Look for key IDs in the content
+	// Look for key IDs in the content using regex patterns
 	patterns := []string{
 		`signed by key ID (\w+)`,
 		`signature from key ID (\w+)`,
@@ -1350,16 +1390,16 @@ func (s *Server) extractKeyIDFromKeyData(data []byte) string {
 		}
 	}
 
-	// More efficient approach for scanning lines
+	// Scan through lines efficiently
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.Contains(line, "Key ID") || strings.Contains(line, "keyid") {
 			// Extract what looks like a key ID (8+ hex characters)
 			re := regexp.MustCompile(`[0-9A-F]{8,}`)
-			matches := re.FindStringSubmatch(strings.ToUpper(line))
-			if len(matches) > 0 {
-				return matches[0]
+			matches := re.FindString(strings.ToUpper(line))
+			if matches != "" {
+				return matches
 			}
 		}
 	}
