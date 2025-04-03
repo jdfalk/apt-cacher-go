@@ -11,6 +11,21 @@ tls_key: "/etc/apt-cacher-go/key.pem"
 log_file: "/var/log/apt-cacher-go/apt-cacher-go.log"
 log_level: "info"
 
+# Logging configuration
+log:
+  level: "info" # Main log level: debug, info, warn, error
+  format: "text" # Log format: text or json
+  file: "/var/log/apt-cacher-go/apt-cacher-go.log"
+  # Debug-specific logging settings
+  debug:
+    prefetcher_verbose: false # Detailed logging of prefetcher operations (replaces verbose_logging)
+    dev_suppress_errors: true # Suppress errors for development releases (replaces suppress_errors)
+    show_key_operations: false # Show detailed key management operations
+    trace_http_requests: false # Trace all HTTP requests and responses
+  # Output settings
+  stdout: true # Output logs to stdout
+  file_enabled: true # Also write logs to file
+
 # Cache configuration
 cache_dir: "/var/cache/apt-cacher-go"
 cache_size: "60G"
@@ -59,6 +74,7 @@ key_management:
     - "hkp://keyserver.ubuntu.com:80"
     - "hkp://keys.gnupg.net:80"
     - "hkp://pool.sks-keyservers.net:80"
+    - "hkp://keys.openpgp.org:80" # Added a more reliable keyserver
   key_dir: "/var/cache/apt-cacher-go/keys" # Use absolute path, not relative
   key_length: 4096
 
@@ -72,7 +88,7 @@ prefetch:
   architectures:
     - amd64
   warmup_on_startup: true
-  verbose_logging: false # Controls detailed logging of prefetcher operations
+  # verbose_logging setting moved to log.debug.prefetcher_verbose
 
 # Standard repository backends (will be added automatically if missing)
 backends:
@@ -181,7 +197,7 @@ metadata:
       - "-security"
       - "-updates"
       - "-backports"
-    suppress_errors: true
+    # suppress_errors setting moved to log.debug.dev_suppress_errors
     prefetch_settings:
       max_concurrent: 5
       skip_notfound: true
