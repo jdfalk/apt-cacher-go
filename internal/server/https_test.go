@@ -198,21 +198,15 @@ func TestHandleConnectRequest(t *testing.T) {
 // changes. These comments are essential for understanding the test's purpose
 // and approach, especially for future maintainers and code reviewers.
 
-// TestHandleHTTPSRequest tests the Server.handleHTTPSRequest method which handles
-// HTTPS requests and applies appropriate remapping rules.
+// TestHandleHTTPSRequest tests HTTPS request handling and remapping functionality.
 //
-// The test verifies:
-// - HTTPS requests are properly remapped to repository paths
-// - Docker repository requests follow the correct pattern
-// - Unknown HTTPS hosts are properly detected and passed through
+// This test verifies:
+// - That HTTPS requests to known repositories are properly remapped to HTTP
+// - That the remapped requests are correctly processed by the package handler
+// - That unknown hosts are properly rejected
 //
-// Approach:
-// 1. Creates a test server fixture with configuration for HTTPS support
-// 2. Tests HTTPS remapping for Docker repository requests
-// 3. Tests handling of unknown HTTPS hosts
-// 4. Verifies correct path remapping and backend access
-//
-// Note: Uses httptest for simulated HTTP requests
+// The test covers both successful and error cases, ensuring the handler
+// functions reliably in all scenarios.
 func TestHandleHTTPSRequest(t *testing.T) {
 	fixture := NewTestServerFixture(t)
 	defer fixture.Cleanup()
@@ -230,18 +224,25 @@ func TestHandleHTTPSRequest(t *testing.T) {
 	// Add missing PackageMapper expectation
 	fixture.PackageMapper.On("GetPackageNameForHash", mock.AnythingOfType("string")).Return("").Maybe()
 
+	// Add missing KeyManager expectations - CRITICAL FIX
+	fixture.KeyManager.On("DetectKeyError", mock.AnythingOfType("[]uint8")).Return("", false).Maybe()
+
 	t.Run("docker_https_request", func(t *testing.T) {
-		// Setup backend expectation
-		fixture.Backend.On("Fetch", "/docker/linux/debian/dists/bullseye/stable/binary-amd64/Packages").Return(nil, errNotFound)
+		// Setup backend expectation - match the EXACT path that will be requested
+		fixture.Backend.On("Fetch", "/docker/linux/debian/dists/bullseye/stable/binary-amd64/Packages").
+			Return([]byte("test data"), nil)
 
 		// Create a test request with HTTPS URL
-		req := httptest.NewRequest("GET", "https://download.docker.com/linux/debian/dists/bullseye/stable/binary-amd64/Packages", nil)
+		req := httptest.NewRequest("GET",
+			"https://download.docker.com/linux/debian/dists/bullseye/stable/binary-amd64/Packages", nil)
 		w := httptest.NewRecorder()
 
-		fixture.Server.HandlePackageRequest(w, req)
+		// Process request
+		fixture.Server.handleHTTPSRequest(w, req)
 
-		// Should return 404 since we mocked a "not found" response
-		assert.Equal(t, http.StatusNotFound, w.Code)
+		// Check response
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, "test data", w.Body.String())
 	})
 
 	t.Run("unknown_https_host", func(t *testing.T) {
@@ -249,7 +250,8 @@ func TestHandleHTTPSRequest(t *testing.T) {
 		req := httptest.NewRequest("GET", "https://unknown.example.com/some/path", nil)
 		w := httptest.NewRecorder()
 
-		fixture.Server.HandlePackageRequest(w, req)
+		// Process request
+		fixture.Server.handleHTTPSRequest(w, req)
 
 		// Should return 404 since we don't handle unknown hosts
 		assert.Equal(t, http.StatusNotFound, w.Code)
