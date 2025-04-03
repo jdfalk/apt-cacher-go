@@ -22,12 +22,13 @@ import (
 // keys in a configurable directory and maintains an in-memory cache of
 // available keys to reduce redundant downloads.
 type KeyManager struct {
-	config     *config.KeyManagementConfig // Configuration for key management
-	keyCache   map[string]time.Time        // Cache of known keys with their fetch time
-	fetchMutex sync.RWMutex                // Mutex to protect concurrent operations on keyCache
+	config            *config.KeyManagementConfig // Configuration for key management
+	keyCache          map[string]time.Time        // Cache of known keys with their fetch time
+	fetchMutex        sync.RWMutex                // Mutex to protect concurrent operations on keyCache
+	showKeyOperations bool                        // Flag to enable logging of key operations
 }
 
-// New creates a new key manager instance and initializes the key directory.
+// New creates a new key manager instance with debug options
 //
 // This function:
 // - Checks if key management is enabled in configuration
@@ -39,11 +40,12 @@ type KeyManager struct {
 // Parameters:
 // - cfg: Key management configuration
 // - cacheDir: Base cache directory for fallback
+// - debugOptions: Debug logging options
 //
 // Returns:
 // - Initialized KeyManager or nil if key management is disabled
 // - Error if directory creation fails or is not writable
-func New(cfg *config.KeyManagementConfig, cacheDir string) (*KeyManager, error) {
+func New(cfg *config.KeyManagementConfig, cacheDir string, debugOptions *config.DebugLog) (*KeyManager, error) {
 	if !cfg.Enabled {
 		return nil, nil
 	}
@@ -91,8 +93,9 @@ func New(cfg *config.KeyManagementConfig, cacheDir string) (*KeyManager, error) 
 	}
 
 	manager := &KeyManager{
-		config:   cfg,
-		keyCache: make(map[string]time.Time),
+		config:            cfg,
+		keyCache:          make(map[string]time.Time),
+		showKeyOperations: debugOptions != nil && debugOptions.ShowKeyOperations,
 	}
 
 	// Initialize key cache with existing keys
@@ -112,6 +115,10 @@ func New(cfg *config.KeyManagementConfig, cacheDir string) (*KeyManager, error) 
 			}
 		}
 		log.Printf("Initialized key cache with %d existing keys", len(manager.keyCache))
+	}
+
+	if manager.showKeyOperations {
+		log.Printf("[KEY OPERATION] Initialized key cache with %d existing keys", len(manager.keyCache))
 	}
 
 	return manager, nil
@@ -190,9 +197,21 @@ func (km *KeyManager) FetchKey(keyID string) error {
 	}
 	km.fetchMutex.RUnlock()
 
+	// Log key operations if enabled
+	if km.showKeyOperations {
+		if exists {
+			log.Printf("[KEY OPERATION] Found key %s in cache, fetch time: %s", keyID, fetchTime)
+		} else {
+			log.Printf("[KEY OPERATION] Key %s not found in cache, will try to fetch", keyID)
+		}
+	}
+
 	if exists {
 		// Check if the key file actually exists
 		keyPath := km.GetKeyPath(keyID)
+		if km.showKeyOperations {
+			log.Printf("[KEY OPERATION] Checking if key file %s exists on disk", keyPath)
+		}
 		if _, err := os.Stat(keyPath); os.IsNotExist(err) {
 			log.Printf("Key %s is in cache but file doesn't exist. Will re-download.", keyID)
 		} else {
@@ -235,16 +254,22 @@ func (km *KeyManager) FetchKey(keyID string) error {
 	// Try each keyserver until successful
 	var lastErr error
 	for _, server := range km.config.Keyservers {
-		log.Printf("Trying keyserver %s for key %s", server, keyID)
+		if km.showKeyOperations {
+			log.Printf("[KEY OPERATION] Trying keyserver %s for key %s", server, keyID)
+		}
 		err := km.fetchKeyFromServer(server, keyID)
 		if err == nil {
 			// Update cache time
 			km.keyCache[keyID] = time.Now()
-			log.Printf("Successfully retrieved key %s from %s", keyID, server)
+			if km.showKeyOperations {
+				log.Printf("[KEY OPERATION] Successfully retrieved key %s from %s", keyID, server)
+			}
 			return nil
 		}
 		lastErr = err
-		log.Printf("Failed to retrieve key %s from %s: %v", keyID, server, err)
+		if km.showKeyOperations {
+			log.Printf("[KEY OPERATION] Failed to retrieve key %s from %s: %v", keyID, server, err)
+		}
 	}
 
 	return fmt.Errorf("failed to retrieve key from all servers: %w", lastErr)
