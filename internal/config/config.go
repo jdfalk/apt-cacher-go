@@ -24,6 +24,9 @@ type Config struct {
 	LogFile       string `yaml:"log_file"`
 	LogLevel      string `yaml:"log_level"`
 
+	// Logging configuration
+	Log LogConfig `yaml:"log"`
+
 	// Cache configuration
 	CacheDir    string            `yaml:"cache_dir"`
 	CacheSize   string            `yaml:"cache_size"`
@@ -73,6 +76,24 @@ type Config struct {
 
 	// Metadata
 	Metadata map[string]any `yaml:"metadata,omitempty"`
+}
+
+// LogConfig contains the logging configuration
+type LogConfig struct {
+	Level       string   `yaml:"level"`        // Main log level: debug, info, warn, error
+	Format      string   `yaml:"format"`       // Log format: text or json
+	File        string   `yaml:"file"`         // Log file path
+	Debug       DebugLog `yaml:"debug"`        // Debug-specific settings
+	Stdout      bool     `yaml:"stdout"`       // Output logs to stdout
+	FileEnabled bool     `yaml:"file_enabled"` // Also write logs to file
+}
+
+// DebugLog contains debug-specific logging settings
+type DebugLog struct {
+	PrefetcherVerbose bool `yaml:"prefetcher_verbose"`  // Detailed logging of prefetcher operations
+	DevSuppressErrors bool `yaml:"dev_suppress_errors"` // Suppress errors for development releases
+	ShowKeyOperations bool `yaml:"show_key_operations"` // Show detailed key management operations
+	TraceHTTPRequests bool `yaml:"trace_http_requests"` // Trace all HTTP requests and responses
 }
 
 // Backend represents a repository backend
