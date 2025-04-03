@@ -38,17 +38,18 @@ type Server struct {
 	backend     BackendManager
 	metrics     MetricsCollector
 	// Removed unused prometheus field
-	acl           *security.ACL
-	mapper        PathMapper
-	packageMapper PackageMapper // Add packageMapper field
-	startTime     time.Time
-	version       string
-	logger        *log.Logger // Add logger field
-	memoryMonitor MemoryMonitorInterface
-	mutex         sync.Mutex
-	startOnce     sync.Once
-	shutdownOnce  sync.Once
-	shutdownCh    chan struct{} // Add shutdown channel
+	acl             *security.ACL
+	mapper          PathMapper
+	packageMapper   PackageMapper // Add packageMapper field
+	startTime       time.Time
+	version         string
+	logger          *log.Logger // Add logger field
+	memoryMonitor   MemoryMonitorInterface
+	mutex           sync.Mutex
+	startOnce       sync.Once
+	shutdownOnce    sync.Once
+	shutdownCh      chan struct{} // Add shutdown channel
+	localKeyManager KeyManager    // Add field to store the local key manager for direct access
 }
 
 // New creates a new Server instance with the provided options
@@ -92,6 +93,12 @@ func New(cfg *config.Config, opts ServerOptions) (*Server, error) {
 	keyManager, err := keymanager.New(&keyManagerConfig, cfg.CacheDir, &cfg.Log.Debug)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize key manager: %w", err)
+	}
+
+	// Create a KeyManagerAdapter to adapt the keymanager.KeyManager to our KeyManager interface
+	var localKeyManager KeyManager
+	if keyManager != nil {
+		localKeyManager = &KeyManagerAdapter{KeyManager: keyManager}
 	}
 
 	// Create backend manager or use provided
@@ -146,17 +153,18 @@ func New(cfg *config.Config, opts ServerOptions) (*Server, error) {
 
 	// Create the server instance
 	s := &Server{
-		cfg:           cfg,
-		cache:         cacheProvider,
-		backend:       backendManager,
-		metrics:       metricsCollector,
-		acl:           nil, // Will initialize below
-		mapper:        pathMapper,
-		packageMapper: packageMapper,
-		startTime:     time.Now(),
-		version:       opts.Version,
-		memoryMonitor: memoryMonitor,
-		shutdownCh:    make(chan struct{}),
+		cfg:             cfg,
+		cache:           cacheProvider,
+		backend:         backendManager,
+		metrics:         metricsCollector,
+		acl:             nil, // Will initialize below
+		mapper:          pathMapper,
+		packageMapper:   packageMapper,
+		startTime:       time.Now(),
+		version:         opts.Version,
+		memoryMonitor:   memoryMonitor,
+		shutdownCh:      make(chan struct{}),
+		localKeyManager: localKeyManager, // Store the key manager in the server
 	}
 
 	// Configure logger based on new log configuration
@@ -457,15 +465,34 @@ func (s *Server) Shutdown() error {
 	return err
 }
 
-// wrapWithMetrics wraps a handler with metrics collection
+// wrapWithMetrics wraps a handler with metrics collection.
+//
+// This method provides instrumentation for HTTP handlers by collecting metrics
+// about request duration, bytes served, and cache hit/miss information.
+// It uses a custom response writer wrapper to capture the response status code
+// and number of bytes written.
+//
+// The method:
+// - Records the start time of the request
+// - Extracts the client IP address
+// - Records the request in metrics
+// - Processes the request using the provided handler
+// - Calculates request duration
+// - Records detailed metrics about the completed request
+//
+// Parameters:
+// - next: The HTTP handler function to wrap with metrics collection
+//
+// Returns:
+// - An HTTP handler function that collects metrics and delegates to the original handler
 func (s *Server) wrapWithMetrics(next http.HandlerFunc) http.HandlerFunc {
 	return s.wrapWithTracing(func(w http.ResponseWriter, r *http.Request) {
 		// Original metrics code
 		start := time.Now()
 		rw := newResponseWriter(w)
 
-		// Extract client IP
-		clientIP := s.extractClientIP(r)
+		// Extract client IP using the standalone function instead of a method
+		clientIP := extractClientIP(r)
 
 		// Update metrics
 		s.metrics.SetLastClientIP(clientIP)

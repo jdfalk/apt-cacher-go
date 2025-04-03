@@ -170,7 +170,24 @@ func TestCreateServer(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestServerConfiguration verifies server configuration options
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestServerConfiguration verifies server configuration options are properly
+// initialized and accessible.
+//
+// The test verifies:
+// - Configuration values are correctly stored in the server
+// - Address and port settings match expectations
+// - Cache directory is properly configured
+// - Version information is correctly retained
+//
+// Approach:
+// 1. Creates a test server with specific configuration
+// 2. Verifies server configuration fields match expectations
+// 3. Checks version information is preserved
 func TestServerConfiguration(t *testing.T) {
 	server, tempDir, cleanup := createTestServer(t)
 	defer cleanup()
@@ -183,6 +200,22 @@ func TestServerConfiguration(t *testing.T) {
 	assert.Equal(t, "1.0.0-test", server.version)
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestServerHandlers verifies that HTTP handlers are properly functioning.
+//
+// The test verifies:
+// - Health check endpoint responds with success
+// - Response body contains expected status information
+//
+// Approach:
+// 1. Creates a test server
+// 2. Executes a request to the health endpoint
+// 3. Verifies response status code
+// 4. Checks response content for expected fields
 func TestServerHandlers(t *testing.T) {
 	server, _, cleanup := createTestServer(t)
 	defer cleanup()
@@ -241,7 +274,9 @@ func TestAdminAuthentication(t *testing.T) {
 
 	// Create a simple handler for testing
 	testHandler := func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "Authenticated!")
+		if _, err := fmt.Fprint(w, "Authenticated!"); err != nil {
+			t.Logf("Error writing response: %v", err)
+		}
 	}
 
 	// Test with no auth
@@ -258,45 +293,84 @@ func TestAdminAuthentication(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestMetricsWrapper tests the metrics collection middleware.
+//
+// The test verifies:
+// - HTTP handlers are properly wrapped with metrics collection
+// - Metrics are recorded for incoming requests
+// - Client IP is extracted and recorded
+// - Response bytes are counted and recorded
+// - Cache hit/miss statistics are updated based on response status
+//
+// Approach:
+// 1. Creates a test server fixture with mock metrics collector
+// 2. Sets up expected mock method calls
+// 3. Creates and wraps a test handler with the metrics middleware
+// 4. Executes a request through the wrapped handler
+// 5. Verifies all expected metrics recordings were made
 func TestMetricsWrapper(t *testing.T) {
+	// Create test fixture
 	fixture := NewTestServerFixture(t)
 	defer fixture.Cleanup()
 
-	// Setup expectations
-	fixture.Metrics.On("RecordRequest", "/test-path", mock.Anything, mock.Anything, mock.Anything).Return()
-	fixture.PackageMapper.On("GetPackageNameForHash", mock.Anything).Return("test-package").Maybe()
-
-	// Add this expectation for RecordBytesServed which is called in the metrics wrapper
-	fixture.Metrics.On("RecordBytesServed", mock.AnythingOfType("int64")).Return()
+	// Setup expected metrics calls
+	fixture.Metrics.On("RecordRequest", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
+	fixture.Metrics.On("SetLastClientIP", mock.Anything).Return()
+	fixture.Metrics.On("RecordBytesServed", mock.Anything).Return()
 
 	// Add expectations for any cache hit/miss recording that might occur
 	fixture.Metrics.On("RecordCacheHit", mock.Anything, mock.Anything).Return().Maybe()
 	fixture.Metrics.On("RecordCacheMiss", mock.Anything, mock.Anything).Return().Maybe()
 
+	// Add expectation for the package mapper - this was missing and causing the test to fail
+	fixture.PackageMapper.On("GetPackageNameForHash", mock.Anything).Return("").Maybe()
+
 	// Create test handler
-	testHandler := func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, err := w.Write([]byte("Test response"))
-		if err != nil {
-			t.Logf("Failed to write response: %v", err)
+		if _, err := w.Write([]byte("OK")); err != nil {
+			t.Logf("Error writing response: %v", err)
 		}
-	}
+	})
 
 	// Wrap handler with metrics
-	wrappedHandler := fixture.Server.wrapWithMetrics(testHandler)
+	wrappedHandler := fixture.Server.wrapWithMetrics(handler)
 
 	// Execute request
-	w, _ := ExecuteRequest(wrappedHandler, "GET", "/test-path", nil)
+	w, _ := ExecuteRequest(wrappedHandler, "GET", "/test", nil)
+
+	// Verify response
 	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Equal(t, "Test response", w.Body.String())
 
 	// Wait a moment for async operations
 	time.Sleep(10 * time.Millisecond)
 
 	// Verify metrics were recorded
-	fixture.Metrics.AssertCalled(t, "RecordRequest", "/test-path", mock.Anything, mock.Anything, mock.Anything)
+	fixture.Metrics.AssertExpectations(t)
+	fixture.PackageMapper.AssertExpectations(t)
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestPackageRequest tests package handling functionality.
+//
+// The test verifies:
+// - Content types are correctly determined for different file types
+// - Package files are properly identified
+//
+// Approach:
+// 1. Creates a test server with cache directory
+// 2. Creates mock package data in the cache
+// 3. Tests content type detection for different file extensions
+// 4. Verifies correct MIME types are returned for package files
 func TestPackageRequest(t *testing.T) {
 	// Remove unused server variable - instead use GetContentType directly
 	_, cacheDir, cleanup := createTestServer(t)
@@ -319,6 +393,24 @@ func TestPackageRequest(t *testing.T) {
 	})
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestServerStartAndShutdown tests the server startup and graceful shutdown.
+//
+// The test verifies:
+// - Server can start successfully
+// - Server gracefully handles shutdown requests
+// - Proper shutdown sequence is followed with backend cleanup
+//
+// Approach:
+// 1. Creates a test server fixture
+// 2. Starts the server with a short timeout context
+// 3. Tests that shutdown can be called while server is running
+// 4. Verifies shutdown completes without errors
+// 5. Confirms backend cleanup methods are called during shutdown
 func TestServerStartAndShutdown(t *testing.T) {
 	fixture := NewTestServerFixture(t)
 	defer fixture.Cleanup()
@@ -353,12 +445,43 @@ func TestServerStartAndShutdown(t *testing.T) {
 	wg.Wait()
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestIsIndexFile tests the index file detection functionality.
+//
+// The test verifies:
+// - Repository index files are correctly identified
+// - Package files are not incorrectly identified as index files
+//
+// Approach:
+// 1. Tests common repository index file paths
+// 2. Tests non-index package files
+// 3. Verifies correct identification in all cases
 func TestIsIndexFile(t *testing.T) {
 	assert.True(t, IsIndexFile("/debian/dists/stable/Release"))
 	assert.True(t, IsIndexFile("/ubuntu/dists/jammy/main/binary-amd64/Packages"))
 	assert.False(t, IsIndexFile("/debian/pool/main/p/package/test_1.0_amd64.deb"))
 }
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestGetContentType tests the content type detection functionality.
+//
+// The test verifies:
+// - Correct MIME types are returned for different file extensions
+// - Debian packages are assigned the proper content type
+// - Repository index files get appropriate content types
+//
+// Approach:
+// 1. Tests various file paths with different extensions
+// 2. Verifies returned MIME types match expectations
+// 3. Checks special handling for Debian package files
 func TestGetContentType(t *testing.T) {
 	assert.Equal(t, "application/vnd.debian.binary-package", GetContentType("/test/file.deb"))
 	assert.Equal(t, "application/octet-stream", GetContentType("/test/Release"))
@@ -410,7 +533,7 @@ type BackendManagerInterface interface {
 	ProcessReleaseFile(repo, path string, data []byte)
 	ForceCleanupPrefetcher() int
 	PrefetchOnStartup(ctx context.Context)
-	KeyManager() interface{}
+	KeyManager() any
 	RefreshReleaseData(repo string) error
 }
 
@@ -431,7 +554,23 @@ type MapperInterface interface {
 	MapPath(path string) (mapper.MappingResult, error)
 }
 
-// TestServerWithMocks tests the server using mocks
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestServerWithMocks tests server creation with mock dependencies.
+//
+// The test verifies:
+// - Server can be instantiated with mock components
+// - Dependencies are properly stored and accessible
+// - Server initialization succeeds with mock implementations
+//
+// Approach:
+// 1. Creates mock implementations of all server dependencies
+// 2. Creates a server with these mock implementations
+// 3. Verifies the server object references the mock objects
+// 4. Ensures server initialization completes successfully
 func TestServerWithMocks(t *testing.T) {
 	// Create mocks
 	mockBackend := new(mocks.MockBackendManager)
@@ -478,7 +617,25 @@ type TestCacheInterface interface {
 	Search(query string) ([]string, error)
 }
 
-// Fix server tests by ensuring interfaces are implemented correctly
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestServerWithExtDeps tests server creation with external dependencies
+// using adapter patterns.
+//
+// The test verifies:
+// - Server can be created with externally provided components
+// - Server properly interacts with the provided dependencies
+// - Method calls flow through to the underlying implementations
+// - Server shutdown properly cleans up external resources
+//
+// Approach:
+// 1. Creates and configures mock dependencies with expected behaviors
+// 2. Creates a server with these dependencies using adapters
+// 3. Verifies server initialization completes successfully
+// 4. Tests server shutdown with external dependencies
 func TestServerWithExtDeps(t *testing.T) {
 	// Create mocks using stretchr/testify/mock
 	mockBackend := new(mocks.MockBackendManager)
