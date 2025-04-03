@@ -1,15 +1,19 @@
-In Golang always use `strings.Contains` not `strings.contains`
-
-In Golang always use `any` in place of an `interface{}`
-
-In Golang prefer a range over a c style loop
-
 Always extensively document functions
 
 Always extensively document methods
 
 Always extensively document tests
 
+All test functions should have a documentation block above them that says folled by standard documentation:
+```
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+```
+
 Always escape tripple backticks with a backslash in documentation
 
-Always generate a single unified file with the fixes rather than individual fixes
+Always generate a single unified file with all fixes required
+
+When updating tests update the documentation as well so it stays consistent
