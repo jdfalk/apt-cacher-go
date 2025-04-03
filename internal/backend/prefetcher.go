@@ -265,6 +265,9 @@ func (p *Prefetcher) processSingleURL(repo, url string) {
 
 	// Skip if already in progress
 	if _, loaded := p.active.LoadOrStore(urlID, time.Now()); loaded {
+		if p.verboseLogging {
+			log.Printf("Prefetch already in progress: %s", url)
+		}
 		return
 	}
 
@@ -459,6 +462,7 @@ func (p *Prefetcher) IsArchitectureEnabled(arch string) bool {
 // SetVerboseLogging controls whether to log 404 errors
 func (p *Prefetcher) SetVerboseLogging(verbose bool) {
 	p.verboseLogging = verbose
+	log.Printf("Prefetcher verbose logging %s", map[bool]string{true: "enabled", false: "disabled"}[verbose])
 }
 
 // RunStartupPrefetch warms the cache by fetching common index files
