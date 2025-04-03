@@ -68,7 +68,22 @@ func TestNewKeyManager(t *testing.T) {
 
 	km2, err := New(disabledCfg, tempDir, debugOptions)
 	require.NoError(t, err)
-	assert.Nil(t, km2)
+	assert.Nil(t, km2, "KeyManager should be nil when configuration is disabled")
+
+	// Test without debug options (using nil)
+	enabledNoDebugCfg := &config.KeyManagementConfig{
+		Enabled:      true,
+		AutoRetrieve: true,
+		KeyTTL:       "365d",
+		Keyservers:   []string{"hkp://keyserver.ubuntu.com"},
+		KeyDir:       keyDir,
+	}
+
+	km3, err := New(enabledNoDebugCfg, tempDir, nil)
+	require.NoError(t, err)
+	require.NotNil(t, km3)
+	assert.Equal(t, keyDir, km3.config.KeyDir)
+	assert.False(t, km3.showKeyOperations, "Debug logging should be disabled by default")
 }
 
 // IMPORTANT: The documentation comment block below should not be removed unless
@@ -238,7 +253,10 @@ func TestFetchKey(t *testing.T) {
 			if query.Get("op") == "get" && query.Get("search") == "0x12345678" {
 				// Return a mock key
 				w.Header().Set("Content-Type", "application/pgp-keys")
-				w.Write([]byte("-----BEGIN PGP PUBLIC KEY BLOCK-----\nVersion: GnuPG v1\n\nmock key data\n-----END PGP PUBLIC KEY BLOCK-----"))
+				_, err := w.Write([]byte("-----BEGIN PGP PUBLIC KEY BLOCK-----\nVersion: GnuPG v1\n\nmock key data\n-----END PGP PUBLIC KEY BLOCK-----"))
+				if err != nil {
+					t.Fatalf("failed to write response: %v", err)
+				}
 				return
 			}
 		}
@@ -339,7 +357,11 @@ func TestKeyManagerWithExistingKeys(t *testing.T) {
 		KeyDir:       keyDir,
 	}
 
-	km, err := New(cfg, tempDir)
+	debugOptions := &config.DebugLog{
+		ShowKeyOperations: false,
+	}
+
+	km, err := New(cfg, tempDir, debugOptions)
 	require.NoError(t, err)
 
 	// Key cache should be populated with existing keys
@@ -384,7 +406,11 @@ func TestVerifySignature(t *testing.T) {
 		KeyDir:       keyDir,
 	}
 
-	km, err := New(cfg, tempDir)
+	debugOptions := &config.DebugLog{
+		ShowKeyOperations: false,
+	}
+
+	km, err := New(cfg, tempDir, debugOptions)
 	require.NoError(t, err)
 
 	// Create a mock key file
@@ -489,7 +515,11 @@ func TestPrefetchDefaultKeys(t *testing.T) {
 		KeyDir:       keyDir,
 	}
 
-	km, err := New(cfg, tempDir)
+	debugOptions := &config.DebugLog{
+		ShowKeyOperations: false,
+	}
+
+	km, err := New(cfg, tempDir, debugOptions)
 	require.NoError(t, err)
 
 	// Test prefetching with a custom key list

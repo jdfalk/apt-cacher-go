@@ -25,7 +25,7 @@ type KeyManager struct {
 	config            *config.KeyManagementConfig // Configuration for key management
 	keyCache          map[string]time.Time        // Cache of known keys with their fetch time
 	fetchMutex        sync.RWMutex                // Mutex to protect concurrent operations on keyCache
-	showKeyOperations bool                        // Flag to enable logging of key operations
+	showKeyOperations bool                        // Flag to enable detailed key operation logging
 }
 
 // New creates a new key manager instance with debug options
@@ -92,6 +92,7 @@ func New(cfg *config.KeyManagementConfig, cacheDir string, debugOptions *config.
 		log.Printf("Successfully verified key directory %s is writable", keyDir)
 	}
 
+	// Initialize the key manager with debug options
 	manager := &KeyManager{
 		config:            cfg,
 		keyCache:          make(map[string]time.Time),
@@ -110,15 +111,18 @@ func New(cfg *config.KeyManagementConfig, cacheDir string, debugOptions *config.
 				if err == nil {
 					// Store the key ID in the original case from the filename
 					manager.keyCache[keyID] = info.ModTime()
-					log.Printf("Loaded existing GPG key: %s", keyID)
+					if manager.showKeyOperations {
+						log.Printf("[KEY OPERATION] Loaded existing GPG key: %s", keyID)
+					}
 				}
 			}
 		}
-		log.Printf("Initialized key cache with %d existing keys", len(manager.keyCache))
-	}
 
-	if manager.showKeyOperations {
-		log.Printf("[KEY OPERATION] Initialized key cache with %d existing keys", len(manager.keyCache))
+		if manager.showKeyOperations {
+			log.Printf("[KEY OPERATION] Initialized key cache with %d existing keys", len(manager.keyCache))
+		} else {
+			log.Printf("Initialized key cache with %d existing keys", len(manager.keyCache))
+		}
 	}
 
 	return manager, nil
@@ -209,11 +213,12 @@ func (km *KeyManager) FetchKey(keyID string) error {
 	if exists {
 		// Check if the key file actually exists
 		keyPath := km.GetKeyPath(keyID)
-		if km.showKeyOperations {
-			log.Printf("[KEY OPERATION] Checking if key file %s exists on disk", keyPath)
-		}
 		if _, err := os.Stat(keyPath); os.IsNotExist(err) {
-			log.Printf("Key %s is in cache but file doesn't exist. Will re-download.", keyID)
+			if km.showKeyOperations {
+				log.Printf("[KEY OPERATION] Key %s is in cache but file doesn't exist. Will re-download.", keyID)
+			} else {
+				log.Printf("Key %s is in cache but file doesn't exist. Will re-download.", keyID)
+			}
 		} else {
 			keyTTL, err := time.ParseDuration(km.config.KeyTTL)
 			if err != nil {
@@ -221,10 +226,19 @@ func (km *KeyManager) FetchKey(keyID string) error {
 			}
 
 			if time.Since(fetchTime) < keyTTL {
-				log.Printf("Key %s already exists and is not expired", keyID)
+				if km.showKeyOperations {
+					log.Printf("[KEY OPERATION] Key %s already exists and is not expired", keyID)
+				} else {
+					log.Printf("Key %s already exists and is not expired", keyID)
+				}
 				return nil
 			}
-			log.Printf("Key %s exists but has expired. Will refresh.", keyID)
+
+			if km.showKeyOperations {
+				log.Printf("[KEY OPERATION] Key %s exists but has expired. Will refresh.", keyID)
+			} else {
+				log.Printf("Key %s exists but has expired. Will refresh.", keyID)
+			}
 		}
 	}
 
@@ -237,13 +251,21 @@ func (km *KeyManager) FetchKey(keyID string) error {
 		if strings.EqualFold(cachedKeyID, keyID) {
 			keyPath := km.GetKeyPath(cachedKeyID)
 			if _, err := os.Stat(keyPath); err == nil {
-				log.Printf("Key %s was added by another goroutine while waiting", cachedKeyID)
+				if km.showKeyOperations {
+					log.Printf("[KEY OPERATION] Key %s was added by another goroutine while waiting", cachedKeyID)
+				} else {
+					log.Printf("Key %s was added by another goroutine while waiting", cachedKeyID)
+				}
 				return nil
 			}
 		}
 	}
 
-	log.Printf("Starting fetch for key %s", keyID)
+	if km.showKeyOperations {
+		log.Printf("[KEY OPERATION] Starting fetch for key %s", keyID)
+	} else {
+		log.Printf("Starting fetch for key %s", keyID)
+	}
 
 	// Make sure we have at least one keyserver configured
 	if len(km.config.Keyservers) == 0 {
@@ -256,19 +278,26 @@ func (km *KeyManager) FetchKey(keyID string) error {
 	for _, server := range km.config.Keyservers {
 		if km.showKeyOperations {
 			log.Printf("[KEY OPERATION] Trying keyserver %s for key %s", server, keyID)
+		} else {
+			log.Printf("Trying keyserver %s for key %s", server, keyID)
 		}
+
 		err := km.fetchKeyFromServer(server, keyID)
 		if err == nil {
 			// Update cache time
 			km.keyCache[keyID] = time.Now()
 			if km.showKeyOperations {
 				log.Printf("[KEY OPERATION] Successfully retrieved key %s from %s", keyID, server)
+			} else {
+				log.Printf("Successfully retrieved key %s from %s", keyID, server)
 			}
 			return nil
 		}
 		lastErr = err
 		if km.showKeyOperations {
 			log.Printf("[KEY OPERATION] Failed to retrieve key %s from %s: %v", keyID, server, err)
+		} else {
+			log.Printf("Failed to retrieve key %s from %s: %v", keyID, server, err)
 		}
 	}
 
@@ -631,16 +660,16 @@ func (km *KeyManager) PrefetchDefaultKeys(keys []string) (int, int, error) {
 		}
 	}
 
-	log.Printf("Completed prefetch of default GPG keys: %d successful, %d failed",
+	log.Printf("Completed prefetch of default keys: %d successful, %d failed",
 		successful, failed)
 
 	return successful, failed, nil
 }
 
-// RefreshExpiredKeys checks for and refreshes any expired keys.
+// RefreshExpiredKeys refreshes any keys in the cache that have expired.
 //
-// This function scans the key cache for expired keys and attempts to
-// refresh them from the configured keyservers.
+// This function checks all keys in the cache and refreshes any that have
+// exceeded their TTL by downloading them again from the keyservers.
 //
 // Returns:
 // - refreshed: Number of keys successfully refreshed
