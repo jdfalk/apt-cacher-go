@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -68,7 +69,7 @@ type Backend struct {
 	client   *http.Client // Added client field
 }
 
-// Modify the New function to use createHTTPClient
+// Modify the New function to use createHTTPClient and add default key prefetching
 func New(cfg *config.Config, cache CacheProvider, mapper PathMapperProvider, packageMapper PackageMapperProvider) (*Manager, error) {
 	// Create manager first so we can use its methods
 	m := &Manager{
@@ -105,6 +106,31 @@ func New(cfg *config.Config, cache CacheProvider, mapper PathMapperProvider, pac
 		return nil, fmt.Errorf("failed to initialize key manager: %w", err)
 	}
 	m.keyManager = km
+
+	// Prefetch common repository keys if key management is enabled
+	if km != nil && cfg.KeyManagement.Enabled {
+		// Define comprehensive list of common repository keys
+		commonKeys := []string{
+			"871920D1991BC93C", // Ubuntu archive
+			"3B4FE6ACC0B21F32", // Debian archive
+			"A1BD8E9D78F7FE5C", // Debian security
+			"F6ECB3762474EDA9", // Docker release
+			"54404762BBB6E853", // PostgreSQL
+			"8507EFA5",         // Grafana
+			"D94AA3F0",         // NodeJS
+		}
+
+		// Start prefetching in background to avoid blocking startup
+		go func() {
+			log.Printf("Starting prefetch of %d common repository keys", len(commonKeys))
+			successful, failed, err := km.PrefetchDefaultKeys(commonKeys)
+			if err != nil {
+				log.Printf("Error during key prefetch: %v", err)
+			} else {
+				log.Printf("Key prefetch complete: %d successful, %d failed", successful, failed)
+			}
+		}()
+	}
 
 	// Create the download queue
 	m.downloadQ = queue.New(cfg.MaxConcurrentDownloads)
@@ -156,7 +182,7 @@ func (m *Manager) Shutdown() {
 	}
 }
 
-// Fix the Fetch method to use selectBackendByName
+// Modify the Fetch method to enhance error handling for keys
 func (m *Manager) Fetch(path string) ([]byte, error) {
 	// Check if this is a keyserver request we need to handle
 	if strings.Contains(path, "/keys/") || strings.Contains(path, "/pks/lookup") {
@@ -182,16 +208,27 @@ func (m *Manager) Fetch(path string) ([]byte, error) {
 		return nil, err
 	}
 
-	// Check response for GPG key errors
+	// Enhanced key error detection and handling
 	if m.keyManager != nil {
 		keyID, hasKeyError := m.keyManager.DetectKeyError(data)
 		if hasKeyError {
-			log.Printf("Detected missing GPG key: %s, attempting to fetch", keyID)
+			log.Printf("Detected missing GPG key: %s for path %s, attempting to fetch", keyID, path)
 			err := m.keyManager.FetchKey(keyID)
 			if err != nil {
 				log.Printf("Failed to fetch key %s: %v", keyID, err)
 			} else {
-				log.Printf("Successfully fetched key %s", keyID)
+				log.Printf("Successfully fetched key %s, retrying request", keyID)
+
+				// Look for additional keys in the response
+				keyIDs := extractKeyReferences(data)
+				for _, additionalKey := range keyIDs {
+					if additionalKey != keyID && len(additionalKey) >= 8 {
+						log.Printf("Found additional key reference %s, prefetching", additionalKey)
+						if fetchErr := m.keyManager.FetchKey(additionalKey); fetchErr != nil {
+							log.Printf("Failed to fetch additional key %s: %v", additionalKey, fetchErr)
+						}
+					}
+				}
 
 				// Now we need to re-fetch the original content, which might
 				// succeed if the backend can use the key we just fetched
@@ -201,11 +238,25 @@ func (m *Manager) Fetch(path string) ([]byte, error) {
 					_, stillHasError := m.keyManager.DetectKeyError(updatedData)
 					if !stillHasError {
 						log.Printf("Successfully fetched content after retrieving key %s", keyID)
+
+						// If this is a Release file, process it to find index files
+						if strings.HasSuffix(path, "Release") || strings.HasSuffix(path, "InRelease") {
+							m.ProcessReleaseFile(mappingResult.Repository, path, updatedData)
+						}
+
 						return updatedData, nil
 					}
+					log.Printf("Key error persists after fetching key %s, returning original response", keyID)
+				} else {
+					log.Printf("Retry failed after fetching key %s: %v", keyID, retryErr)
 				}
 			}
 		}
+	}
+
+	// For release files, process them to find index files
+	if strings.HasSuffix(path, "Release") || strings.HasSuffix(path, "InRelease") {
+		m.ProcessReleaseFile(mappingResult.Repository, path, data)
 	}
 
 	return data, nil
@@ -605,4 +656,36 @@ func (m *Manager) RefreshReleaseData(path string) error {
 	// Process the release file with updated data
 	m.ProcessReleaseFile(mappingResult.Repository, path, data)
 	return nil
+}
+
+// Helper function to extract key references
+func extractKeyReferences(data []byte) []string {
+	content := string(data)
+	keyIDs := make([]string, 0)
+
+	// Look for common key reference formats
+	patterns := []string{
+		`Key ID: ([0-9A-F]{8,})`,
+		`keyid ([0-9A-F]{8,})`,
+		`fingerprint: ([0-9A-F]{40})`,
+		`NO_PUBKEY ([0-9A-F]{8,})`,
+		`gpg: using RSA key ([0-9A-F]{8,})`,
+	}
+
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		matches := re.FindAllStringSubmatch(content, -1)
+		for _, match := range matches {
+			if len(match) > 1 {
+				// For fingerprints, use the last 8+ characters as keyID
+				keyID := match[1]
+				if len(keyID) > 16 {
+					keyID = keyID[len(keyID)-16:]
+				}
+				keyIDs = append(keyIDs, keyID)
+			}
+		}
+	}
+
+	return keyIDs
 }
