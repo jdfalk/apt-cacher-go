@@ -22,6 +22,7 @@ import (
 	"github.com/jdfalk/apt-cacher-go/internal/backend"
 	cachelib "github.com/jdfalk/apt-cacher-go/internal/cache" // Use alias
 	"github.com/jdfalk/apt-cacher-go/internal/config"
+	"github.com/jdfalk/apt-cacher-go/internal/keymanager"
 	"github.com/jdfalk/apt-cacher-go/internal/mapper"
 	"github.com/jdfalk/apt-cacher-go/internal/metrics"
 	"github.com/jdfalk/apt-cacher-go/internal/security"
@@ -52,73 +53,53 @@ type Server struct {
 
 // New creates a new Server instance with the provided options
 func New(cfg *config.Config, opts ServerOptions) (*Server, error) {
-	var cache Cache
-	var pathMapper PathMapper
-	var packageMapper PackageMapper
-	var backendManager BackendManager
-	var metricsCollector MetricsCollector
-	var memoryMonitor MemoryMonitorInterface
-
 	// Create cache or use provided
-	cache = opts.Cache
-	if cache == nil {
-		cacheInstance, err := cachelib.New(cfg.CacheDir, 10*1024*1024*1024) // 10GB default
+	var cacheProvider Cache
+	if opts.Cache != nil {
+		cacheProvider = opts.Cache
+	} else {
+		cacheSize, err := cfg.ParseCacheSize()
+		if err != nil {
+			return nil, fmt.Errorf("invalid cache size: %w", err)
+		}
+
+		cache, err := cachelib.New(cfg.CacheDir, cacheSize)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create cache: %w", err)
 		}
-		cache = &CacheAdapter{Cache: cacheInstance}
+		cacheProvider = &CacheAdapter{Cache: cache}
 	}
 
 	// Create path mapper or use provided
-	pathMapper = opts.PathMapper
-	if pathMapper == nil {
-		mapperInstance := mapper.New()
-		// Add default repositories
-		for _, rule := range cfg.MappingRules {
-			switch rule.Type {
-			case "prefix":
-				// Fix: Call AddRule with appropriate parameters instead
-				if err := mapperInstance.AddRule("prefix", rule.Pattern, rule.Repository, rule.Priority); err != nil {
-					return nil, fmt.Errorf("failed to add prefix rule: %w", err)
-				}
-			case "regex":
-				if err := mapperInstance.AddRule("regex", rule.Pattern, rule.Repository, rule.Priority); err != nil {
-					return nil, fmt.Errorf("failed to add regex rule: %w", err)
-				}
-			case "exact":
-				if err := mapperInstance.AddRule("exact", rule.Pattern, rule.Repository, rule.Priority); err != nil {
-					return nil, fmt.Errorf("failed to add exact rule: %w", err)
-				}
-			case "rewrite":
-				// Handle rewrite case with additional rewrite rule parameter
-				if rule.RewriteRule != "" {
-					if err := mapperInstance.AddRewriteRule(rule.Pattern, rule.Repository, rule.RewriteRule, rule.Priority); err != nil {
-						return nil, fmt.Errorf("failed to add rewrite rule: %w", err)
-					}
-				} else {
-					if err := mapperInstance.AddRule("rewrite", rule.Pattern, rule.Repository, rule.Priority); err != nil {
-						return nil, fmt.Errorf("failed to add rewrite rule: %w", err)
-					}
-				}
-			}
-		}
-		// ADD THIS: Call addDefaultRepositories here
-		addDefaultRepositories(cfg, mapperInstance)
-		pathMapper = &MapperAdapter{PathMapper: mapperInstance}
+	var pathMapper PathMapper
+	if opts.PathMapper != nil {
+		pathMapper = opts.PathMapper
+	} else {
+		mapper := mapper.New()
+		pathMapper = &MapperAdapter{PathMapper: mapper}
 	}
 
 	// Create package mapper or use provided
-	packageMapper = opts.PackageMapper
-	if packageMapper == nil {
+	var packageMapper PackageMapper
+	if opts.PackageMapper != nil {
+		packageMapper = opts.PackageMapper
+	} else {
 		packageMapper = mapper.NewPackageMapper()
 	}
 
+	// Initialize key manager with debug options
+	keyManagerConfig := cfg.KeyManagement
+	keyManager, err := keymanager.New(&keyManagerConfig, cfg.CacheDir, &cfg.Log.Debug)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize key manager: %w", err)
+	}
+
 	// Create backend manager or use provided
-	backendManager = opts.BackendManager
-	if backendManager == nil {
-		manager, err := backend.New(cfg, cache.(backend.CacheProvider),
-			pathMapper.(backend.PathMapperProvider),
-			packageMapper.(backend.PackageMapperProvider))
+	var backendManager BackendManager
+	if opts.BackendManager != nil {
+		backendManager = opts.BackendManager
+	} else {
+		manager, err := backend.New(cfg, cacheProvider, pathMapper, packageMapper)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create backend manager: %w", err)
 		}
@@ -126,92 +107,115 @@ func New(cfg *config.Config, opts ServerOptions) (*Server, error) {
 	}
 
 	// Create metrics collector or use provided
-	metricsCollector = opts.MetricsCollector
-	if metricsCollector == nil {
-		metricsCollector = &MetricsAdapter{Collector: metrics.New()}
+	var metricsCollector MetricsCollector
+	if opts.MetricsCollector != nil {
+		metricsCollector = opts.MetricsCollector
+	} else {
+		collector := metrics.New()
+		metricsCollector = &MetricsAdapter{Collector: collector}
 	}
 
 	// Create memory monitor or use provided
-	memoryMonitor = opts.MemoryMonitor
-	if memoryMonitor == nil {
-		highWatermark := 1024     // Default 1GB in MB
-		criticalWatermark := 2048 // Default 2GB in MB
+	var memoryMonitor MemoryMonitorInterface
+	if opts.MemoryMonitor != nil {
+		memoryMonitor = opts.MemoryMonitor
+	} else {
+		// Get memory watermarks from config
+		highWatermarkMB := cfg.ApplicationMemoryMB
+		criticalWatermarkMB := int(float64(highWatermarkMB) * 1.3) // 30% higher by default
 
-		// Try to read from config metadata if available
-		if val, ok := cfg.GetMetadata("memory_management.high_watermark_mb"); ok {
-			if v, ok := val.(int); ok {
-				highWatermark = v
+		// Check if custom watermarks are defined in metadata
+		if metaWatermark, ok := cfg.GetMetadata("memory_management"); ok {
+			if watermarkMap, ok := metaWatermark.(map[string]any); ok {
+				if high, ok := watermarkMap["high_watermark_mb"]; ok {
+					if highInt, ok := high.(int); ok {
+						highWatermarkMB = highInt
+					}
+				}
+				if critical, ok := watermarkMap["critical_watermark_mb"]; ok {
+					if criticalInt, ok := critical.(int); ok {
+						criticalWatermarkMB = criticalInt
+					}
+				}
 			}
 		}
-		if val, ok := cfg.GetMetadata("memory_management.critical_watermark_mb"); ok {
-			if v, ok := val.(int); ok {
-				criticalWatermark = v
-			}
-		}
 
-		// Create the monitor but store the pressure handler as a variable for later
-		pressureHandler := func(pressure int) {
-			// Will be assigned to the server instance later
-		}
-
-		monitor := NewMemoryMonitor(
-			highWatermark,
-			criticalWatermark,
-			pressureHandler)
+		monitor := NewMemoryMonitor(highWatermarkMB, criticalWatermarkMB, nil)
 		memoryMonitor = &MemoryMonitorAdapter{MemoryMonitor: monitor}
 	}
 
 	// Create the server instance
 	s := &Server{
 		cfg:           cfg,
-		cache:         cache,
+		cache:         cacheProvider,
 		backend:       backendManager,
+		metrics:       metricsCollector,
+		acl:           nil, // Will initialize below
 		mapper:        pathMapper,
 		packageMapper: packageMapper,
-		metrics:       metricsCollector,
 		startTime:     time.Now(),
 		version:       opts.Version,
 		memoryMonitor: memoryMonitor,
 		shutdownCh:    make(chan struct{}),
 	}
 
-	// Now we can update the memory pressure handler to use the server instance
-	if monitor, ok := memoryMonitor.(*MemoryMonitorAdapter); ok {
-		monitor.MemoryMonitor.SetPressureHandler(func(pressure int) {
-			s.handleHighMemoryPressure(float64(pressure) / 100)
-		})
-	}
-
-	// Configure logger
+	// Configure logger based on new log configuration
 	var logWriter io.Writer = os.Stdout
 
-	// Check if log file is specified in config
-	if cfg.LogFile != "" {
+	// Check if file logging is enabled in config
+	if cfg.Log.FileEnabled && cfg.Log.File != "" {
+		// Create directory if it doesn't exist
+		logDir := filepath.Dir(cfg.Log.File)
+		if err := os.MkdirAll(logDir, 0755); err != nil {
+			log.Printf("Warning: Could not create log directory %s: %v", logDir, err)
+		}
+
 		// Open log file in append mode, create if it doesn't exist
-		logFile, err := os.OpenFile(cfg.LogFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		logFile, err := os.OpenFile(cfg.Log.File, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
 			// Log warning but continue with stdout only
-			log.Printf("Warning: Could not open log file %s: %v, using stdout only", cfg.LogFile, err)
+			log.Printf("Warning: Could not open log file %s: %v, using stdout only", cfg.Log.File, err)
 		} else {
-			// Use MultiWriter to log to both stdout and file
-			logWriter = io.MultiWriter(os.Stdout, logFile)
-			log.Printf("Logging to %s and stdout", cfg.LogFile)
+			// Based on stdout setting
+			if cfg.Log.Stdout {
+				// Use MultiWriter to log to both stdout and file
+				logWriter = io.MultiWriter(os.Stdout, logFile)
+				log.Printf("Logging to %s and stdout", cfg.Log.File)
+			} else {
+				// Log to file only
+				logWriter = logFile
+				log.Printf("Logging to %s only", cfg.Log.File)
+			}
 		}
 	}
 
-	// Use the configured writer
+	// Initialize logger
 	if opts.Logger != nil {
 		// If a specific logger is provided, use it instead
 		s.logger = log.New(opts.Logger, "apt-cacher-go: ", log.LstdFlags)
 	} else {
-		// Use our configured writer (stdout or stdout+file)
+		// Use our configured writer
 		s.logger = log.New(logWriter, "apt-cacher-go: ", log.LstdFlags)
 	}
 
-	// Also redirect standard logger to our writer to capture all log messages
+	// Redirect standard logger to our writer to capture all log messages
 	log.SetOutput(logWriter)
 
-	// Set up HTTP handlers
+	// Log debug options status
+	log.Printf("Debug options: prefetcher_verbose=%t, dev_suppress_errors=%t, show_key_operations=%t, trace_http_requests=%t",
+		cfg.Log.Debug.PrefetcherVerbose,
+		cfg.Log.Debug.DevSuppressErrors,
+		cfg.Log.Debug.ShowKeyOperations,
+		cfg.Log.Debug.TraceHTTPRequests)
+
+	// Initialize ACL
+	acl, err := security.New(cfg.AllowedIPs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create ACL: %w", err)
+	}
+	s.acl = acl
+
+	// Configure HTTP handlers
 	s.setupHTTPHandlers()
 
 	// Start the memory monitor
@@ -229,8 +233,8 @@ func (s *Server) setupHTTPHandlers() {
 	// Set up main server handlers
 	mainMux.HandleFunc("/", s.handleRootRequest)
 	mainMux.HandleFunc("/acng-report.html", s.handleReportRequest)
-	mainMux.HandleFunc("/health", s.handleHealth)
-	mainMux.HandleFunc("/ready", s.handleReady)
+	mainMux.HandleFunc("/health", s.wrapWithMetrics(s.handleHealth))
+	mainMux.HandleFunc("/ready", s.wrapWithMetrics(s.handleReady))
 	mainMux.HandleFunc("/metrics", s.handleMetrics)
 
 	// Add direct key endpoint for GPG keys
@@ -455,69 +459,47 @@ func (s *Server) Shutdown() error {
 
 // wrapWithMetrics wraps a handler with metrics collection
 func (s *Server) wrapWithMetrics(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// Extract client IP
-		clientIP := extractClientIP(r)
-
-		// Start timing
+	return s.wrapWithTracing(func(w http.ResponseWriter, r *http.Request) {
+		// Original metrics code
 		start := time.Now()
-
-		// Wrap response writer to capture status
 		rw := newResponseWriter(w)
 
-		// Get associated package name if available
-		packageName := ""
-		if s.packageMapper != nil {
-			s.mutex.Lock()
-			packageName = s.packageMapper.GetPackageNameForHash(r.URL.Path)
-			s.mutex.Unlock()
+		// Extract client IP
+		clientIP := s.extractClientIP(r)
 
-			// Add debug logging
-			if packageName != "" {
-				log.Printf("Found package name for %s: %s", r.URL.Path, packageName)
-			}
-		}
+		// Update metrics
+		s.metrics.SetLastClientIP(clientIP)
+
+		// Extract package name if available
+		packageName := s.packageMapper.GetPackageNameForHash(r.URL.Path)
 
 		// Process the request
 		next(rw, r)
 
-		// Record timing and status
+		// Calculate duration
 		duration := time.Since(start)
+
+		// Record metrics
 		status := "hit"
-		if rw.statusCode >= 400 {
-			status = "error"
-		} else if rw.statusCode == 307 || rw.statusCode == 302 {
-			status = "redirect"
-		} else if rw.statusCode == 200 && strings.Contains(r.Header.Get("X-Cache"), "MISS") {
+		if rw.statusCode == 404 {
 			status = "miss"
+		} else if rw.statusCode >= 300 && rw.statusCode < 400 {
+			status = "redirect"
 		}
 
-		// Log with enhanced information
-		packageInfo := ""
-		if packageName != "" {
-			packageInfo = fmt.Sprintf(" [%s]", packageName)
-		}
-
-		log.Printf("%s %s%s\t%.2f\t%s\t%s",
-			clientIP, r.URL.Path, packageInfo,
-			float64(duration.Milliseconds())/1000.0, status,
-			byteCountSI(rw.bytesWritten))
-
-		// Record metrics with full information including client IP and package name
+		// Record metrics with full information
 		s.mutex.Lock()
 		s.metrics.RecordRequest(r.URL.Path, duration, clientIP, packageName)
 		s.metrics.RecordBytesServed(rw.bytesWritten)
 
-		// Update hit/miss stats based on status
+		// Update hit/miss stats
 		if status == "hit" {
 			s.metrics.RecordCacheHit(r.URL.Path, rw.bytesWritten)
 		} else if status == "miss" {
 			s.metrics.RecordCacheMiss(r.URL.Path, rw.bytesWritten)
-		} else if status == "error" {
-			s.metrics.RecordError(r.URL.Path)
 		}
 		s.mutex.Unlock()
-	}
+	})
 }
 
 // Helper function to format byte sizes
@@ -1405,4 +1387,30 @@ func (s *Server) extractKeyIDFromKeyData(data []byte) string {
 	}
 
 	return ""
+}
+
+// Implement tracing middleware for HTTP requests
+func (s *Server) wrapWithTracing(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.Log.Debug.TraceHTTPRequests {
+			// Log request details
+			log.Printf("[HTTP TRACE] Incoming request: %s %s", r.Method, r.URL.Path)
+			log.Printf("[HTTP TRACE] Headers: %v", r.Header)
+
+			// Create a response writer that captures the response
+			rw := newResponseWriter(w)
+
+			// Process the request
+			start := time.Now()
+			next(rw, r)
+			duration := time.Since(start)
+
+			// Log response details
+			log.Printf("[HTTP TRACE] Response: %s %s - Status: %d, Size: %d, Duration: %s",
+				r.Method, r.URL.Path, rw.statusCode, rw.bytesWritten, duration)
+		} else {
+			// Skip tracing
+			next(w, r)
+		}
+	}
 }
