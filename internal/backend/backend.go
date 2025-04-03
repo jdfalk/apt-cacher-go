@@ -52,13 +52,14 @@ type Manager struct {
 	cache          CacheProvider
 	client         *http.Client
 	mapper         PathMapperProvider
-	packageMapper  PackageMapperProvider // Add this line
+	packageMapper  PackageMapperProvider
 	downloadCtx    context.Context
-	downloadCancel context.CancelFunc // Added field to store the cancel function
+	downloadCancel context.CancelFunc
 	downloadQ      *queue.Queue
 	prefetcher     *Prefetcher
 	cacheDir       string
 	keyManager     *keymanager.KeyManager
+	cfg            *config.Config // Added cfg field to store configuration
 }
 
 // Backend represents a single upstream repository
@@ -89,6 +90,19 @@ func createHTTPClient() *http.Client {
 }
 
 // New creates a new backend manager with tracing capabilities
+//
+// This function initializes a Manager instance with the provided configuration and dependencies.
+// It sets up HTTP clients, backends, download queues, key management, and prefetching.
+//
+// Parameters:
+// - cfg: The configuration for the backend manager
+// - cache: The cache provider for storing downloaded packages
+// - mapper: The path mapper for resolving repository paths
+// - packageMapper: The package mapper for associating package names with hashes
+//
+// Returns:
+// - A fully initialized Manager instance
+// - An error if initialization fails
 func New(cfg *config.Config, cache CacheProvider, mapper PathMapperProvider, packageMapper PackageMapperProvider) (*Manager, error) {
 	// Create HTTP client (will be wrapped for tracing if enabled)
 	client := createHTTPClient()
@@ -116,6 +130,7 @@ func New(cfg *config.Config, cache CacheProvider, mapper PathMapperProvider, pac
 		downloadCtx:    ctx,
 		downloadCancel: cancel,
 		cacheDir:       cfg.CacheDir,
+		cfg:            cfg, // Initialize the cfg field with the provided config
 	}
 
 	// Create backends with the HTTP client
@@ -367,12 +382,22 @@ func (m *Manager) handleKeyRequest(path string) ([]byte, error) {
 }
 
 // ProcessReleaseFile analyzes a Release file to find additional index files
+//
+// This method parses a repository Release file to extract information about available
+// package indices. It then selectively prefetches relevant files based on configured
+// architectures and file types. This helps to proactively populate the cache with
+// frequently accessed files.
+//
+// Parameters:
+// - repo: The repository name
+// - path: The path of the Release file
+// - data: The content of the Release file
 func (m *Manager) ProcessReleaseFile(repo string, path string, data []byte) {
 	// Parse the Release file
 	filenames, err := parser.ParseIndexFilenames(data)
 	if err != nil {
 		// Use dev_suppress_errors instead of suppress_errors
-		if !m.cfg.Log.Debug.DevSuppressErrors {
+		if m.cfg != nil && !m.cfg.Log.Debug.DevSuppressErrors {
 			log.Printf("Error parsing Release file for %s: %v", repo, err)
 		}
 		return
