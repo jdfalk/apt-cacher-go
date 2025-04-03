@@ -22,7 +22,17 @@ var (
 	logLevel   string
 )
 
-// NewCommand returns the serve command
+// NewCommand returns the serve command for running the apt-cacher-go server.
+//
+// This function creates and configures a cobra.Command that handles the "serve"
+// operation of apt-cacher-go. It sets up the command's flags, help text,
+// and execution logic. The command loads configuration, initializes the server,
+// sets up signal handling for graceful shutdown, and runs the server until
+// interrupted.
+//
+// Returns:
+//   - *cobra.Command: A fully configured command ready to be executed or added
+//     to a parent command.
 func NewCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -75,7 +85,18 @@ func NewCommand() *cobra.Command {
 	return cmd
 }
 
-// runServe function update
+// runServe starts and manages the apt-cacher-go server with the provided configuration.
+//
+// This function initializes the server with the given configuration and version,
+// starts it, and sets up signal handling for graceful shutdown. It blocks until
+// a termination signal is received, then performs a clean shutdown with a timeout.
+//
+// Parameters:
+//   - cfg: The configuration to use for the server
+//   - version: The version string to use for server identification
+//
+// Returns:
+//   - error: Any error encountered during server startup, operation, or shutdown
 func runServe(cfg *config.Config, version string) error {
 	// Create the server with ServerOptions
 	srv, err := server.New(cfg, server.ServerOptions{
@@ -99,7 +120,7 @@ func runServe(cfg *config.Config, version string) error {
 	sig := <-sigCh
 	log.Printf("Received signal %v, shutting down gracefully...", sig)
 
-	// Shutdown the server
+	// Shutdown the server with timeout context
 	_, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
