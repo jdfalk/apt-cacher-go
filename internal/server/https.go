@@ -26,7 +26,12 @@ func (s *Server) handleHTTPSRequest(w http.ResponseWriter, r *http.Request) {
 	originalPath := r.URL.Path
 
 	// Log the HTTPS request
-	log.Printf("HTTPS request: %s%s", originalHost, originalPath)
+	if s.cfg.Log.Debug.TraceHTTPRequests {
+		log.Printf("[HTTP TRACE] HTTPS request: %s %s%s", r.Method, originalHost, originalPath)
+		log.Printf("[HTTP TRACE] Headers: %v", r.Header)
+	} else {
+		log.Printf("HTTPS request: %s%s", originalHost, originalPath)
+	}
 
 	// Check if this is a known repository host that should be remapped
 	repoName, shouldRemap := s.shouldRemapHost(originalHost)
@@ -40,7 +45,11 @@ func (s *Server) handleHTTPSRequest(w http.ResponseWriter, r *http.Request) {
 	newPath := fmt.Sprintf("/%s%s", repoName, originalPath)
 
 	// Log the remapping
-	log.Printf("Remapping HTTPS request to: %s", newPath)
+	if s.cfg.Log.Debug.TraceHTTPRequests {
+		log.Printf("[HTTP TRACE] Remapping HTTPS request to: %s", newPath)
+	} else {
+		log.Printf("Remapping HTTPS request to: %s", newPath)
+	}
 
 	// Create a new request with the remapped path
 	newReq := r.Clone(r.Context())
@@ -114,7 +123,7 @@ func (s *Server) setupHTTPSServer(mainMux *http.ServeMux) {
 	}
 }
 
-// Add this new method to handle CONNECT requests
+// handleConnectRequest handles CONNECT requests
 func (s *Server) handleConnectRequest(w http.ResponseWriter, r *http.Request) {
 	// Only accept CONNECT method
 	if r.Method != http.MethodConnect {
@@ -141,10 +150,18 @@ func (s *Server) handleConnectRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Log the connection attempt
-	if isKeyserver {
-		log.Printf("Tunneling connection to keyserver: %s", host)
+	if s.cfg.Log.Debug.TraceHTTPRequests {
+		if isKeyserver {
+			log.Printf("[HTTP TRACE] Tunneling CONNECT to keyserver: %s", host)
+		} else {
+			log.Printf("[HTTP TRACE] Tunneling CONNECT to: %s", host)
+		}
 	} else {
-		log.Printf("Tunneling connection to: %s", host)
+		if isKeyserver {
+			log.Printf("Tunneling connection to keyserver: %s", host)
+		} else {
+			log.Printf("Tunneling connection to: %s", host)
+		}
 	}
 
 	// Get the underlying connection
