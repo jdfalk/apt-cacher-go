@@ -53,6 +53,10 @@ type CacheEntry struct {
 
 // adminDashboard serves the admin dashboard
 func (s *Server) adminDashboard(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Log.Debug.TraceHTTPRequests {
+		log.Printf("[HTTP TRACE] Admin dashboard requested from %s", r.RemoteAddr)
+	}
+
 	s.mutex.Lock()
 	stats := s.metrics.GetStatistics()
 	cacheStats := s.cache.GetStats()
@@ -173,6 +177,10 @@ func (s *Server) adminDashboard(w http.ResponseWriter, r *http.Request) {
 
 // adminClearCache handles cache clearing
 func (s *Server) adminClearCache(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Log.Debug.TraceHTTPRequests {
+		log.Printf("[HTTP TRACE] Admin cache clear requested from %s", r.RemoteAddr)
+	}
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -210,6 +218,10 @@ func (s *Server) adminClearCache(w http.ResponseWriter, r *http.Request) {
 
 // adminFlushExpired handles flushing expired cache entries
 func (s *Server) adminFlushExpired(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Log.Debug.TraceHTTPRequests {
+		log.Printf("[HTTP TRACE] Admin flush expired requested from %s", r.RemoteAddr)
+	}
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -245,6 +257,10 @@ func (s *Server) adminFlushExpired(w http.ResponseWriter, r *http.Request) {
 
 // adminGetStats returns cache statistics in JSON format
 func (s *Server) adminGetStats(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Log.Debug.TraceHTTPRequests {
+		log.Printf("[HTTP TRACE] Admin stats requested from %s", r.RemoteAddr)
+	}
+
 	s.mutex.Lock()
 	stats := s.metrics.GetStatistics()
 	cacheStats := s.cache.GetStats() // No error to handle since we updated the interface
@@ -285,6 +301,11 @@ func (s *Server) adminGetStats(w http.ResponseWriter, r *http.Request) {
 
 // adminSearchCache function
 func (s *Server) adminSearchCache(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Log.Debug.TraceHTTPRequests {
+		log.Printf("[HTTP TRACE] Admin cache search requested from %s with query: %s",
+			r.RemoteAddr, r.URL.Query().Get("q"))
+	}
+
 	query := r.URL.Query().Get("q")
 	if query == "" {
 		http.Error(w, "Missing search query", http.StatusBadRequest)
