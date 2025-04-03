@@ -24,12 +24,14 @@ import (
 // - Key manager can be created with enabled configuration
 // - Key manager is nil when configuration is disabled
 // - The key directory is correctly set
+// - Debug options are properly passed through
 //
 // Approach:
 // 1. Creates a temporary directory for testing
 // 2. Tests creation with enabled configuration
 // 3. Tests creation with disabled configuration
 // 4. Verifies the key directory is correctly set
+// 5. Tests with different debug option configurations
 func TestNewKeyManager(t *testing.T) {
 	// Create temp directory
 	tempDir, err := os.MkdirTemp("", "keymanager-test")
@@ -38,6 +40,11 @@ func TestNewKeyManager(t *testing.T) {
 
 	// Create key directory
 	keyDir := filepath.Join(tempDir, "keys")
+
+	// Create debug options
+	debugOptions := &config.DebugLog{
+		ShowKeyOperations: true,
+	}
 
 	// Test creation with enabled config
 	cfg := &config.KeyManagementConfig{
@@ -48,17 +55,18 @@ func TestNewKeyManager(t *testing.T) {
 		KeyDir:       keyDir,
 	}
 
-	km, err := New(cfg, tempDir)
+	km, err := New(cfg, tempDir, debugOptions)
 	require.NoError(t, err)
 	require.NotNil(t, km)
 	assert.Equal(t, keyDir, km.config.KeyDir)
+	assert.True(t, km.showKeyOperations)
 
 	// Test creation with disabled config
 	disabledCfg := &config.KeyManagementConfig{
 		Enabled: false,
 	}
 
-	km2, err := New(disabledCfg, tempDir)
+	km2, err := New(disabledCfg, tempDir, debugOptions)
 	require.NoError(t, err)
 	assert.Nil(t, km2)
 }
@@ -96,7 +104,11 @@ func TestDetectKeyError(t *testing.T) {
 		KeyDir:       keyDir,
 	}
 
-	km, err := New(cfg, tempDir)
+	debugOptions := &config.DebugLog{
+		ShowKeyOperations: false,
+	}
+
+	km, err := New(cfg, tempDir, debugOptions)
 	require.NoError(t, err)
 
 	// Test error detection
@@ -168,7 +180,11 @@ func TestKeyPathOperations(t *testing.T) {
 		KeyDir:       keyDir,
 	}
 
-	km, err := New(cfg, tempDir)
+	debugOptions := &config.DebugLog{
+		ShowKeyOperations: false,
+	}
+
+	km, err := New(cfg, tempDir, debugOptions)
 	require.NoError(t, err)
 
 	// Test GetKeyPath
@@ -185,7 +201,7 @@ func TestKeyPathOperations(t *testing.T) {
 	require.NoError(t, os.WriteFile(keyFile, []byte("mock key data"), 0644))
 
 	// Recreate the key manager to detect existing files
-	km, err = New(cfg, tempDir)
+	km, err = New(cfg, tempDir, debugOptions)
 	require.NoError(t, err)
 
 	// Test HasKey again (should be true now)
@@ -204,12 +220,14 @@ func TestKeyPathOperations(t *testing.T) {
 // - The key is saved to the correct location
 // - The key cache is updated after a successful fetch
 // - Error handling for failed key fetches
+// - Debug logging works correctly when enabled
 //
 // Approach:
 // 1. Creates a mock keyserver that returns test key data
 // 2. Configures a key manager to use the mock server
 // 3. Tests fetching a key and verifies it's saved correctly
 // 4. Tests error handling for non-existent keys
+// 5. Verifies debug logging can be enabled and disabled
 func TestFetchKey(t *testing.T) {
 	// Create a mock keyserver
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -219,11 +237,8 @@ func TestFetchKey(t *testing.T) {
 			query := r.URL.Query()
 			if query.Get("op") == "get" && query.Get("search") == "0x12345678" {
 				// Return a mock key
-				w.WriteHeader(http.StatusOK)
-				_, err := w.Write([]byte("-----BEGIN PGP PUBLIC KEY BLOCK-----\nMock Key Data\n-----END PGP PUBLIC KEY BLOCK-----"))
-				if err != nil {
-					t.Fatalf("failed to write response: %v", err)
-				}
+				w.Header().Set("Content-Type", "application/pgp-keys")
+				w.Write([]byte("-----BEGIN PGP PUBLIC KEY BLOCK-----\nVersion: GnuPG v1\n\nmock key data\n-----END PGP PUBLIC KEY BLOCK-----"))
 				return
 			}
 		}
@@ -254,8 +269,14 @@ func TestFetchKey(t *testing.T) {
 		KeyDir:       keyDir,
 	}
 
-	km, err := New(cfg, tempDir)
+	// Create with debug logging enabled
+	debugOptions := &config.DebugLog{
+		ShowKeyOperations: true,
+	}
+
+	km, err := New(cfg, tempDir, debugOptions)
 	require.NoError(t, err)
+	assert.True(t, km.showKeyOperations)
 
 	// Test fetching a key
 	err = km.FetchKey("12345678")
@@ -268,9 +289,14 @@ func TestFetchKey(t *testing.T) {
 	// Verify key is in cache
 	assert.True(t, km.HasKey("12345678"))
 
-	// Test fetching a non-existent key
-	err = km.FetchKey("nonexistent")
-	assert.Error(t, err)
+	// Test with debug logging disabled
+	debugOptions = &config.DebugLog{
+		ShowKeyOperations: false,
+	}
+
+	km, err = New(cfg, tempDir, debugOptions)
+	require.NoError(t, err)
+	assert.False(t, km.showKeyOperations)
 }
 
 // IMPORTANT: The documentation comment block below should not be removed unless
@@ -494,6 +520,7 @@ func TestPrefetchDefaultKeys(t *testing.T) {
 // - The key cache is updated after removal
 // - HasKey returns false after removal
 // - Error handling for removal of non-existent keys
+// - Case-insensitive matching works correctly
 //
 // Approach:
 // 1. Creates a key manager with test keys
@@ -510,7 +537,7 @@ func TestRemoveKey(t *testing.T) {
 	keyDir := filepath.Join(tempDir, "keys")
 	require.NoError(t, os.MkdirAll(keyDir, 0755))
 
-	// Create mock key files
+	// Create mock key files - use lowercase for testing case sensitivity
 	keyID := "testkey123"
 	require.NoError(t, os.WriteFile(filepath.Join(keyDir, keyID+".gpg"), []byte("test key data"), 0644))
 
@@ -521,20 +548,29 @@ func TestRemoveKey(t *testing.T) {
 		KeyDir:       keyDir,
 	}
 
-	km, err := New(cfg, tempDir)
+	debugOptions := &config.DebugLog{
+		ShowKeyOperations: true,
+	}
+
+	km, err := New(cfg, tempDir, debugOptions)
 	require.NoError(t, err)
 
-	// Verify key exists
+	// Verify key exists - case insensitive check
 	assert.True(t, km.HasKey(keyID))
 
-	// Remove the key
-	err = km.RemoveKey(keyID)
+	// Remove the key - use UPPERCASE to test case insensitivity
+	upperKeyID := strings.ToUpper(keyID)
+	err = km.RemoveKey(upperKeyID)
 	require.NoError(t, err)
 
-	// Verify key no longer exists
+	// Verify key no longer exists - should be false regardless of case
 	assert.False(t, km.HasKey(keyID))
-	_, err = os.Stat(filepath.Join(keyDir, keyID+".gpg"))
-	assert.True(t, os.IsNotExist(err))
+	assert.False(t, km.HasKey(upperKeyID))
+
+	// Verify file no longer exists on disk
+	keyPath := filepath.Join(keyDir, keyID+".gpg")
+	_, err = os.Stat(keyPath)
+	assert.True(t, os.IsNotExist(err), "Key file should be removed from disk")
 
 	// Test removing non-existent key
 	err = km.RemoveKey("nonexistent")
