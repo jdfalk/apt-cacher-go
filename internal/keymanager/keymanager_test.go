@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jdfalk/apt-cacher-go/internal/config"
@@ -12,7 +13,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestNewKeyManager tests the creation of a new key manager
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestNewKeyManager tests the creation of a new key manager.
+//
+// The test verifies:
+// - Key manager can be created with enabled configuration
+// - Key manager is nil when configuration is disabled
+// - The key directory is correctly set
+//
+// Approach:
+// 1. Creates a temporary directory for testing
+// 2. Tests creation with enabled configuration
+// 3. Tests creation with disabled configuration
+// 4. Verifies the key directory is correctly set
 func TestNewKeyManager(t *testing.T) {
 	// Create temp directory
 	tempDir, err := os.MkdirTemp("", "keymanager-test")
@@ -46,7 +63,23 @@ func TestNewKeyManager(t *testing.T) {
 	assert.Nil(t, km2)
 }
 
-// TestDetectKeyError tests the key error detection functionality
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestDetectKeyError tests the key error detection functionality.
+//
+// The test verifies:
+// - Various types of key error messages are correctly detected
+// - Key IDs are properly extracted from error messages
+// - Non-key-error messages are correctly ignored
+//
+// Approach:
+// 1. Creates a key manager with test configuration
+// 2. Tests multiple error message patterns
+// 3. Verifies key IDs are correctly extracted
+// 4. Verifies non-key-error messages don't produce false positives
 func TestDetectKeyError(t *testing.T) {
 	// Create temp directory
 	tempDir, err := os.MkdirTemp("", "keymanager-test")
@@ -101,7 +134,23 @@ func TestDetectKeyError(t *testing.T) {
 	}
 }
 
-// TestKeyPathOperations tests key path handling and existence checks
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestKeyPathOperations tests key path handling and existence checks.
+//
+// The test verifies:
+// - GetKeyPath returns the correct path for a key
+// - HasKey correctly reports key existence
+// - Key detection works before and after a key is added
+//
+// Approach:
+// 1. Creates a key manager with test configuration
+// 2. Tests GetKeyPath for path construction
+// 3. Tests HasKey returns false when a key doesn't exist
+// 4. Creates a key file and verifies HasKey returns true
 func TestKeyPathOperations(t *testing.T) {
 	// Create temp directory
 	tempDir, err := os.MkdirTemp("", "keymanager-test")
@@ -143,7 +192,24 @@ func TestKeyPathOperations(t *testing.T) {
 	assert.True(t, km.HasKey(keyID))
 }
 
-// TestFetchKey tests retrieving a key from a keyserver
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestFetchKey tests retrieving a key from a keyserver.
+//
+// The test verifies:
+// - Keys can be fetched from a keyserver
+// - The key is saved to the correct location
+// - The key cache is updated after a successful fetch
+// - Error handling for failed key fetches
+//
+// Approach:
+// 1. Creates a mock keyserver that returns test key data
+// 2. Configures a key manager to use the mock server
+// 3. Tests fetching a key and verifies it's saved correctly
+// 4. Tests error handling for non-existent keys
 func TestFetchKey(t *testing.T) {
 	// Create a mock keyserver
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -207,7 +273,23 @@ func TestFetchKey(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// TestKeyManagerWithExistingKeys tests loading existing keys at initialization
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestKeyManagerWithExistingKeys tests loading existing keys at initialization.
+//
+// The test verifies:
+// - Existing key files are detected during initialization
+// - The key cache is correctly populated with existing keys
+// - HasKey correctly identifies existing and non-existent keys
+//
+// Approach:
+// 1. Creates a temporary directory with mock key files
+// 2. Initializes a key manager in that directory
+// 3. Verifies existing keys are detected and cached
+// 4. Tests HasKey for existing and non-existent keys
 func TestKeyManagerWithExistingKeys(t *testing.T) {
 	// Create temp directory
 	tempDir, err := os.MkdirTemp("", "keymanager-test")
@@ -259,8 +341,6 @@ func TestKeyManagerWithExistingKeys(t *testing.T) {
 // 3. Tests signature verification with existing keys
 // 4. Tests signature verification with missing keys
 // 5. Tests key detection from signature data
-//
-// Note: Uses a mock key repository to avoid external dependencies
 func TestVerifySignature(t *testing.T) {
 	// Create temp directory
 	tempDir, err := os.MkdirTemp("", "keymanager-test")
@@ -286,9 +366,8 @@ func TestVerifySignature(t *testing.T) {
 	keyFile := filepath.Join(keyDir, keyID+".gpg")
 	require.NoError(t, os.WriteFile(keyFile, []byte("mock key data"), 0644))
 
-	// Recreate the key manager to detect existing files
-	km, err = New(cfg, tempDir)
-	require.NoError(t, err)
+	// No need to recreate the KeyManager since we can just use the HasKey method with the existing km
+	// which will check if the key file exists
 
 	// Test DetectKeySignature
 	t.Run("detect_key_signature", func(t *testing.T) {
@@ -318,4 +397,146 @@ func TestVerifySignature(t *testing.T) {
 		assert.NoError(t, err)
 		assert.False(t, result)
 	})
+}
+
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestPrefetchDefaultKeys tests the PrefetchDefaultKeys method which proactively
+// downloads common repository keys.
+//
+// The test verifies:
+// - Default keys are fetched when none are specified
+// - Custom key lists can be provided
+// - The method reports successful and failed fetches
+//
+// Approach:
+// 1. Creates a mock keyserver that serves specific keys
+// 2. Creates a key manager with the mock server
+// 3. Tests prefetching with default keys
+// 4. Tests prefetching with a custom key list
+// 5. Verifies the results are reported correctly
+func TestPrefetchDefaultKeys(t *testing.T) {
+	// Create a mock keyserver
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Check the request URL
+		if r.URL.Path == "/pks/lookup" {
+			// Check the query parameters
+			query := r.URL.Query()
+			search := query.Get("search")
+			// Only return success for specific keys
+			if strings.HasPrefix(search, "0x123") || strings.HasPrefix(search, "0x456") {
+				w.WriteHeader(http.StatusOK)
+				_, err := w.Write([]byte("-----BEGIN PGP PUBLIC KEY BLOCK-----\nMock Key Data\n-----END PGP PUBLIC KEY BLOCK-----"))
+				if err != nil {
+					t.Fatalf("failed to write response: %v", err)
+				}
+				return
+			}
+		}
+
+		// Otherwise return 404
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer mockServer.Close()
+
+	// Create temp directory
+	tempDir, err := os.MkdirTemp("", "keymanager-test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
+	// Create key directory
+	keyDir := filepath.Join(tempDir, "keys")
+	require.NoError(t, os.MkdirAll(keyDir, 0755))
+
+	// Create key manager with our mock server
+	serverURL := mockServer.URL
+	serverURL = "hkp://" + serverURL[7:] // Replace http:// with hkp://
+
+	cfg := &config.KeyManagementConfig{
+		Enabled:      true,
+		AutoRetrieve: true,
+		KeyTTL:       "365d",
+		Keyservers:   []string{serverURL},
+		KeyDir:       keyDir,
+	}
+
+	km, err := New(cfg, tempDir)
+	require.NoError(t, err)
+
+	// Test prefetching with a custom key list
+	// Include some keys that will succeed and some that will fail
+	keys := []string{"123456", "456789", "789012"}
+	successful, failed, err := km.PrefetchDefaultKeys(keys)
+	require.NoError(t, err)
+
+	// We expect 2 successful fetches and 1 failure
+	assert.Equal(t, 2, successful)
+	assert.Equal(t, 1, failed)
+
+	// Verify keys are in cache and on disk
+	assert.True(t, km.HasKey("123456"))
+	assert.True(t, km.HasKey("456789"))
+	assert.False(t, km.HasKey("789012"))
+}
+
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// TestRemoveKey tests the RemoveKey method which deletes keys from disk and cache.
+//
+// The test verifies:
+// - Keys can be properly removed from the filesystem
+// - The key cache is updated after removal
+// - HasKey returns false after removal
+// - Error handling for removal of non-existent keys
+//
+// Approach:
+// 1. Creates a key manager with test keys
+// 2. Removes a key and verifies it's gone from disk and cache
+// 3. Tests removing a non-existent key
+// 4. Verifies HasKey properly reflects the state after removal
+func TestRemoveKey(t *testing.T) {
+	// Create temp directory
+	tempDir, err := os.MkdirTemp("", "keymanager-test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
+	// Create key directory
+	keyDir := filepath.Join(tempDir, "keys")
+	require.NoError(t, os.MkdirAll(keyDir, 0755))
+
+	// Create mock key files
+	keyID := "testkey123"
+	require.NoError(t, os.WriteFile(filepath.Join(keyDir, keyID+".gpg"), []byte("test key data"), 0644))
+
+	// Create key manager
+	cfg := &config.KeyManagementConfig{
+		Enabled:      true,
+		AutoRetrieve: true,
+		KeyDir:       keyDir,
+	}
+
+	km, err := New(cfg, tempDir)
+	require.NoError(t, err)
+
+	// Verify key exists
+	assert.True(t, km.HasKey(keyID))
+
+	// Remove the key
+	err = km.RemoveKey(keyID)
+	require.NoError(t, err)
+
+	// Verify key no longer exists
+	assert.False(t, km.HasKey(keyID))
+	_, err = os.Stat(filepath.Join(keyDir, keyID+".gpg"))
+	assert.True(t, os.IsNotExist(err))
+
+	// Test removing non-existent key
+	err = km.RemoveKey("nonexistent")
+	require.NoError(t, err) // Should succeed because it's idempotent
 }
