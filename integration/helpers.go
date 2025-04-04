@@ -2,8 +2,8 @@ package integration
 
 import (
 	"context"
-	"log"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,25 +14,66 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
 // createTestServer creates a server instance with mock backend for integration testing
-func createTestServer(t *testing.T, cfg *config.Config) (*server.Server, func()) {
+//
+// This function creates a server instance with all necessary mock components for testing:
+// - Sets up a mock backend manager with appropriate method expectations
+// - Configures mock responses for backend requests
+// - Creates a server with the provided configuration
+// - Returns a cleanup function that properly shuts down the server
+//
+// Parameters:
+//   - t: The testing.T instance for assertions and logging
+//   - cfg: The server configuration to use
+//
+// Returns:
+//   - A fully initialized server instance
+//   - A context cancel function to stop the server
+//   - A cleanup function that properly shuts down the server
+func createTestServer(t *testing.T, cfg *config.Config) (*server.Server, context.CancelFunc, func()) {
 	// Create a mock backend manager
 	mockBackend := new(mocks.MockBackendManager)
+
+	// Set up basic expectations for methods that will be called
 	mockBackend.On("KeyManager").Return(nil).Maybe()
 	mockBackend.On("ForceCleanupPrefetcher").Return(0).Maybe()
 	mockBackend.On("RefreshReleaseData", mock.Anything).Return(nil).Maybe()
 	mockBackend.On("PrefetchOnStartup", mock.Anything).Return().Maybe()
 
-	// Setup Fetch mock to handle actual file requests
+	// CRITICAL FIX: Setup ProcessReleaseFile expectation
+	mockBackend.On("ProcessReleaseFile",
+		mock.AnythingOfType("string"),
+		mock.AnythingOfType("string"),
+		mock.AnythingOfType("[]uint8")).Return().Maybe()
+
+	// CRITICAL FIX: Setup ProcessPackagesFile expectation
+	mockBackend.On("ProcessPackagesFile",
+		mock.AnythingOfType("string"),
+		mock.AnythingOfType("string"),
+		mock.AnythingOfType("[]uint8")).Return().Maybe()
+
+	// Setup Fetch with proper data return
 	mockBackend.On("Fetch", mock.AnythingOfType("string")).Return(
-		func(path string) []byte {
-			// For testing, just return dummy content
-			return []byte("dummy content for " + path)
-		},
-		func(path string) error {
-			return nil
-		},
-	).Maybe()
+		[]byte("dummy content for repository path"), nil).Maybe()
+
+	// Add specific repository path matches for more realistic behavior
+	for _, repo := range []string{"ubuntu", "debian", "docker", "nonexistent"} {
+		// Add specific expectations for index files (Release, InRelease)
+		mockBackend.On("Fetch", mock.MatchedBy(func(p string) bool {
+			return strings.HasPrefix(p, repo+"/") &&
+				(strings.Contains(p, "/Release") || strings.Contains(p, "/InRelease"))
+		})).Return([]byte("dummy content for repository index file"), nil).Maybe()
+
+		// Add specific expectations for package files (.deb)
+		mockBackend.On("Fetch", mock.MatchedBy(func(p string) bool {
+			return strings.HasPrefix(p, repo+"/") && strings.Contains(p, ".deb")
+		})).Return([]byte("dummy package content"), nil).Maybe()
+	}
 
 	// Create the server with mock backend
 	srv, err := server.New(cfg, server.ServerOptions{
@@ -41,8 +82,25 @@ func createTestServer(t *testing.T, cfg *config.Config) (*server.Server, func())
 	})
 	require.NoError(t, err)
 
+	// Create context for the server - don't cancel it immediately!
+	ctx, cancelFunc := context.WithCancel(context.Background())
+
+	// Start the server in a goroutine with the context
+	go func() {
+		if err := srv.StartWithContext(ctx); err != nil && err != context.Canceled {
+			t.Logf("Server error: %v", err)
+		}
+	}()
+
+	// Wait a moment for the server to actually start - increased from 300ms to 500ms
+	time.Sleep(500 * time.Millisecond)
+
 	// Prepare cleanup function that ensures proper server shutdown
 	cleanup := func() {
+		// First cancel the context
+		cancelFunc()
+
+		// Then explicitly shut down the server
 		doneChan := make(chan struct{})
 		go func() {
 			defer close(doneChan)
@@ -60,45 +118,70 @@ func createTestServer(t *testing.T, cfg *config.Config) (*server.Server, func())
 		}
 	}
 
-	return srv, cleanup
+	return srv, cancelFunc, cleanup
 }
 
-// createServerConfig creates a config suitable for integration testing
+// IMPORTANT: The documentation comment block below should not be removed unless
+// the test itself is removed. Only modify the comment if the test's functionality
+// changes. These comments are essential for understanding the test's purpose
+// and approach, especially for future maintainers and code reviewers.
+
+// createServerConfig creates a server configuration for testing
+//
+// This function creates a temporary directory for cache files and initializes
+// a server configuration with appropriate test settings, including backends
+// for common repositories and mapping rules.
+//
+// Parameters:
+//   - t: The testing.T instance for cleanup registration
+//
+// Returns:
+//   - A fully initialized config.Config structure
+//   - The path to the temporary cache directory
 func createServerConfig(t *testing.T) (*config.Config, string) {
-	// Create temporary directory for cache
+	// Create a temporary directory for the cache
 	tempDir, err := os.MkdirTemp("", "apt-cacher-integration")
 	require.NoError(t, err)
 
-	// Create base config
+	// Register cleanup function to remove temp directory after test
+	t.Cleanup(func() {
+		os.RemoveAll(tempDir)
+	})
+
+	// Create a unique port based on process ID to avoid conflicts
+	port := 8300 + (os.Getpid() % 1000)
+	adminPort := 9310 + (os.Getpid() % 1000)
+
+	// Create configuration with test-specific settings
 	cfg := &config.Config{
 		CacheDir:      tempDir,
 		ListenAddress: "127.0.0.1",
-		Port:          8080 + (os.Getpid() % 1000), // Use unique port based on PID
-		AdminPort:     9090 + (os.Getpid() % 1000), // Use unique admin port
-		CacheSize:     "256M",                      // Small cache size for testing
-		LogLevel:      "debug",
+		Port:          port,
+		AdminPort:     adminPort,
+		AdminAuth:     false,
 		Backends: []config.Backend{
-			{
-				Name: "debian",
-				URL:  "http://deb.debian.org/debian",
-			},
-			{
-				Name: "ubuntu",
-				URL:  "http://archive.ubuntu.com/ubuntu",
-			},
+			{Name: "debian", URL: "http://deb.debian.org/debian", Priority: 100},
+			{Name: "ubuntu", URL: "http://archive.ubuntu.com/ubuntu", Priority: 90},
 		},
 		MappingRules: []config.MappingRule{
-			{
-				Type:       "prefix",
-				Pattern:    "/debian",
-				Repository: "debian",
-				Priority:   100,
-			},
-			{
-				Type:       "prefix",
-				Pattern:    "/ubuntu",
-				Repository: "ubuntu",
-				Priority:   100,
+			{Type: "prefix", Pattern: "/debian/", Repository: "debian", Priority: 100},
+			{Type: "prefix", Pattern: "/ubuntu/", Repository: "ubuntu", Priority: 90},
+		},
+		CacheTTLs: map[string]string{
+			"index":   "1h",
+			"package": "30d",
+		},
+		Prefetch: config.PrefetchConfig{
+			Enabled:   false, // Disable prefetching for tests
+			BatchSize: 1,
+		},
+		MaxConcurrentDownloads: 4,
+		CacheSize:              "10G",
+		DatabaseMemoryMB:       1024,
+		MaxCacheEntries:        10000,
+		Log: config.LogConfig{
+			Debug: config.DebugLog{
+				TraceHTTPRequests: true,
 			},
 		},
 	}
@@ -106,17 +189,17 @@ func createServerConfig(t *testing.T) (*config.Config, string) {
 	return cfg, tempDir
 }
 
-// startServerWithTimeout starts a server with a timeout context
-func startServerWithTimeout(t *testing.T, srv *server.Server, timeout time.Duration) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+// // startServerWithTimeout starts a server with a timeout context
+// func startServerWithTimeout(t *testing.T, srv *server.Server, timeout time.Duration) {
+// 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+// 	defer cancel()
 
-	go func() {
-		if err := srv.StartWithContext(ctx); err != nil && err != context.DeadlineExceeded {
-			log.Printf("Server error: %v", err)
-		}
-	}()
+// 	go func() {
+// 		if err := srv.StartWithContext(ctx); err != nil && err != context.DeadlineExceeded {
+// 			log.Printf("Server error: %v", err)
+// 		}
+// 	}()
 
-	// Wait a moment for the server to start
-	time.Sleep(100 * time.Millisecond)
-}
+// 	// Wait a moment for the server to start
+// 	time.Sleep(100 * time.Millisecond)
+// }
