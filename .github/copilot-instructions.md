@@ -14,6 +14,4 @@ All test functions should have a documentation block above them that says folled
 
 Always escape tripple backticks with a backslash in documentation
 
-Always generate a single unified file with all fixes required
-
 When updating tests update the documentation as well so it stays consistent
