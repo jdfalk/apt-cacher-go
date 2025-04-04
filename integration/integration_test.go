@@ -117,138 +117,22 @@ type TestServer struct {
 // changes. These comments are essential for understanding the test's purpose
 // and approach, especially for future maintainers and code reviewers.
 
-// setupTestServer creates and configures a test server instance
-//
-// This function sets up a complete test environment for the apt-cacher-go server, including:
-// - Creating a temporary directory for the cache
-// - Finding an available port for the server to listen on
-// - Creating and starting the server with appropriate configuration
-// - Setting up a client for making requests to the server
-//
-// Parameters:
-//   - t: The testing.T instance for logging and assertions
-//   - mockURL: The URL of the mock upstream server to use as a backend
-//
-// Returns:
-//   - A TestServer instance containing the server and related resources
-//   - A cleanup function to shut down the server and remove temporary files
-func setupTestServer(t *testing.T, mockURL string) (*TestServer, func()) {
-	// Create temp directory for cache, preferably within project directory
-	testRoot := getTestDir(t)
-	var tempDir string
-	var err error
+// setupTestServer creates and starts a test server instance
+func setupTestServer(t *testing.T) (*server.Server, string, func()) {
+	// Create config and get temp directory path
+	cfg, tempDir := createServerConfig(t)
 
-	if testRoot != "" {
-		// Create a unique directory within .file_system_root with timestamp
-		dirName := fmt.Sprintf("apt-cacher-test-%d", time.Now().UnixNano())
-		tempDir = filepath.Join(testRoot, dirName)
+	// Create server with mock backend manager
+	srv, cleanup := createTestServer(t, cfg)
 
-		// Create the directory
-		if err := os.MkdirAll(tempDir, 0755); err != nil {
-			t.Fatalf("Failed to create test directory: %v", err)
-		}
+	// Start the server with a timeout
+	startServerWithTimeout(t, srv, 30*time.Second)
+
+	// Return combined cleanup function that shuts down server and removes temp dir
+	return srv, tempDir, func() {
+		cleanup()
+		os.RemoveAll(tempDir)
 	}
-
-	// Fall back to system temp dir if needed
-	if tempDir == "" {
-		tempDir, err = os.MkdirTemp("", "apt-cacher-test")
-		require.NoError(t, err)
-	}
-
-	// Find an available port
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	port := listener.Addr().(*net.TCPAddr).Port
-	listener.Close()
-
-	// Create test server config with backend configuration
-	cfg := &config.Config{
-		CacheDir:      tempDir,
-		ListenAddress: "127.0.0.1",
-		Port:          port,
-		Backends: []config.Backend{
-			{Name: "debian", URL: mockURL, Priority: 100},
-			{Name: "ubuntu", URL: mockURL, Priority: 90},
-		},
-		CacheTTLs: map[string]string{
-			"index":   "1h",  // Cache index files for 1 hour
-			"package": "30d", // Cache package files for 30 days
-		},
-		// Add MappingRules to ensure proper path handling
-		MappingRules: []config.MappingRule{
-			{Type: "prefix", Pattern: "/debian/", Repository: "debian", Priority: 100},
-			{Type: "prefix", Pattern: "/ubuntu/", Repository: "ubuntu", Priority: 90},
-		},
-		// Use individual cache configuration properties
-		CacheSize:        "10G", // Equivalent to 10GB
-		DatabaseMemoryMB: 1024,  // Memory limit for database
-		MaxCacheEntries:  10000, // Maximum number of entries in cache
-	}
-
-	// Create server
-	srv, err := server.New(cfg, server.ServerOptions{
-		Version: "test-version",
-	})
-	require.NoError(t, err)
-
-	// Create client with timeout
-	client := &http.Client{Timeout: 5 * time.Second}
-
-	// Build base URL
-	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
-
-	// Channel to signal when server is ready
-	ready := make(chan struct{})
-
-	// Create cleanup function that properly removes tempDir
-	cleanup := func() {
-		if srv != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			if err := srv.Shutdown(); err != nil {
-				t.Logf("Error shutting down server: %v", err)
-			}
-			<-ctx.Done()
-		}
-
-		// Ensure we clean up the temp directory
-		if tempDir != "" {
-			if err := os.RemoveAll(tempDir); err != nil {
-				t.Logf("Failed to remove temp directory %s: %v", tempDir, err)
-			}
-		}
-	}
-
-	// Create the test server structure
-	ts := &TestServer{
-		Server:      srv,
-		CacheDir:    tempDir,
-		Config:      cfg,
-		Client:      client,
-		BaseURL:     baseURL,
-		CleanupFunc: cleanup,
-		Ready:       ready,
-	}
-
-	// Register cleanup with testing.T
-	t.Cleanup(cleanup)
-
-	// Start the server in a goroutine
-	go func() {
-		// Signal that the server is ready for connections
-		close(ready)
-		if err := ts.Server.Start(); err != nil && err != http.ErrServerClosed {
-			t.Logf("Server error: %v", err)
-		}
-	}()
-
-	// Wait for the server to be ready for connections
-	<-ready
-
-	// Additional wait for the server to fully initialize
-	time.Sleep(500 * time.Millisecond) // Increased wait time to ensure server is fully ready
-
-	return ts, cleanup
 }
 
 // IMPORTANT: The documentation comment block below should not be removed unless
