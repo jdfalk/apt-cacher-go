@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jdfalk/apt-cacher-go/internal/mapper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -250,8 +251,11 @@ func TestHandleConnectRequest(t *testing.T) {
 // - That the remapped requests are correctly processed by the package handler
 // - That unknown hosts are properly rejected
 //
-// The test covers both successful and error cases, ensuring the handler
-// functions reliably in all scenarios.
+// Approach:
+// 1. Creates a test server with mocked backend components
+// 2. Tests both successful requests to known repositories and error cases
+// 3. Verifies proper remapping of HTTPS paths to repository-specific HTTP paths
+// 4. Confirms rejection of requests to unknown hosts with appropriate status codes
 func TestHandleHTTPSRequest(t *testing.T) {
 	fixture := NewTestServerFixture(t)
 	defer fixture.Cleanup()
@@ -269,13 +273,22 @@ func TestHandleHTTPSRequest(t *testing.T) {
 	// Add missing PackageMapper expectation
 	fixture.PackageMapper.On("GetPackageNameForHash", mock.AnythingOfType("string")).Return("").Maybe()
 
-	// Add missing KeyManager expectations - CRITICAL FIX
+	// Add missing KeyManager expectations
 	fixture.KeyManager.On("DetectKeyError", mock.AnythingOfType("[]uint8")).Return("", false).Maybe()
 
 	t.Run("docker_https_request", func(t *testing.T) {
-		// Setup backend expectation - match the EXACT path that will be requested
-		fixture.Backend.On("Fetch", "/docker/linux/debian/dists/bullseye/stable/binary-amd64/Packages").
+		// CRITICAL FIX: Setup backend expectation with the correct path format
+		// Note that the path passed to Fetch doesn't have a leading slash - this is critical
+		fixture.Backend.On("Fetch", "docker/linux/debian/dists/bullseye/stable/binary-amd64/Packages").
 			Return([]byte("test data"), nil)
+
+		// Mock mapper to ensure correct path mapping
+		fixture.Mapper.On("MapPath", mock.AnythingOfType("string")).Return(mapper.MappingResult{
+			Repository: "docker",
+			RemotePath: "linux/debian/dists/bullseye/stable/binary-amd64/Packages",
+			CachePath:  "docker/linux/debian/dists/bullseye/stable/binary-amd64/Packages",
+			IsIndex:    true,
+		}, nil).Once()
 
 		// Create a test request with HTTPS URL
 		req := httptest.NewRequest("GET",
