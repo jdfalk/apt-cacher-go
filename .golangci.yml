@@ -1,0 +1,44 @@
+# file: .golangci.yml
+# version: 1.0.0
+# guid: f2a3b4c5-d6e7-890a-bcde-f123456789021
+
+# golangci-lint configuration for apt-cacher-go
+# See https://golangci-lint.run/usage/configuration/
+
+run:
+  timeout: 5m
+  issues-exit-code: 1
+  tests: true
+
+linters:
+  enable:
+    - errcheck # Check for unchecked errors
+    - gosimple # Simplify code
+    - govet # Go vet
+    - ineffassign # Detect ineffectual assignments
+    - staticcheck # Static analysis
+    - typecheck # Type checking
+    - unused # Unused code detection
+    - gofmt # Formatting
+    - goimports # Import formatting
+    - misspell # Spelling mistakes
+    - revive # Replacement for golint
+    - gosec # Security analysis
+    - gocritic # Code critic
+    - gocyclo # Cyclomatic complexity
+    - dupl # Code duplication
+    - gocognit # Cognitive complexity
+    - goconst # Repeated strings that could be constants
+    - godot # Comments should end in period
+    - nolintlint # Ill-formed //nolint directives
+
+  disable:
+    - exhaustive # Can be noisy for switches
+    - exhaustivestruct # Too strict for most projects
+    - wrapcheck # Too strict for many cases
+    - nlreturn # Style preference
+    - wsl # Whitespace linter (style preference)
+
+issues:
+  max-issues-per-linter: 50
+  max-same-issues: 3

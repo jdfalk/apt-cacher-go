@@ -59,9 +59,39 @@ jobs:
       run-go: true
       run-github-actions: true
       run-security: true
-      enable-auto-fix: true
+      enable-auto-fix: false
       auto-commit-fixes: false
     secrets: inherit
+
+  # Backup basic super linter if the reusable one fails
+  backup-super-linter:
+    name: Backup Code Quality Check
+    if: always() && needs.super-linter.result == 'failure'
+    needs: [super-linter]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Basic Super Linter
+        uses: super-linter/super-linter@v5
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VALIDATE_ALL_CODEBASE: false
+          VALIDATE_GO: true
+          VALIDATE_SHELL_SHFMT: true
+          VALIDATE_MARKDOWN: true
+          VALIDATE_YAML: true
+          VALIDATE_JSON: true
+          VALIDATE_GITHUB_ACTIONS: true
+          SUPPRESS_POSSUM: true
+          LOG_LEVEL: NOTICE
+          OUTPUT_FORMAT: colored
+          OUTPUT_FOLDER: super-linter-output
+          OUTPUT_DETAILS: detailed
 
   # Intelligent issue labeling for PRs
   intelligent-labeling:
@@ -87,7 +117,13 @@ jobs:
     name: Post Results Summary
     if: always()
     needs:
-      [unified-automation, super-linter, intelligent-labeling, standard-labeler]
+      [
+        unified-automation,
+        super-linter,
+        backup-super-linter,
+        intelligent-labeling,
+        standard-labeler,
+      ]
     runs-on: ubuntu-latest
     steps:
       - name: Create PR summary
@@ -97,6 +133,7 @@ jobs:
             const results = {
               'Unified Automation': '${{ needs.unified-automation.result }}',
               'Super Linter': '${{ needs.super-linter.result }}',
+              'Backup Super Linter': '${{ needs.backup-super-linter.result }}',
               'Intelligent Labeling': '${{ needs.intelligent-labeling.result }}',
               'Standard Labeler': '${{ needs.standard-labeler.result }}'
             };
@@ -106,6 +143,9 @@ jobs:
             summary += '|-----|--------|-------------|\\n';
 
             for (const [job, status] of Object.entries(results)) {
+              // Skip backup linter if it was skipped (normal case)
+              if (job === 'Backup Super Linter' && status === 'skipped') continue;
+
               const icon = status === 'success' ? '✅' :
                           status === 'failure' ? '❌' :
                           status === 'skipped' ? '⏭️' : '⏸️';
@@ -117,7 +157,10 @@ jobs:
                   description = 'Issue management, docs updates, and workflow orchestration';
                   break;
                 case 'Super Linter':
-                  description = 'Code quality, style checks, and best practices validation';
+                  description = 'Advanced code quality, style checks, and best practices validation';
+                  break;
+                case 'Backup Super Linter':
+                  description = 'Basic code quality checks (fallback)';
                   break;
                 case 'Intelligent Labeling':
                   description = 'AI-powered content analysis and intelligent label assignment';
@@ -130,17 +173,39 @@ jobs:
               summary += `| ${job} | ${icon} ${statusText} | ${description} |\\n`;
             }
 
-            const failedJobs = Object.entries(results).filter(([_, status]) => status === 'failure');
+            const failedJobs = Object.entries(results).filter(([job, status]) =>
+              status === 'failure' && !(job === 'Backup Super Linter' && results['Super Linter'] === 'success')
+            );
 
             summary += '\\n### Summary\\n\\n';
             if (failedJobs.length === 0) {
-              summary += '🎉 **All automation checks passed!** This PR is ready for review.\\n';
+              summary += '🎉 **All automation checks passed!** This PR is ready for review.\\n\\n';
+
+              // Add some helpful info about what was checked
+              summary += '**Code Quality Checks:**\\n';
+              summary += '- Go code formatting and best practices\\n';
+              summary += '- Shell script validation\\n';
+              summary += '- YAML and JSON syntax validation\\n';
+              summary += '- Markdown formatting\\n';
+              summary += '- GitHub Actions workflow validation\\n';
+              summary += '- Security scanning\\n\\n';
+
             } else {
               summary += `⚠️ **${failedJobs.length} automation check(s) failed.** Please review and address the issues before merging.\\n\\n`;
               summary += 'Failed checks:\\n';
               failedJobs.forEach(([job, _]) => {
                 summary += `- ${job}\\n`;
               });
+              summary += '\\n';
+            }
+
+            // Add debug information about Super Linter
+            if (results['Super Linter'] === 'success' && results['Backup Super Linter'] === 'skipped') {
+              summary += '**Super Linter Status:** ✅ Advanced linter completed successfully\\n';
+            } else if (results['Super Linter'] === 'failure' && results['Backup Super Linter'] === 'success') {
+              summary += '**Super Linter Status:** ⚠️ Advanced linter failed, but backup linter passed\\n';
+            } else if (results['Super Linter'] === 'failure' && results['Backup Super Linter'] === 'failure') {
+              summary += '**Super Linter Status:** ❌ Both advanced and backup linters failed\\n';
             }
 
             summary += '\\n---\\n*Automated by PR Automation workflow*';
