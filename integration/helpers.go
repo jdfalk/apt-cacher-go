@@ -2,6 +2,8 @@ package integration
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -57,23 +59,25 @@ func createTestServer(t *testing.T, cfg *config.Config) (*server.Server, context
 		mock.AnythingOfType("string"),
 		mock.AnythingOfType("[]uint8")).Return().Maybe()
 
-	// Setup Fetch with proper data return
-	mockBackend.On("Fetch", mock.AnythingOfType("string")).Return(
-		[]byte("dummy content for repository path"), nil).Maybe()
-
-	// Add specific repository path matches for more realistic behavior
-	for _, repo := range []string{"ubuntu", "debian", "docker", "nonexistent"} {
-		// Add specific expectations for index files (Release, InRelease)
-		mockBackend.On("Fetch", mock.MatchedBy(func(p string) bool {
-			return strings.HasPrefix(p, repo+"/") &&
-				(strings.Contains(p, "/Release") || strings.Contains(p, "/InRelease"))
-		})).Return([]byte("dummy content for repository index file"), nil).Maybe()
-
-		// Add specific expectations for package files (.deb)
-		mockBackend.On("Fetch", mock.MatchedBy(func(p string) bool {
-			return strings.HasPrefix(p, repo+"/") && strings.Contains(p, ".deb")
-		})).Return([]byte("dummy package content"), nil).Maybe()
+	// Setup repository-specific fetch responses
+	for _, repo := range []string{"ubuntu", "debian", "docker"} {
+		// FIX #1: Format content strings to match what the test is expecting
+		mockBackend.On("Fetch", mock.MatchedBy(func(path string) bool {
+			return strings.HasPrefix(path, repo+"/")
+		})).Return(
+			[]byte(fmt.Sprintf("Mock repository data for %s (timestamp: %d)",
+				path, time.Now().UnixNano())),
+			nil,
+		).Maybe()
 	}
+
+	// FIX #2: Set up special handling for nonexistent repository
+	mockBackend.On("Fetch", mock.MatchedBy(func(p string) bool {
+		return strings.HasPrefix(p, "nonexistent/")
+	})).Return(
+		nil,
+		errors.New("404 not found: nonexistent repository"),
+	).Maybe()
 
 	// Create the server with mock backend
 	srv, err := server.New(cfg, server.ServerOptions{
@@ -112,9 +116,9 @@ func createTestServer(t *testing.T, cfg *config.Config) (*server.Server, context
 		// Add timeout to prevent test hanging
 		select {
 		case <-doneChan:
-			// Shutdown completed successfully
+			t.Log("Server cleanup completed successfully")
 		case <-time.After(5 * time.Second):
-			t.Log("Warning: Server shutdown timed out")
+			t.Log("Warning: Server shutdown timed out after 5 seconds")
 		}
 	}
 

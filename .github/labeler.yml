@@ -1,0 +1,89 @@
+# file: .github/labeler.yml
+# version: 1.0.0
+# guid: d0e1f2a3-b4c5-6789-abcd-123456789019
+
+# Configuration for the GitHub Labeler action
+# This file maps file patterns to labels for automatic PR labeling
+
+# Programming Languages
+"go":
+  - "**/*.go"
+  - "**/go.mod"
+  - "**/go.sum"
+
+"shell":
+  - "**/*.sh"
+  - "**/*.bash"
+  - "**/*.zsh"
+
+"yaml":
+  - "**/*.yml"
+  - "**/*.yaml"
+
+"json":
+  - "**/*.json"
+
+"markdown":
+  - "**/*.md"
+  - "**/*.rst"
+
+# Areas/Services
+"github-actions":
+  - ".github/workflows/**/*"
+  - ".github/actions/**/*"
+
+"docker":
+  - "**/Dockerfile*"
+  - "**/*.dockerfile"
+  - "**/docker-compose*.yml"
+  - "**/docker-compose*.yaml"
+
+"documentation":
+  - "**/*.md"
+  - "**/*.rst"
+  - "**/*.txt"
+  - "docs/**/*"
+  - "README*"
+  - "CHANGELOG*"
+  - "LICENSE*"
+
+"configuration":
+  - "**/*config*"
+  - "**/*.conf"
+  - "**/*.env"
+  - "**/*.toml"
+  - ".github/**/*"
+
+"tests":
+  - "**/*_test.go"
+  - "**/test_*.go"
+  - "test/**/*"
+  - "tests/**/*"
+  - "**/*test*"
+
+"build":
+  - "**/Makefile"
+  - "**/*.mk"
+  - "**/build*"
+  - "scripts/**/*"
+
+"security":
+  - "**/*security*"
+  - "**/*auth*"
+  - "**/*ssl*"
+  - "**/*tls*"
+  - "**/*cert*"
+
+"api":
+  - "**/*api*"
+  - "**/*handler*"
+  - "**/*router*"
+  - "**/*server*"
+
+"caching":
+  - "**/*cache*"
+  - "**/*apt*"
+
+"dependencies":
+  - "**/go.mod"
+  - "**/go.sum"

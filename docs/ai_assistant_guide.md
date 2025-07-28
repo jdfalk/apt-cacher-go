@@ -39,6 +39,7 @@ The codebase follows a modular structure:
 ### Server Components
 
 1. **Server** (`internal/server/server.go`)
+
    ```go
    type Server struct {
        cfg           *config.Config
@@ -71,6 +72,7 @@ The codebase follows a modular structure:
 ### Cache Components
 
 3. **Cache** (`internal/cache/cache.go`)
+
    ```go
    type Cache struct {
        rootDir     string
@@ -81,6 +83,7 @@ The codebase follows a modular structure:
    ```
 
 4. **LRUCache** (`internal/cache/lru.go`)
+
    ```go
    type LRUCache struct {
        capacity  int
@@ -108,6 +111,7 @@ The codebase follows a modular structure:
 ### Backend Components
 
 6. **Manager** (`internal/backend/backend.go`)
+
    ```go
    type Manager struct {
        backends       []*Backend
@@ -123,6 +127,7 @@ The codebase follows a modular structure:
    ```
 
 7. **Prefetcher** (`internal/backend/prefetcher.go`)
+
    ```go
    type Prefetcher struct {
        manager        PrefetcherManager
@@ -151,6 +156,7 @@ The codebase follows a modular structure:
 ### Mapper Components
 
 9. **PathMapper** (`internal/mapper/mapper.go`)
+
    ```go
    type PathMapper struct {
        rules []MappingRule
@@ -169,6 +175,7 @@ The codebase follows a modular structure:
 ### Security Components
 
 11. **ACL** (`internal/security/acl.go`)
+
     ```go
     type ACL struct {
         allowedNetworks []*net.IPNet

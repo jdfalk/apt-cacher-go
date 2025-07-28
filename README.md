@@ -53,10 +53,10 @@ port: 3142
 
 # Cache configuration
 cache_dir: "/var/cache/apt-cacher-go"
-max_cache_size: 20480  # 20GB
+max_cache_size: 20480 # 20GB
 
 # Security
-admin_auth: "admin:changeMe"  # Change this!
+admin_auth: "admin:changeMe" # Change this!
 
 # Default backends
 backends:
@@ -85,13 +85,13 @@ tls_key_file: "/etc/apt-cacher-go/key.pem"
 
 # Cache configuration
 cache_dir: "/var/cache/apt-cacher-go"
-max_cache_size: 40960  # 40GB
-cache_cleanup_interval: 3600  # Cleanup every hour
+max_cache_size: 40960 # 40GB
+cache_cleanup_interval: 3600 # Cleanup every hour
 
 # Security
 allowed_ips:
-  - "10.0.0.0/8"     # Private network
-  - "172.16.0.0/12"  # Docker network
+  - "10.0.0.0/8" # Private network
+  - "172.16.0.0/12" # Docker network
   - "192.168.0.0/16" # Home network
 admin_auth: "admin:securePassword"
 
@@ -177,8 +177,8 @@ By default, apt-cacher-go allows connections from any IP address. For production
 
 ```yaml
 allowed_ips:
-  - "10.0.0.0/8"     # Internal network
-  - "127.0.0.1/8"    # Localhost
+  - "10.0.0.0/8" # Internal network
+  - "127.0.0.1/8" # Localhost
 ```
 
 ### TLS Setup
@@ -208,6 +208,7 @@ admin_auth: "admin:your-secure-password"
 Access the admin dashboard at `http://your-server:3142/admin` using your configured credentials.
 
 The interface provides:
+
 - Real-time cache statistics
 - Request history and hit rates
 - Top packages and clients
@@ -216,6 +217,7 @@ The interface provides:
 ### Cache Management
 
 The following admin actions are available:
+
 - **Clear Cache**: Remove all cached files
 - **Flush Expired**: Remove only expired files
 - **Search Cache**: Find specific packages
@@ -229,6 +231,7 @@ go run cmd/benchmark/main.go --proxy http://localhost:3142 --concurrency 20 --it
 ```
 
 Sample output:
+
 ```
 === BENCHMARK SUMMARY ===
 Total requests: 1000 (Success: 998, Failed: 2)
@@ -245,6 +248,7 @@ sudo ./scripts/migrate-from-acng.sh
 ```
 
 The script will:
+
 1. Stop apt-cacher-ng service
 2. Copy cache files to apt-cacher-go's location
 3. Convert configuration settings
@@ -280,7 +284,7 @@ docker run -d --name apt-cacher-go \
 ### Docker Compose Example
 
 ```yaml
-version: '3.8'
+version: "3.8"
 
 services:
   apt-cacher-go:
@@ -288,11 +292,11 @@ services:
     container_name: apt-cacher-go
     ports:
       - "3142:3142"
-      - "3143:3143"  # For HTTPS if enabled
+      - "3143:3143" # For HTTPS if enabled
     volumes:
       - apt-cache-data:/var/cache/apt-cacher-go
       - ./config.yaml:/etc/apt-cacher-go/config.yaml:ro
-      - ./certs:/etc/apt-cacher-go/certs:ro  # Optional, for TLS
+      - ./certs:/etc/apt-cacher-go/certs:ro # Optional, for TLS
     restart: unless-stopped
     environment:
       - TZ=UTC

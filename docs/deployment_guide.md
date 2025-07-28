@@ -104,8 +104,8 @@ tls_key: /etc/apt-cacher-go/key.pem
 tls_port: 3143
 
 # Memory management
-memory_high_watermark: 1024    # MB, when to start GC
-memory_critical_watermark: 1536  # MB, when to take emergency action
+memory_high_watermark: 1024 # MB, when to start GC
+memory_critical_watermark: 1536 # MB, when to take emergency action
 memory_check_interval: 30s
 
 # Repository mapping rules
@@ -222,6 +222,7 @@ RUN echo 'Acquire::http::Proxy "http://apt-cacher-server:3142";' > /etc/apt/apt.
 To enable HTTPS support:
 
 1. Generate or obtain TLS certificates:
+
    ```
    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
      -keyout /etc/apt-cacher-go/key.pem \
@@ -229,6 +230,7 @@ To enable HTTPS support:
    ```
 
 2. Update configuration:
+
    ```yaml
    tls_enabled: true
    tls_cert: /etc/apt-cacher-go/cert.pem
@@ -246,16 +248,18 @@ To enable HTTPS support:
 Apt-cacher-go includes memory monitoring that can be tuned:
 
 1. Set appropriate watermarks based on system memory:
+
    ```yaml
-   memory_high_watermark: 1024     # MB, when to start GC
+   memory_high_watermark: 1024 # MB, when to start GC
    memory_critical_watermark: 1536 # MB, when to throttle operations
    ```
 
 2. Limit prefetch concurrency on memory-constrained systems:
+
    ```yaml
    prefetch:
      enabled: true
-     max_concurrent: 3  # Lower for less memory usage
+     max_concurrent: 3 # Lower for less memory usage
    ```
 
 3. Add systemd memory limits for additional protection:
@@ -278,13 +282,15 @@ Access the built-in monitoring tools:
 ## Security Considerations
 
 1. Configure access control to limit which clients can use the proxy:
+
    ```yaml
    allowed_ips:
      - 127.0.0.1
-     - 192.168.0.0/24  # Internal network
+     - 192.168.0.0/24 # Internal network
    ```
 
 2. Enable admin authentication to secure the admin interface:
+
    ```yaml
    admin_auth: true
    username: admin

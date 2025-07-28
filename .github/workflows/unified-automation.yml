@@ -1,0 +1,57 @@
+# file: .github/workflows/unified-automation.yml
+# version: 1.0.0
+# guid: f6a7b8c9-d0e1-2345-f678-123456789015
+
+name: Unified Automation
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "Operation to run"
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - issues
+          - docs
+          - labels
+          - lint
+          - rebase
+  schedule:
+    # Run daily at 2 AM UTC for maintenance
+    - cron: "0 2 * * *"
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  security-events: read
+  repository-projects: write
+  actions: read
+  checks: write
+  statuses: write
+
+jobs:
+  # Main unified automation orchestrator
+  unified-automation:
+    name: Unified Automation
+    uses: jdfalk/ghcommon/.github/workflows/reusable-unified-automation.yml@main
+    with:
+      operation: ${{ github.event.inputs.operation || 'all' }}
+      # Issue management settings
+      im_operations: "auto"
+      im_dry_run: false
+      im_force_update: false
+      im_cleanup_issue_updates: true
+      # Documentation settings
+      docs_dry_run: false
+      docs_cleanup_processed_files: true
+      docs_create_pr: true
+      docs_auto_merge: false
+      docs_continue_on_error: true
+      # Labeler settings
+      labeler_sync_labels: true
+      labeler_dot: true
+    secrets: inherit

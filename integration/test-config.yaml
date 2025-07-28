@@ -6,7 +6,7 @@ port: 3142
 
 # Cache configuration
 cache_dir: "/var/cache/apt-cacher-go"
-max_cache_size: 5120  # 5GB for testing
+max_cache_size: 5120 # 5GB for testing
 
 # Security - allow all for testing
 allowed_ips:

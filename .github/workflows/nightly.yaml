@@ -2,15 +2,15 @@ name: Nightly Build and Publish
 
 on:
   schedule:
-    - cron: "0 0 * * *"  # Runs every night at midnight UTC
-  workflow_dispatch:  # Allows manual triggering
+    - cron: "0 0 * * *" # Runs every night at midnight UTC
+  workflow_dispatch: # Allows manual triggering
 
 permissions:
   actions: write
   attestations: write # Required for Sigstore Cosign
   contents: write
   packages: write
-  id-token: write  # Required for Sigstore Cosign
+  id-token: write # Required for Sigstore Cosign
 
 jobs:
   build:
@@ -28,10 +28,10 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5.3.0
         with:
-          go-version: '>=1.24.1'
+          go-version: ">=1.24.1"
           cache: true
           cache-dependency-path: |
-                "**/*.sum"
+            "**/*.sum"
 
       - name: Install Dependencies
         run: go mod tidy
@@ -41,8 +41,8 @@ jobs:
 
       - name: Generate Code Coverage
         run: |
-            go test ./... -coverprofile=./cover.out -covermode=atomic -coverpkg=./...
-            go tool cover -html=./cover.out -o coverage.html
+          go test ./... -coverprofile=./cover.out -covermode=atomic -coverpkg=./...
+          go tool cover -html=./cover.out -o coverage.html
 
       - name: Run Integration Tests
         run: |
@@ -138,7 +138,7 @@ jobs:
       - name: Attest Build Provenance
         uses: actions/attest-build-provenance@v2.2.0
         with:
-          subject-path: 'dist/*'
+          subject-path: "dist/*"
 
   docker:
     name: Build and Push Multi-Arch Nightly Docker Image
@@ -178,20 +178,20 @@ jobs:
         id: kaniko_build
         uses: int128/kaniko-action@v1.49.0
         with:
-          executor: 'gcr.io/kaniko-project/executor:debug'
+          executor: "gcr.io/kaniko-project/executor:debug"
           push: true
           tags: |
-              ghcr.io/${{ github.repository_owner }}/apt-cacher-go:${{ github.sha }}-${{ matrix.arch }}
-              ghcr.io/${{ github.repository_owner }}/apt-cacher-go:nightly-${{ github.sha }}-${{ matrix.arch }}
-              ghcr.io/${{ github.repository_owner }}/apt-cacher-go:nightly-${{ github.ref_name }}-${{ matrix.arch }}
-              ghcr.io/${{ github.repository_owner }}/apt-cacher-go:nightly-${{ matrix.arch }}
+            ghcr.io/${{ github.repository_owner }}/apt-cacher-go:${{ github.sha }}-${{ matrix.arch }}
+            ghcr.io/${{ github.repository_owner }}/apt-cacher-go:nightly-${{ github.sha }}-${{ matrix.arch }}
+            ghcr.io/${{ github.repository_owner }}/apt-cacher-go:nightly-${{ github.ref_name }}-${{ matrix.arch }}
+            ghcr.io/${{ github.repository_owner }}/apt-cacher-go:nightly-${{ matrix.arch }}
           labels: ${{ steps.metadata.outputs.labels }}
           cache: true
           cache-repository: ghcr.io/${{ github.repository }}/cache
           build-args: |
             TARGETARCH=${{ matrix.arch }}
           kaniko-args: |
-              --custom-platform=linux/${{ matrix.arch }}
+            --custom-platform=linux/${{ matrix.arch }}
 
   manifest:
     name: Create and Push Nightly Docker Manifest
