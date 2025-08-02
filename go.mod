@@ -3,7 +3,7 @@ module github.com/jdfalk/apt-cacher-go
 go 1.24.1
 
 require (
-	github.com/cockroachdb/pebble v1.1.4
+	github.com/cockroachdb/pebble v1.1.5
 	github.com/prometheus/client_golang v1.21.1
 	github.com/spf13/cobra v1.9.1
 	github.com/spf13/viper v1.20.1
