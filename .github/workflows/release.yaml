@@ -137,7 +137,7 @@ jobs:
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
 
       - name: Attest Build Provenance
-        uses: actions/attest-build-provenance@v2.2.0
+        uses: actions/attest-build-provenance@v2.4.0
         with:
           subject-path: "dist/*"
 
@@ -226,7 +226,7 @@ jobs:
         uses: sigstore/cosign-installer@v3
 
       - name: Attest Container Build Provenance
-        uses: actions/attest-build-provenance@v2.2.0
+        uses: actions/attest-build-provenance@v2.4.0
         with:
           subject-name: "ghcr.io/${{ github.repository_owner }}/apt-cacher-go"
           subject-digest: ${{ needs.docker.outputs.digest }}
