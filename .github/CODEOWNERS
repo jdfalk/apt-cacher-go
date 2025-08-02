@@ -1,0 +1,35 @@
+# Global ownership
+* @jdfalk
+
+# Go application code
+*.go @jdfalk
+cmd/ @jdfalk
+internal/ @jdfalk
+pkg/ @jdfalk
+
+# Docker and deployment
+Dockerfile @jdfalk
+docker-compose.yml @jdfalk
+
+# Configuration
+config.yaml @jdfalk
+*.service @jdfalk
+
+# Documentation
+*.md @jdfalk
+docs/ @jdfalk
+
+# Scripts and automation
+scripts/ @jdfalk
+*.py @jdfalk
+*.sh @jdfalk
+
+# Build and CI configuration
+.github/workflows/ @jdfalk
+
+# Integration and testing
+integration/ @jdfalk
+
+# Go modules and configuration
+go.mod @jdfalk
+go.sum @jdfalk
