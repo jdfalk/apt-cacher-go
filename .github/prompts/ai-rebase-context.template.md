@@ -4,7 +4,8 @@
 
 # Repository Context for AI Rebase
 
-This file contains repository-specific context that should be included with conflict resolution prompts.
+This file contains repository-specific context that should be included with
+conflict resolution prompts.
 
 ## Project Overview
 
