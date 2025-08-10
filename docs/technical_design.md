@@ -4,7 +4,10 @@
 
 ## Project Overview
 
-apt-cacher-go is a high-performance caching proxy for Debian/Ubuntu package repositories written in Go. It serves as an intermediary between APT clients and official repositories, storing downloaded packages locally to reduce bandwidth usage and improve installation speeds across multiple systems.
+apt-cacher-go is a high-performance caching proxy for Debian/Ubuntu package
+repositories written in Go. It serves as an intermediary between APT clients and
+official repositories, storing downloaded packages locally to reduce bandwidth
+usage and improve installation speeds across multiple systems.
 
 ### Key Features
 
@@ -207,17 +210,17 @@ tls_key: /etc/apt-cacher-go/key.pem
 # Repository mapping rules
 mapping_rules:
   - type: regex
-    pattern: "(security|archive).ubuntu.com/ubuntu"
+    pattern: '(security|archive).ubuntu.com/ubuntu'
     priority: 100
 
   - type: prefix
-    pattern: "debian.org"
+    pattern: 'debian.org'
     priority: 50
 
   - type: rewrite
-    pattern: "ppa.launchpadcontent.net/([^/]+)/([^/]+)"
-    repository: "ppa/%1/%2"
-    rewrite_rule: "ppa/%1/%2"
+    pattern: 'ppa.launchpadcontent.net/([^/]+)/([^/]+)'
+    repository: 'ppa/%1/%2'
+    rewrite_rule: 'ppa/%1/%2'
     priority: 75
 
 # Access control

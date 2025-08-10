@@ -2,7 +2,8 @@
 
 # apt-cacher-go Deployment Guide
 
-This guide covers various deployment options and configurations for apt-cacher-go.
+This guide covers various deployment options and configurations for
+apt-cacher-go.
 
 ## System Requirements
 
@@ -111,19 +112,19 @@ memory_check_interval: 30s
 # Repository mapping rules
 mapping_rules:
   - type: regex
-    pattern: "(security|archive).ubuntu.com/ubuntu"
+    pattern: '(security|archive).ubuntu.com/ubuntu'
     repository: ubuntu
     priority: 100
 
   - type: prefix
-    pattern: "debian.org"
+    pattern: 'debian.org'
     repository: debian
     priority: 50
 
   - type: rewrite
-    pattern: "ppa.launchpadcontent.net/([^/]+)/([^/]+)"
+    pattern: 'ppa.launchpadcontent.net/([^/]+)/([^/]+)'
     repository: ppa/%1/%2
-    rewrite_rule: "ppa/%1/%2"
+    rewrite_rule: 'ppa/%1/%2'
     priority: 75
 
 # Access control
@@ -199,14 +200,16 @@ sudo systemctl start apt-cacher-go
 
 ### APT Client Setup
 
-Configure Debian/Ubuntu systems to use apt-cacher-go by creating a file at `/etc/apt/apt.conf.d/01proxy`:
+Configure Debian/Ubuntu systems to use apt-cacher-go by creating a file at
+`/etc/apt/apt.conf.d/01proxy`:
 
 ```
 Acquire::http::Proxy "http://apt-cacher-server:3142";
 Acquire::https::Proxy "http://apt-cacher-server:3142";
 ```
 
-Replace `apt-cacher-server` with the hostname or IP address of your apt-cacher-go server.
+Replace `apt-cacher-server` with the hostname or IP address of your
+apt-cacher-go server.
 
 ### Docker APT Caching
 

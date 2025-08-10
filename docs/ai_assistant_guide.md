@@ -3,11 +3,15 @@
 
 # apt-cacher-go AI Assistant Guide
 
-This guide is designed to help AI assistants understand the project structure, core components, and implementation details of apt-cacher-go.
+This guide is designed to help AI assistants understand the project structure,
+core components, and implementation details of apt-cacher-go.
 
 ## Project Purpose
 
-apt-cacher-go serves as a high-performance caching proxy for Debian/Ubuntu package repositories. Its primary purpose is to reduce bandwidth usage and speed up package installations across multiple systems by locally caching downloaded packages.
+apt-cacher-go serves as a high-performance caching proxy for Debian/Ubuntu
+package repositories. Its primary purpose is to reduce bandwidth usage and speed
+up package installations across multiple systems by locally caching downloaded
+packages.
 
 ## Code Organization
 
@@ -196,13 +200,16 @@ The codebase follows a modular structure:
 
 ### Package Request Flow
 
-1. Client sends request to apt-cacher-go (e.g., `http://apt-cacher:3142/ubuntu/pool/main/n/nginx/nginx_1.18.0-0ubuntu1_amd64.deb`)
-2. Server receives request in `handlePackageRequest` function (server/handlers.go)
+1. Client sends request to apt-cacher-go (e.g.,
+   `http://apt-cacher:3142/ubuntu/pool/main/n/nginx/nginx_1.18.0-0ubuntu1_amd64.deb`)
+2. Server receives request in `handlePackageRequest` function
+   (server/handlers.go)
 3. Path mapper determines repository and package path using `mapper.MapPath()`
 4. Cache is checked for the package with `cache.Get()`
 5. If found and valid, package is served from cache
 6. If not found or expired:
-   - Backend manager downloads from appropriate repository using `backend.Fetch()`
+   - Backend manager downloads from appropriate repository using
+     `backend.Fetch()`
    - Package is streamed to client while being saved to cache
    - Package metadata is extracted and stored for indexing
 7. Metrics are updated with `metrics.RecordRequest()` and related methods
@@ -254,7 +261,8 @@ The codebase follows a modular structure:
 The codebase uses several mechanisms to ensure thread safety:
 
 1. Mutex locks (sync.Mutex, sync.RWMutex) for access to shared data structures
-2. Fine-grained locking with separate mutexes for different concerns (e.g., packageMutex, cacheMutex)
+2. Fine-grained locking with separate mutexes for different concerns (e.g.,
+   packageMutex, cacheMutex)
 3. Atomic operations (atomic package) for counters and flags
 4. Channel-based communication between goroutines
 5. sync.WaitGroup for coordinating goroutine completion
@@ -269,7 +277,8 @@ Error handling follows these patterns:
 2. Context is added using fmt.Errorf with %w for wrapping
 3. HTTP handlers translate errors to appropriate status codes
 4. Critical errors are logged with sufficient context for debugging
-5. Graceful degradation when possible (e.g., using cached data when downloads fail)
+5. Graceful degradation when possible (e.g., using cached data when downloads
+   fail)
 
 ### Testing Approach
 

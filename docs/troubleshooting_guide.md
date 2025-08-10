@@ -2,7 +2,8 @@
 
 # apt-cacher-go Troubleshooting Guide
 
-This guide provides solutions for common issues encountered when running apt-cacher-go.
+This guide provides solutions for common issues encountered when running
+apt-cacher-go.
 
 ## Common Issues
 
@@ -49,7 +50,8 @@ This guide provides solutions for common issues encountered when running apt-cac
 
 ### Cache Not Being Used
 
-**Symptom**: Packages are being downloaded repeatedly rather than served from cache.
+**Symptom**: Packages are being downloaded repeatedly rather than served from
+cache.
 
 **Possible causes**:
 
@@ -433,9 +435,9 @@ This guide provides solutions for common issues encountered when running apt-cac
 
    ```yaml
    scrape_configs:
-     - job_name: "apt-cacher-go"
+     - job_name: 'apt-cacher-go'
        static_configs:
-         - targets: ["apt-cacher-server:3142"]
+         - targets: ['apt-cacher-server:3142']
        metrics_path: /metrics
        scheme: http
    ```
@@ -455,8 +457,8 @@ This guide provides solutions for common issues encountered when running apt-cac
      labels:
        severity: warning
      annotations:
-       summary: "High memory pressure on apt-cacher-go"
-       description: "Memory pressure is {{ $value }}%"
+       summary: 'High memory pressure on apt-cacher-go'
+       description: 'Memory pressure is {{ $value }}%'
 
    - alert: AptCacherHighCacheMiss
      expr: apt_cacher_cache_hit_ratio < 0.5
@@ -464,8 +466,8 @@ This guide provides solutions for common issues encountered when running apt-cac
      labels:
        severity: info
      annotations:
-       summary: "Low cache hit ratio"
-       description: "Cache hit ratio is {{ $value }}"
+       summary: 'Low cache hit ratio'
+       description: 'Cache hit ratio is {{ $value }}'
    ```
 
 ## Advanced Troubleshooting

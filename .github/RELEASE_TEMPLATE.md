@@ -2,7 +2,8 @@
 
 ## Overview
 
-apt-cacher-go v${version} brings improvements to caching performance and reliability for Debian and Ubuntu package repositories.
+apt-cacher-go v${version} brings improvements to caching performance and
+reliability for Debian and Ubuntu package repositories.
 
 ## 🚀 New Features
 
@@ -46,15 +47,15 @@ Download the appropriate binary for your platform:
 Basic configuration example:
 
 ```yaml
-listen_address: "0.0.0.0"
+listen_address: '0.0.0.0'
 port: 3142
-cache_dir: "/var/cache/apt-cacher-go"
+cache_dir: '/var/cache/apt-cacher-go'
 backends:
-  - name: "debian"
-    url: "http://deb.debian.org"
+  - name: 'debian'
+    url: 'http://deb.debian.org'
     priority: 100
-  - name: "ubuntu"
-    url: "http://archive.ubuntu.com/ubuntu"
+  - name: 'ubuntu'
+    url: 'http://archive.ubuntu.com/ubuntu'
     priority: 90
 ```
 
@@ -84,12 +85,13 @@ RUN echo 'Acquire::http::Proxy "http://your-apt-cacher-host:3142";' > /etc/apt/a
 
 ## 📄 Release Checksums
 
-SHA256 checksums for all release artifacts are available in the `checksums.txt` file.
+SHA256 checksums for all release artifacts are available in the `checksums.txt`
+file.
 
 ## 🔒 Security
 
-This release has been scanned for vulnerabilities and signed with Sigstore Cosign.
-Verify container signatures with:
+This release has been scanned for vulnerabilities and signed with Sigstore
+Cosign. Verify container signatures with:
 
 ```bash
 cosign verify ghcr.io/jdfalk/apt-cacher-go:${version}

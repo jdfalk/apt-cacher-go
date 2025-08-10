@@ -1,14 +1,18 @@
 # apt-cacher-go
 
-A high-performance caching proxy for Debian/Ubuntu package repositories, written in Go.
+A high-performance caching proxy for Debian/Ubuntu package repositories, written
+in Go.
 
 ## Features
 
 - **High Performance**: Multithreaded architecture with parallel downloads
-- **Smart Caching**: Intelligent caching of package and index files with proper expiration
-- **Access Control**: IP-based restrictions and authentication for administrative features
+- **Smart Caching**: Intelligent caching of package and index files with proper
+  expiration
+- **Access Control**: IP-based restrictions and authentication for
+  administrative features
 - **HTTPS Support**: Secure package delivery with TLS
-- **Repository Mapping**: Sophisticated mapping of request paths to upstream repositories
+- **Repository Mapping**: Sophisticated mapping of request paths to upstream
+  repositories
 - **Prefetching**: Background prefetching of popular packages
 - **Web Interface**: Real-time statistics and administration
 - **Docker Support**: Easy deployment with container support
@@ -48,23 +52,23 @@ Here's a simple configuration to get started:
 
 ```yaml
 # Server configuration
-listen_address: "0.0.0.0"
+listen_address: '0.0.0.0'
 port: 3142
 
 # Cache configuration
-cache_dir: "/var/cache/apt-cacher-go"
+cache_dir: '/var/cache/apt-cacher-go'
 max_cache_size: 20480 # 20GB
 
 # Security
-admin_auth: "admin:changeMe" # Change this!
+admin_auth: 'admin:changeMe' # Change this!
 
 # Default backends
 backends:
-  - name: "ubuntu-archive"
-    url: "http://archive.ubuntu.com/ubuntu"
+  - name: 'ubuntu-archive'
+    url: 'http://archive.ubuntu.com/ubuntu'
     priority: 100
-  - name: "debian"
-    url: "http://deb.debian.org/debian"
+  - name: 'debian'
+    url: 'http://deb.debian.org/debian'
     priority: 90
 ```
 
@@ -74,26 +78,26 @@ For production environments, consider this more detailed configuration:
 
 ```yaml
 # Server configuration
-listen_address: "0.0.0.0"
+listen_address: '0.0.0.0'
 port: 3142
 
 # TLS configuration
 tls_enabled: true
 tls_port: 3143
-tls_cert_file: "/etc/apt-cacher-go/cert.pem"
-tls_key_file: "/etc/apt-cacher-go/key.pem"
+tls_cert_file: '/etc/apt-cacher-go/cert.pem'
+tls_key_file: '/etc/apt-cacher-go/key.pem'
 
 # Cache configuration
-cache_dir: "/var/cache/apt-cacher-go"
+cache_dir: '/var/cache/apt-cacher-go'
 max_cache_size: 40960 # 40GB
 cache_cleanup_interval: 3600 # Cleanup every hour
 
 # Security
 allowed_ips:
-  - "10.0.0.0/8" # Private network
-  - "172.16.0.0/12" # Docker network
-  - "192.168.0.0/16" # Home network
-admin_auth: "admin:securePassword"
+  - '10.0.0.0/8' # Private network
+  - '172.16.0.0/12' # Docker network
+  - '192.168.0.0/16' # Home network
+admin_auth: 'admin:securePassword'
 
 # Download behavior
 max_concurrent_downloads: 20
@@ -102,23 +106,23 @@ prefetch_limit: 10
 
 # Repository backends
 backends:
-  - name: "ubuntu-archive"
-    url: "http://archive.ubuntu.com/ubuntu"
+  - name: 'ubuntu-archive'
+    url: 'http://archive.ubuntu.com/ubuntu'
     priority: 100
-  - name: "ubuntu-security"
-    url: "http://security.ubuntu.com/ubuntu"
+  - name: 'ubuntu-security'
+    url: 'http://security.ubuntu.com/ubuntu'
     priority: 95
-  - name: "debian"
-    url: "http://deb.debian.org/debian"
+  - name: 'debian'
+    url: 'http://deb.debian.org/debian'
     priority: 90
-  - name: "debian-security"
-    url: "http://security.debian.org/debian-security"
+  - name: 'debian-security'
+    url: 'http://security.debian.org/debian-security'
     priority: 85
-  - name: "debian-backports"
-    url: "http://deb.debian.org/debian-backports"
+  - name: 'debian-backports'
+    url: 'http://deb.debian.org/debian-backports'
     priority: 80
-  - name: "kali"
-    url: "http://http.kali.org/kali"
+  - name: 'kali'
+    url: 'http://http.kali.org/kali'
     priority: 70
 ```
 
@@ -173,12 +177,13 @@ Acquire::https::Proxy "https://your-proxy-server:3143";
 
 ### Access Control
 
-By default, apt-cacher-go allows connections from any IP address. For production use, we strongly recommend limiting access:
+By default, apt-cacher-go allows connections from any IP address. For production
+use, we strongly recommend limiting access:
 
 ```yaml
 allowed_ips:
-  - "10.0.0.0/8" # Internal network
-  - "127.0.0.1/8" # Localhost
+  - '10.0.0.0/8' # Internal network
+  - '127.0.0.1/8' # Localhost
 ```
 
 ### TLS Setup
@@ -198,14 +203,15 @@ For production deployments, consider using Let's Encrypt for valid certificates.
 Always change the default admin password:
 
 ```yaml
-admin_auth: "admin:your-secure-password"
+admin_auth: 'admin:your-secure-password'
 ```
 
 ## Administration
 
 ### Web Interface
 
-Access the admin dashboard at `http://your-server:3142/admin` using your configured credentials.
+Access the admin dashboard at `http://your-server:3142/admin` using your
+configured credentials.
 
 The interface provides:
 
@@ -284,15 +290,15 @@ docker run -d --name apt-cacher-go \
 ### Docker Compose Example
 
 ```yaml
-version: "3.8"
+version: '3.8'
 
 services:
   apt-cacher-go:
     image: jdfalk/apt-cacher-go:latest
     container_name: apt-cacher-go
     ports:
-      - "3142:3142"
-      - "3143:3143" # For HTTPS if enabled
+      - '3142:3142'
+      - '3143:3143' # For HTTPS if enabled
     volumes:
       - apt-cache-data:/var/cache/apt-cacher-go
       - ./config.yaml:/etc/apt-cacher-go/config.yaml:ro
@@ -310,11 +316,14 @@ volumes:
 
 ### Repository Path Mapping
 
-apt-cacher-go intelligently maps request paths to backends using a series of rules. You can customize these in the source code if needed.
+apt-cacher-go intelligently maps request paths to backends using a series of
+rules. You can customize these in the source code if needed.
 
 ### Prefetching Logic
 
-When an index file is downloaded, apt-cacher-go analyzes it to identify popular packages and prefetches them in the background, improving subsequent client request performance.
+When an index file is downloaded, apt-cacher-go analyzes it to identify popular
+packages and prefetches them in the background, improving subsequent client
+request performance.
 
 ### Adding Custom Repositories
 
@@ -323,8 +332,8 @@ For specialized repositories, add them to your configuration:
 ```yaml
 backends:
   # ... default backends ...
-  - name: "custom-repo"
-    url: "http://packages.example.com/debian"
+  - name: 'custom-repo'
+    url: 'http://packages.example.com/debian'
     priority: 60
 ```
 
@@ -332,14 +341,18 @@ backends:
 
 ### Common Issues
 
-1. **Connection Refused**: Check that the server is running and the port is accessible
+1. **Connection Refused**: Check that the server is running and the port is
+   accessible
 2. **Unauthorized Errors**: Ensure your client IP is in the allowed_ips list
-3. **Package Not Found**: Verify the backend repositories are correctly configured
-4. **Slow Downloads**: Check max_concurrent_downloads setting and network connectivity
+3. **Package Not Found**: Verify the backend repositories are correctly
+   configured
+4. **Slow Downloads**: Check max_concurrent_downloads setting and network
+   connectivity
 
 ### Logs
 
-apt-cacher-go logs to stdout/stderr by default. When running as a systemd service, check logs with:
+apt-cacher-go logs to stdout/stderr by default. When running as a systemd
+service, check logs with:
 
 ```bash
 journalctl -u apt-cacher-go
