@@ -23,7 +23,9 @@ def main():
             f.write(f"config={json.dumps(config)}\n")
     else:
         # No GITHUB_OUTPUT available; print a debug message but do not use deprecated ::set-output
-        print("GITHUB_OUTPUT not set; cannot export outputs. Parsed config will be logged only.")
+        print(
+            "GITHUB_OUTPUT not set; cannot export outputs. Parsed config will be logged only."
+        )
 
     print(f"Parsed config_json with {len(config)} keys")
 
