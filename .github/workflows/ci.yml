@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 1.0.0
+# version: 1.1.0
 # guid: a7b8c9d0-e1f2-3456-789a-123456789016
 
 name: Continuous Integration
@@ -11,24 +11,122 @@ on:
     branches: [main, develop]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
-  pull-requests: write
-  issues: write
-  checks: write
-  security-events: write
+  actions: read
+
+env:
+  GO_VERSION: "1.24"
 
 jobs:
-  # Reusable CI workflow
-  ci:
-    name: Continuous Integration
-    uses: jdfalk/ghcommon/.github/workflows/reusable-ci.yml@main
-    with:
-      go-version: "1.21"
-      node-version: "18"
-      python-version: "3.11"
-      enable-dependency-submission: true
-      run-lint: true
-      run-test: true
-      run-build: true
-    secrets: inherit
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Go vet
+        run: go vet ./...
+
+      - name: Staticcheck (optional)
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+          $(go env GOPATH)/bin/staticcheck ./...
+
+  test:
+    name: Test (Go)
+    runs-on: ubuntu-latest
+    needs: lint
+    strategy:
+      matrix:
+        go-version: ["1.23", "1.24"]
+        include:
+          - go-version: "1.24"
+            primary: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+
+      - name: Download deps
+        run: go mod download
+
+      - name: Run tests
+        run: |
+          go test -v -race -coverprofile=coverage.out ./...
+          go tool cover -html=coverage.out -o coverage.html
+
+      - name: Upload coverage
+        if: matrix.primary
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-coverage
+          path: |
+            coverage.out
+            coverage.html
+
+  security:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: go
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:go"
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build
+        run: go build -v -o bin/ ./...
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: |
+            bin/
