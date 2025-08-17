@@ -1,0 +1,15 @@
+# Copilot Agent Utility Arguments File
+# This file contains command-line arguments that will be automatically passed to copilot-agent-util
+# file: copilot-util-args
+# version: 1.1.0
+# guid: c3d4e5f6-a7b8-9012-3456-789012cdef03
+
+# One argument per line
+# Comments start with #
+# Empty lines are ignored
+
+# Global options that apply to all commands
+--verbose
+
+# Git-specific arguments would go here if needed
+# Example: --dry-run
