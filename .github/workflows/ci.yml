@@ -607,11 +607,31 @@ jobs:
           name: combined-coverage-report
           path: coverage-artifacts/
 
+  # Run matrix build workflow if needed
+  matrix-build:
+    name: Matrix Build
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.should-build == 'true'
+    uses: ./.github/workflows/matrix-build.yml
+    secrets: inherit
+
   # Final status check
   ci-status:
     name: CI Status
     runs-on: ubuntu-latest
-    needs: [check-overrides, detect-changes, lint, test-go, test-frontend, test-python, test-rust, security-scan, build]
+    needs:
+      [
+        check-overrides,
+        detect-changes,
+        lint,
+        test-go,
+        test-frontend,
+        test-python,
+        test-rust,
+        security-scan,
+        build,
+        matrix-build,
+      ]
     if: always() && needs.check-overrides.outputs.skip-ci != 'true'
     steps:
       - name: Check CI status
@@ -671,13 +691,21 @@ jobs:
             echo "❌ **Build**: Failed" >> $GITHUB_STEP_SUMMARY
           fi
 
+          if [[ "${{ needs.matrix-build.result }}" == "success" ]]; then
+            echo "✅ **Matrix Build**: Passed" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ needs.matrix-build.result }}" == "skipped" ]]; then
+            echo "⏭️ **Matrix Build**: Skipped (no changes)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Matrix Build**: Failed" >> $GITHUB_STEP_SUMMARY
+          fi
+
           # Check if any critical jobs failed
           if [[ "${{ needs.lint.result }}" == "failure" ||
                 "${{ needs.test-go.result }}" == "failure" ||
                 "${{ needs.test-frontend.result }}" == "failure" ||
                 "${{ needs.test-python.result }}" == "failure" ||
                 "${{ needs.test-rust.result }}" == "failure" ||
-                "${{ needs.build.result }}" == "failure" ]]; then
+                "${{ needs.matrix-build.result }}" == "failure" ]]; then
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "❌ **Overall Status**: FAILED - Critical issues found" >> $GITHUB_STEP_SUMMARY
             exit 1
