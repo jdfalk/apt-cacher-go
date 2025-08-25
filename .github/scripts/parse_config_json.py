@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: .github/scripts/parse_config_json.py
-# version: 1.0.1
+# version: 1.0.0
 # guid: 2a1b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
 
 import os
@@ -21,11 +21,6 @@ def main():
     if github_output:
         with open(github_output, "a") as f:
             f.write(f"config={json.dumps(config)}\n")
-    else:
-        # No GITHUB_OUTPUT available; print a debug message but do not use deprecated ::set-output
-        print(
-            "GITHUB_OUTPUT not set; cannot export outputs. Parsed config will be logged only."
-        )
 
     print(f"Parsed config_json with {len(config)} keys")
 
