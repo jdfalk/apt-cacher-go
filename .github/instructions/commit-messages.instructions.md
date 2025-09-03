@@ -1,5 +1,5 @@
 <!-- file: .github/instructions/commit-messages.instructions.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 2.0.0 -->
 <!-- guid: msg12345-e89b-12d3-a456-426614174000 -->
 <!-- DO NOT EDIT: This file is managed centrally in ghcommon repository -->
 <!-- To update: Create an issue/PR in jdfalk/ghcommon -->
@@ -29,21 +29,34 @@ For more details and the full system, see
 
 ## Template Structure
 
-**CRITICAL REQUIREMENT**: Every commit MUST have a conventional commit header in the format `type(scope): description`. This is mandatory and non-negotiable. If you don't use this format, the commit has failed validation.
+**CRITICAL REQUIREMENT**: Every commit MUST have a conventional commit header in the format `type(scope): description`. This is mandatory and non-negotiable.
 
-**IMPORTANT**: Only include issue numbers if you are working on a specific
-GitHub issue. Do not use placeholder numbers like #123.
+**IMPORTANT**: Only include issue numbers if you are working on a specific GitHub issue. Do not use placeholder numbers like #123.
 
-### Multi-Area Changes Format
+### Standard Format
 
-When committing files from different functional areas (e.g., frontend, backend, docs), group them by area and provide a conventional commit header for each area:
+For single logical changes:
 
 ```text
-type(scope): primary description of the overall change
+type(scope): description
+
+Brief description of what was changed and why.
+
+Files changed:
+- path/to/file1.ext - Description of changes
+- path/to/file2.ext - Description of changes
+```
+
+### Multi-Change Format
+
+When making multiple distinct changes that each deserve their own conventional commit header:
+
+```text
+feat(scope): primary description of the main change
 
 Brief description of the overall changes and their purpose.
 
-Areas Modified:
+Changes Made:
 
 feat(frontend): description of frontend changes
 - path/to/frontend1.ext - Description of changes
@@ -57,43 +70,9 @@ docs(readme): description of documentation changes
 - path/to/docs1.ext - Description of changes
 ```
 
-### Multi-Issue Format
+### With Issue References
 
-For commits that address multiple GitHub issues, use this format:
-
-```text
-type(scope): primary description
-
-Brief description of the overall changes and their purpose.
-
-Issues Addressed:
-
-type(scope): description
-- path/to/file1.ext - Description of changes
-- path/to/file2.ext - Description of changes
-- path/to/file3.ext - Description of changes
-
-type(scope): description
-- path/to/file4.ext - Description of changes
-- path/to/file5.ext - Description of changes
-
-type(scope): description
-- path/to/file6.ext - Description of changes
-```
-
-For single commits, use the standard format:
-
-```text
-type(scope): description
-
-Brief description of what was changed and why.
-
-Files changed:
-- [path/to/file1.ext](path/to/file1.ext) - Description of changes
-- [path/to/file2.ext](path/to/file2.ext) - Description of changes
-```
-
-Only if working on a specific issue, include the issue number:
+Only when working on specific GitHub issues:
 
 ```text
 type(scope): description (#actual-issue-number)
@@ -101,22 +80,10 @@ type(scope): description (#actual-issue-number)
 Brief description of what was changed and why.
 
 Files changed:
-- [path/to/file1.ext](path/to/file1.ext) - Description of changes
-- [path/to/file2.ext](path/to/file2.ext) - Description of changes
-
-Closes #actual-issue-number
-```
-
-For commits without a specific issue, omit the issue number entirely:
-
-```text
-type(scope): description
-
-Brief description of what was changed and why.
-
-Files changed:
 - path/to/file1.ext - Description of changes
 - path/to/file2.ext - Description of changes
+
+Closes #actual-issue-number
 ```
 
 ## Guidelines
@@ -124,19 +91,17 @@ Files changed:
 ### Commit Header (MANDATORY)
 
 - **CRITICAL**: Every commit MUST use conventional commit format: `type(scope): description`
-- **FAILURE TO COMPLY**: Any commit without a proper conventional commit header is considered failed and invalid
-- Include issue number only if working on a specific issue:
-  `type(scope): description (#issue-number)`
+- Include issue number only if working on a specific issue: `type(scope): description (#issue-number)`
 - Keep the header under 72 characters
 - Use present tense ("add feature" not "added feature")
 - Be specific and descriptive
 
 ### Body Structure
 
-- **Single Area Changes**: Use "Files changed:" section
-- **Multi-Area Changes**: Use "Areas Modified:" with subsections grouped by functional area
-- **Multiple Issues**: Use "Issues Addressed:" with subsections
-- Group files logically by area or issue they address
+- **Single Change**: Use "Files changed:" section for one logical change
+- **Multiple Distinct Changes**: Use "Changes Made:" with subsections, each having their own conventional commit header
+- **Multiple Issues**: Use "Issues Addressed:" with subsections grouped by issue
+- Group files logically by the type of change they represent
 - Include brief context about the overall changes
 
 ### Conventional Commit Types
@@ -157,11 +122,9 @@ Files changed:
 
 - **Always list every modified file**
 - Explain what changed in each file, not just what the file does
-- Use relative paths from repository root as markdown links:
-  `[path/to/file.ext](path/to/file.ext)`
+- Use relative paths from repository root
 - Be specific about the nature of changes
 - Group files by functional area when dealing with multi-area changes
-- Link to relevant documentation where helpful (e.g., [general coding instructions](general-coding.instructions.md))
 
 ### Issue References
 
@@ -169,11 +132,10 @@ Files changed:
 - Use closing keywords in footer: `Closes #123, #456`
 - For related issues: `Related to #999`
 - Omit issue references if not working on a specific issue
-- Link to specific issue examples when referencing patterns
 
 ## Examples
 
-### Multi-Area Commit Example
+### Multi-Change Commit Example
 
 ```text
 feat(system): implement user dashboard with backend API
@@ -181,7 +143,7 @@ feat(system): implement user dashboard with backend API
 Added complete user dashboard functionality including frontend components,
 backend API endpoints, and updated documentation.
 
-Areas Modified:
+Changes Made:
 
 feat(frontend): add user dashboard components
 - [src/components/Dashboard.jsx](src/components/Dashboard.jsx) - Main dashboard component with data visualization
@@ -280,10 +242,8 @@ Closes #345
 3. **Group by area/issue** - Keep related changes together with proper headers
 4. **List all files** - Don't leave any modified files undocumented
 5. **Use present tense** - "add" not "added"
-6. **Reference issues only when working on specific issues** - Don't use
-   placeholder numbers
-7. **Use helpful markdown links** - Link to relevant docs like [general coding instructions](general-coding.instructions.md)
-8. **Be consistent** - Follow the format every time
+6. **Reference issues only when working on specific issues** - Don't use placeholder numbers
+7. **Be consistent** - Follow the format every time
 
 ### Don't
 
@@ -291,8 +251,7 @@ Closes #345
 2. **Mix unrelated changes** - One commit per logical change set
 3. **Use vague descriptions** - "fix stuff" or "update files"
 4. **Forget file listings** - Every file should be documented
-5. **Use placeholder issue numbers** - Only reference real issues you're working
-   on
+5. **Use placeholder issue numbers** - Only reference real issues you're working on
 6. **Use past tense** - Avoid "fixed" or "added"
 7. **Ignore functional grouping** - Group files by area when they serve different purposes
 
