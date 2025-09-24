@@ -20,7 +20,7 @@ concurrency:
 env:
   GO_VERSION: "1.24"
   NODE_VERSION: "22"
-  PYTHON_VERSION: "3.12"
+  PYTHON_VERSION: "3.13"
   RUST_VERSION: "1.76"
   COVERAGE_THRESHOLD: "80"
   CACHE_VERSION: "v1"
@@ -265,7 +265,7 @@ jobs:
     if: needs.detect-changes.outputs.go_files == 'true' && needs.check-overrides.outputs.skip_tests != 'true'
     strategy:
       matrix:
-        go-version: ["1.23", "1.24"]
+        go-version: ["1.24"]
 
     steps:
       - name: Checkout repository
@@ -365,7 +365,7 @@ jobs:
     if: needs.detect-changes.outputs.python_files == 'true' && needs.check-overrides.outputs.skip_tests != 'true'
     strategy:
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.13"]
 
     steps:
       - name: Checkout repository
@@ -523,8 +523,6 @@ jobs:
 
       - name: Run CodeQL Analysis
         uses: github/codeql-action/analyze@v3
-        with:
-          languages: go, javascript, python
         continue-on-error: true
 
   # Performance testing
