@@ -85,7 +85,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download Built Binaries
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           pattern: binaries-*
           merge-multiple: true
@@ -167,7 +167,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download Built Binaries
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           pattern: binaries-*
           merge-multiple: true
