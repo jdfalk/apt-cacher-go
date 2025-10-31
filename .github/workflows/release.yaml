@@ -62,7 +62,7 @@ jobs:
           GOOS=${{ matrix.goos }} GOARCH=${{ matrix.arch }} go build -o dist/apt-cacher-go-${{ matrix.goos }}-${{ matrix.arch }}-${{ github.run_id }} .
 
       - name: Upload Binaries as Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: binaries-${{ matrix.goos }}-${{ matrix.arch }}-${{ github.run_id }}
           path: dist/
