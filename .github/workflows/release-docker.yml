@@ -216,7 +216,7 @@ jobs:
           push-to-registry: true
 
       - name: Upload security artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: docker-security-results
           path: |

@@ -56,7 +56,7 @@ jobs:
           GOOS=${{ matrix.goos }} GOARCH=${{ matrix.arch }} go build -o dist/apt-cacher-go-nightly-${{ matrix.goos }}-${{ matrix.arch }}-$DATE_TAG .
 
       - name: Upload Binaries as Artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: nightly-binaries-${{ matrix.goos }}-${{ matrix.arch }}-${{ github.run_id }}
           path: dist/
