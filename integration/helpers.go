@@ -61,12 +61,13 @@ func createTestServer(t *testing.T, cfg *config.Config) (*server.Server, context
 
 	// Setup repository-specific fetch responses
 	for _, repo := range []string{"ubuntu", "debian", "docker"} {
+		repo := repo // capture loop variable
 		// FIX #1: Format content strings to match what the test is expecting
-		mockBackend.On("Fetch", mock.MatchedBy(func(path string) bool {
-			return strings.HasPrefix(path, repo+"/")
+		mockBackend.On("Fetch", mock.MatchedBy(func(reqPath string) bool {
+			return strings.HasPrefix(reqPath, repo+"/")
 		})).Return(
 			[]byte(fmt.Sprintf("Mock repository data for %s (timestamp: %d)",
-				path, time.Now().UnixNano())),
+				repo, time.Now().UnixNano())),
 			nil,
 		).Maybe()
 	}
