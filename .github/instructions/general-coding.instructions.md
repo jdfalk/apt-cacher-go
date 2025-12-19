@@ -1,5 +1,5 @@
 <!-- file: .github/instructions/general-coding.instructions.md -->
-<!-- version: 2.1.0 -->
+<!-- version: 2.2.0 -->
 <!-- guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d -->
 <!-- DO NOT EDIT: This file is managed centrally in ghcommon repository -->
 <!-- To update: Create an issue/PR in jdfalk/ghcommon -->
@@ -44,13 +44,31 @@ For more details and the full system, see
 The repositories use the `copilot-agent-util` command-line tool for enhanced logging, error handling, and automation in VS Code tasks. This Rust-based utility provides consistent output formatting and task management across all repositories.
 
 **If the `copilot-agent-util` tool is not available in your environment:**
-- Install it from the source repository: https://github.com/jdfalk/copilot-agent-util-rust
+
+- Install it from the source repository: <https://github.com/jdfalk/copilot-agent-util-rust>
 - Follow the installation instructions in that repository's README
 - The tool is required for proper VS Code task execution and logging
 
+## 🚨 CRITICAL: Use MCP GitHub Tools for Git Operations
+
+**MANDATORY RULE: Always use MCP GitHub tools for git operations instead of manual commands or VS Code tasks.**
+
+When performing git operations (commit, push, pull, file operations), use the MCP GitHub tools:
+
+- `mcp_gitkraken_git_add_or_commit` - Add and commit files
+- `mcp_gitkraken_git_push` - Push commits to remote
+- `mcp_github_create_or_update_file` - Create or update files in GitHub
+- `mcp_github_push_files` - Push multiple files in a single commit
+
+**Benefits:**
+- Direct GitHub integration without shell commands
+- Consistent error handling and authentication
+- Proper logging and audit trail
+- Works across all environments
+
 ## 🚨 CRITICAL: Use VS Code Tasks First
 
-**MANDATORY RULE: Always attempt to use VS Code tasks before manual commands.**
+**MANDATORY RULE: Always attempt to use VS Code tasks before manual commands (except for git operations - use MCP tools for those).**
 
 When performing ANY operation (git, build, test, etc.), follow this priority:
 
@@ -123,6 +141,7 @@ When creating automation scripts, configuration tools, or data processing utilit
 ### Examples
 
 **✅ CORRECT - Use Python for:**
+
 - GitHub API interactions
 - Configuration file processing
 - Multi-step automation workflows
@@ -130,12 +149,14 @@ When creating automation scripts, configuration tools, or data processing utilit
 - Data validation and transformation
 
 **❌ INCORRECT - Don't use shell for:**
+
 - Complex JSON parsing
 - API authentication and error handling
 - Multi-repository operations
 - Scripts requiring robust error recovery
 
 **✅ ACCEPTABLE - Shell scripts for:**
+
 - Simple `cp`, `mv`, `mkdir` operations
 - Basic git commands with minimal logic
 - Environment variable setup
@@ -154,63 +175,91 @@ containing:
 **Header format varies by language/file type:**
 
 - **Markdown:**
+
   ```markdown
   <!-- file: path/to/file.md -->
   <!-- version: 1.1.0 -->
   <!-- guid: 123e4567-e89b-12d3-a456-426614174000 -->
   ```
+
 - **Python:**
+
   ```python
   #!/usr/bin/env python3
   # file: path/to/file.py
   # version: 1.1.0
   # guid: 123e4567-e89b-12d3-a456-426614174000
   ```
+
 - **Go:**
+
   ```go
   // file: path/to/file.go
   // version: 1.1.0
   // guid: 123e4567-e89b-12d3-a456-426614174000
   ```
+
 - **JavaScript/TypeScript:**
+
   ```js
   // file: path/to/file.js
   // version: 1.1.0
   // guid: 123e4567-e89b-12d3-a456-426614174000
   ```
+
 - **Shell (bash/sh):**
+
   ```bash
   #!/bin/bash
   # file: path/to/script.sh
   # version: 1.1.0
   # guid: 123e4567-e89b-12d3-a456-426614174000
   ```
+
   (Header must come after the shebang line)
 - **CSS:**
+
   ```css
   /* file: path/to/file.css */
   /* version: 1.1.0 */
   /* guid: 123e4567-e89b-12d3-a456-426614174000 */
   ```
+
 - **R:**
+
   ```r
   # file: path/to/file.R
   # version: 1.1.0
   # guid: 123e4567-e89b-12d3-a456-426614174000
   ```
+
+  For executable R scripts:
+
+  ```r
+  #!/usr/bin/env Rscript
+  # file: path/to/script.R
+  # version: 1.1.0
+  # guid: 123e4567-e89b-12d3-a456-426614174000
+  ```
+
+  (Header must come after the shebang line)
 - **JSON:**
+
   ```jsonc
   // file: path/to/file.json
   // version: 1.1.0
   // guid: 123e4567-e89b-12d3-a456-426614174000
   ```
+
 - **TOML:**
+
   ```toml
   [section]
   # file: path/to/file.toml
   # version: 1.1.0
   # guid: 123e4567-e89b-12d3-a456-426614174000
   ```
+
   (Header must be inside a section as TOML doesn't support top-level comments)
 
 **All files must include this header in the correct format for their type.**
