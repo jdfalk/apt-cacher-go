@@ -5,40 +5,48 @@
 # golangci-lint configuration for apt-cacher-go
 # See https://golangci-lint.run/usage/configuration/
 
+version: "2"
 run:
-  timeout: 5m
   issues-exit-code: 1
   tests: true
-
 linters:
   enable:
-    - errcheck # Check for unchecked errors
-    - gosimple # Simplify code
-    - govet # Go vet
-    - ineffassign # Detect ineffectual assignments
-    - staticcheck # Static analysis
-    - typecheck # Type checking
-    - unused # Unused code detection
-    - gofmt # Formatting
-    - goimports # Import formatting
-    - misspell # Spelling mistakes
-    - revive # Replacement for golint
-    - gosec # Security analysis
-    - gocritic # Code critic
-    - gocyclo # Cyclomatic complexity
-    - dupl # Code duplication
-    - gocognit # Cognitive complexity
-    - goconst # Repeated strings that could be constants
-    - godot # Comments should end in period
-    - nolintlint # Ill-formed //nolint directives
-
+    - dupl
+    - gocognit
+    - goconst
+    - gocritic
+    - gocyclo
+    - godot
+    - gosec
+    - misspell
+    - nolintlint
+    - revive
   disable:
-    - exhaustive # Can be noisy for switches
-    - exhaustivestruct # Too strict for most projects
-    - wrapcheck # Too strict for many cases
-    - nlreturn # Style preference
-    - wsl # Whitespace linter (style preference)
-
+    - exhaustive
+    - nlreturn
+    - wrapcheck
+    - wsl
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
 issues:
   max-issues-per-linter: 50
   max-same-issues: 3
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
