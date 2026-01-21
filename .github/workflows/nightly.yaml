@@ -176,7 +176,7 @@ jobs:
 
       - name: Kaniko Build
         id: kaniko_build
-        uses: int128/kaniko-action@v1.54.0
+        uses: int128/kaniko-action@v1.55.0
         with:
           executor: "gcr.io/kaniko-project/executor:debug"
           push: true
