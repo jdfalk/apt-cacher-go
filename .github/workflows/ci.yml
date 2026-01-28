@@ -307,7 +307,7 @@ jobs:
           fi
 
       - name: Run Super Linter (Validation Only)
-        uses: super-linter/super-linter@v8.3.2
+        uses: super-linter/super-linter@v8.4.0
         env:
           DEFAULT_BRANCH: ${{ env.GITHUB_REPOSITORY_DEFAULT_BRANCH }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
