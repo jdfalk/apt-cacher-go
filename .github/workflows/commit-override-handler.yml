@@ -1,5 +1,5 @@
 # file: .github/workflows/commit-override-handler.yml
-# version: 1.1.0
+# version: 1.1.2
 # guid: 7a8b9c0d-1e2f-3456-789a-bcdef0123456
 
 name: Commit Override Handler
@@ -39,7 +39,7 @@ jobs:
       commit-message: ${{ steps.check.outputs.commit-message }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           fetch-depth: 10
 

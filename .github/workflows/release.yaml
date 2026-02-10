@@ -26,10 +26,10 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
         with:
           go-version: ">=1.24.1"
           cache: true
@@ -40,7 +40,7 @@ jobs:
         run: go mod tidy
 
       - name: Run Linter
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
         with:
           version: latest
           args: --timeout=5m
@@ -62,7 +62,7 @@ jobs:
           GOOS=${{ matrix.goos }} GOARCH=${{ matrix.arch }} go build -o dist/apt-cacher-go-${{ matrix.goos }}-${{ matrix.arch }}-${{ github.run_id }} .
 
       - name: Upload Binaries as Artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: binaries-${{ matrix.goos }}-${{ matrix.arch }}-${{ github.run_id }}
           path: dist/
@@ -76,16 +76,16 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
-      - uses: docker/login-action@v3.5.0
+      - uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download Built Binaries
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           pattern: binaries-*
           merge-multiple: true
@@ -95,7 +95,7 @@ jobs:
         run: echo ${{ github.sha }} > Release.txt
 
       - name: Install Cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
         with:
           cosign-release: "v2.4.3"
 
@@ -111,7 +111,7 @@ jobs:
           done
 
       - name: Publish Release Binaries
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0
         with:
           files: |
             dist/*
@@ -153,21 +153,21 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
-      - uses: docker/metadata-action@v5.8.0
+      - uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f
         id: metadata
         with:
           images: ghcr.io/${{ github.repository }}
 
-      - uses: docker/login-action@v3.5.0
+      - uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download Built Binaries
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           pattern: binaries-*
           merge-multiple: true
@@ -223,7 +223,7 @@ jobs:
           docker manifest push $IMAGE_NAME:$TAG-${{ github.sha }}
 
       - name: Install Cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
 
       - name: Attest Container Build Provenance
         uses: actions/attest-build-provenance@v3.2.0

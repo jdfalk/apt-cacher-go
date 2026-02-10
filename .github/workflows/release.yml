@@ -1,5 +1,5 @@
 # file: .github/workflows/release.yml
-# version: 3.3.0
+# version: 3.3.2
 # guid: f1a2b3c4-d5e6-7f8a-9b0c-1d2e3f4a5b6c
 
 name: Release Coordinator
@@ -95,7 +95,7 @@ jobs:
       image-name: ${{ steps.env-setup.outputs.image-name }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
       - name: Detect project languages and generate matrices
         id: detect
