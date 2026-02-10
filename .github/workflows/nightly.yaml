@@ -23,7 +23,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Go
         uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
@@ -69,9 +69,9 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -85,7 +85,7 @@ jobs:
           path: dist/
 
       - name: Install Cosign
-        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
+        uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad # v4.0.0
         with:
           cosign-release: "v2.4.3"
 
@@ -152,14 +152,14 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f
+      - uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051
         id: metadata
         with:
           images: ghcr.io/${{ github.repository }}
 
-      - uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -176,7 +176,7 @@ jobs:
 
       - name: Kaniko Build
         id: kaniko_build
-        uses: int128/kaniko-action@v1.55.0
+        uses: int128/kaniko-action@v1.56.0
         with:
           executor: "gcr.io/kaniko-project/executor:debug"
           push: true
@@ -221,7 +221,7 @@ jobs:
           docker manifest push $IMAGE_NAME:$TAG-${{ github.sha }}
 
       - name: Install Cosign
-        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
+        uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad # v4.0.0
 
       - name: Attest Container Build Provenance
         uses: actions/attest-build-provenance@v3.2.0
