@@ -46,7 +46,6 @@ purpose:
 - Coordinate SAST (static) and DAST (dynamic) security testing tools.
 - Run language-specific security scanners (bandit, gosec, cargo-audit, npm audit).
 - Scan for hardcoded secrets using truffleHog, gitleaks, or GitHub secret scanning.
-- Perform container image vulnerability scanning with Trivy or Grype.
 - Check security headers and HTTPS configuration for web applications.
 - Generate unified security reports aggregating findings from multiple tools.
 - Prioritize vulnerabilities by exploitability and impact (CVSS scores).
@@ -82,7 +81,6 @@ style-alignment:
 - Security Instructions: CVE prioritization, CVSS scoring, responsible disclosure.
 - SAST tools: bandit (Python), gosec (Go), cargo-audit (Rust), eslint-plugin-security (JS).
 - Secret scanning: truffleHog/gitleaks for git history, fail CI on secret detection.
-- Container scanning: Trivy or Grype with --severity HIGH, scan on build and schedule.
 - DAST: OWASP ZAP or similar for web applications, test in staging environment.
 - Reporting: SARIF for GitHub integration, JSON for programmatic processing, HTML for stakeholders.
 - Remediation: Prioritize by CVSS score, availability of fix, and exposure risk.
