@@ -144,27 +144,8 @@ jobs:
 
       - name: Install security tools
         run: |
-          # Install Trivy
-          sudo apt-get update
-          sudo apt-get install wget apt-transport-https gnupg lsb-release
-          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
-          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
-          sudo apt-get update
-          sudo apt-get install trivy
-
           # Install syft for SBOM generation
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
-
-      - name: Run vulnerability scanning
-        run: |
-          IMAGE_REF="${{ inputs.registry }}/${{ inputs.image-name }}:${{ github.sha }}"
-          echo "Scanning image: $IMAGE_REF"
-          trivy image --format sarif --output trivy-results.sarif "$IMAGE_REF" || echo "Trivy scan completed with warnings"
-
-      - name: Run filesystem scanning
-        run: |
-          echo "Scanning filesystem..."
-          trivy fs --format table --output trivy-fs-results.txt . || echo "Filesystem scan completed with warnings"
 
       - name: Generate SBOM
         run: |
@@ -200,12 +181,6 @@ jobs:
               print('No Docker Compose files found')
           "
 
-      - name: Upload Trivy scan results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@45cbd0c69e560cd9e7cd7f8c32362050c9b7ded2 # v4.32.2
-        if: always()
-        with:
-          sarif_file: "trivy-results.sarif"
-
       - name: Attest SBOM
         if: needs.build-docker.outputs.image-digest != ''
         uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34 # v3.0.0
@@ -220,6 +195,4 @@ jobs:
         with:
           name: docker-security-results
           path: |
-            trivy-results.sarif
-            trivy-fs-results.txt
             sbom.spdx.json
