@@ -44,7 +44,7 @@ jobs:
   # Check for commit override flags
   check-overrides:
     name: Check Commit Overrides
-    uses: jdfalk/ghcommon/.github/workflows/commit-override-handler.yml@4afbbcef5f40921369ea5e7f36ff0d9856d03600 # main
+    uses: jdfalk/ghcommon/.github/workflows/commit-override-handler.yml@378e23a96c00d719075732dd2af4de45f7523cbb # v1.10.4
 
   # Detect what files changed to optimize workflow execution
   detect-changes:
